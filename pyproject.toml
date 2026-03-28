@@ -1,0 +1,47 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "doxygen-index"
+version = "0.1.0"
+description = "Index Doxygen XML output and Conan C++ dependencies into SQLite and Neo4j graph databases"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "Daniel Newman" },
+]
+keywords = ["doxygen", "conan", "c++", "neo4j", "sqlite", "code-index", "documentation"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Software Development :: Documentation",
+    "Topic :: Database",
+]
+
+dependencies = [
+    "neo4j>=5.0",
+]
+
+[project.optional-dependencies]
+cppreference = ["beautifulsoup4>=4.12", "requests>=2.28", "lxml>=4.9"]
+dev = ["pytest>=8.0"]
+
+[project.scripts]
+doxygen-index = "doxygen_index.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/danielnewman09/doxygen-index"
+Issues = "https://github.com/danielnewman09/doxygen-index/issues"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/doxygen_index"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
