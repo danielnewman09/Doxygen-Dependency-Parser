@@ -249,14 +249,14 @@ def _write_file_relationships(session):
     session.run("""
         MATCH (m:Member) WHERE m.compound_refid <> ''
         MATCH (c:Compound {refid: m.compound_refid})
-        MERGE (c)-[:CONTAINS]->(m)
+        MERGE (c)-[:COMPOSES]->(m)
     """)
     session.run("""
         MATCH (m:Member) WHERE m.file_path <> ''
         MATCH (f:File {path: m.file_path})
         MERGE (m)-[:DEFINED_IN]->(f)
     """)
-    print("  Relationships: DEFINED_IN, CONTAINS")
+    print("  Relationships: DEFINED_IN, COMPOSES")
 
 
 def _write_include_relationships(session, result: ParseResult):
