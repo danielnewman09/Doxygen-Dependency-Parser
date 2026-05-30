@@ -22,9 +22,11 @@ from doxygen_index.parser import ParseResult, parse_xml_dir
 CONSTRAINTS_AND_INDEXES = [
     # Uniqueness constraints
     "CREATE CONSTRAINT file_refid IF NOT EXISTS FOR (f:File) REQUIRE f.refid IS UNIQUE",
-    "CREATE CONSTRAINT namespace_refid IF NOT EXISTS FOR (n:Namespace) REQUIRE n.refid IS UNIQUE",
-    "CREATE CONSTRAINT compound_refid IF NOT EXISTS FOR (c:Compound) REQUIRE c.refid IS UNIQUE",
-    "CREATE CONSTRAINT member_refid IF NOT EXISTS FOR (m:Member) REQUIRE m.refid IS UNIQUE",
+    # Use INDEX instead of CONSTRAINT for refid to allow design-layer nodes
+    # (which have no refid) to coexist with as-built/dependency nodes.
+    "CREATE INDEX namespace_refid IF NOT EXISTS FOR (n:Namespace) ON (n.refid)",
+    "CREATE INDEX compound_refid IF NOT EXISTS FOR (c:Compound) ON (c.refid)",
+    "CREATE INDEX member_refid IF NOT EXISTS FOR (m:Member) ON (m.refid)",
     # Lookup indexes
     "CREATE INDEX file_name IF NOT EXISTS FOR (f:File) ON (f.name)",
     "CREATE INDEX file_path IF NOT EXISTS FOR (f:File) ON (f.path)",
@@ -35,6 +37,10 @@ CONSTRAINTS_AND_INDEXES = [
     "CREATE INDEX member_name IF NOT EXISTS FOR (m:Member) ON (m.name)",
     "CREATE INDEX member_qualified IF NOT EXISTS FOR (m:Member) ON (m.qualified_name)",
     "CREATE INDEX member_kind IF NOT EXISTS FOR (m:Member) ON (m.kind)",
+    # Layer indexes (aligned with codebase graph primitives)
+    "CREATE INDEX compound_layer IF NOT EXISTS FOR (c:Compound) ON (c.layer)",
+    "CREATE INDEX member_layer IF NOT EXISTS FOR (m:Member) ON (m.layer)",
+    "CREATE INDEX namespace_layer IF NOT EXISTS FOR (n:Namespace) ON (n.layer)",
     # Source provenance
     "CREATE INDEX file_source IF NOT EXISTS FOR (f:File) ON (f.source)",
     "CREATE INDEX compound_source IF NOT EXISTS FOR (c:Compound) ON (c.source)",
@@ -56,10 +62,27 @@ def _get_driver(uri: str, user: str, password: str):
 
 
 def ensure_schema(driver, database: str = "neo4j") -> None:
-    """Create constraints and indexes if they don't exist."""
+    """Create constraints and indexes if they don't exist.
+
+    Also drops any legacy UNIQUE constraints on refid that were replaced
+    with non-unique indexes in the updated schema (v0.2+).
+    """
     with driver.session(database=database) as session:
+        # Drop legacy refid constraints (replaced by INDEX below)
+        for legacy in [
+            "DROP CONSTRAINT namespace_refid IF EXISTS",
+            "DROP CONSTRAINT compound_refid IF EXISTS",
+            "DROP CONSTRAINT member_refid IF EXISTS",
+        ]:
+            try:
+                session.run(legacy)
+            except Exception:
+                pass  # may not exist
         for stmt in CONSTRAINTS_AND_INDEXES:
-            session.run(stmt)
+            try:
+                session.run(stmt)
+            except Exception:
+                pass  # may already exist
 
 
 def clear_source(driver, source: str, database: str = "neo4j") -> None:
@@ -126,7 +149,8 @@ def _write_namespaces(session, result: ParseResult):
         UNWIND $batch AS row
         MERGE (n:Namespace {refid: row.refid})
         ON CREATE SET n.name = row.name, n.qualified_name = row.qualified_name,
-                      n.source = row.source
+                      n.source = row.source,
+                      n.layer = "dependency"
         ON MATCH SET n.source = CASE WHEN n.source CONTAINS row.source THEN n.source
                                      ELSE n.source + ',' + row.source END
         """,
@@ -150,7 +174,8 @@ def _write_compounds(session, result: ParseResult):
                       c.detailed_description = row.detailed_description,
                       c.base_classes = row.base_classes,
                       c.is_final = row.is_final, c.is_abstract = row.is_abstract,
-                      c.source = row.source
+                      c.source = row.source,
+                      c.layer = "dependency"
         ON MATCH SET c.source = CASE WHEN c.source CONTAINS row.source THEN c.source
                                      ELSE c.source + ',' + row.source END
         """,
@@ -182,7 +207,8 @@ def _write_members(session, result: ParseResult):
                           m.is_static = row.is_static, m.is_const = row.is_const,
                           m.is_constexpr = row.is_constexpr,
                           m.is_virtual = row.is_virtual, m.is_inline = row.is_inline,
-                          m.is_explicit = row.is_explicit, m.source = row.source
+                          m.is_explicit = row.is_explicit, m.source = row.source,
+                          m.layer = "dependency"
             ON MATCH SET m.source = CASE WHEN m.source CONTAINS row.source THEN m.source
                                           ELSE m.source + ',' + row.source END
             """,
