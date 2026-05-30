@@ -125,7 +125,7 @@ def write_result(driver, result: ParseResult, database: str = "neo4j") -> None:
 def _write_files(session, result: ParseResult):
     if not result.files:
         return
-    batch = [asdict(f) for f in result.files]
+    batch = [f.model_dump() for f in result.files]
     session.run(
         """
         UNWIND $batch AS row
@@ -143,14 +143,13 @@ def _write_files(session, result: ParseResult):
 def _write_namespaces(session, result: ParseResult):
     if not result.namespaces:
         return
-    batch = [asdict(n) for n in result.namespaces]
+    batch = [n.model_dump() for n in result.namespaces]
     session.run(
         """
         UNWIND $batch AS row
         MERGE (n:Namespace {refid: row.refid})
         ON CREATE SET n.name = row.name, n.qualified_name = row.qualified_name,
-                      n.source = row.source,
-                      n.layer = "dependency"
+                      n.source = row.source, n.layer = row.layer
         ON MATCH SET n.source = CASE WHEN n.source CONTAINS row.source THEN n.source
                                      ELSE n.source + ',' + row.source END
         """,
@@ -162,7 +161,7 @@ def _write_namespaces(session, result: ParseResult):
 def _write_compounds(session, result: ParseResult):
     if not result.compounds:
         return
-    batch = [asdict(c) for c in result.compounds]
+    batch = [c.model_dump() for c in result.compounds]
     session.run(
         """
         UNWIND $batch AS row
@@ -174,8 +173,7 @@ def _write_compounds(session, result: ParseResult):
                       c.detailed_description = row.detailed_description,
                       c.base_classes = row.base_classes,
                       c.is_final = row.is_final, c.is_abstract = row.is_abstract,
-                      c.source = row.source,
-                      c.layer = "dependency"
+                      c.source = row.source, c.layer = row.layer
         ON MATCH SET c.source = CASE WHEN c.source CONTAINS row.source THEN c.source
                                      ELSE c.source + ',' + row.source END
         """,
@@ -188,7 +186,7 @@ def _write_members(session, result: ParseResult):
     if not result.members:
         return
     batch_size = 1000
-    batch_dicts = [asdict(m) for m in result.members]
+    batch_dicts = [m.model_dump() for m in result.members]
     for i in range(0, len(batch_dicts), batch_size):
         batch = batch_dicts[i:i + batch_size]
         session.run(
@@ -198,7 +196,7 @@ def _write_members(session, result: ParseResult):
             ON CREATE SET m.compound_refid = row.compound_refid,
                           m.kind = row.kind, m.name = row.name,
                           m.qualified_name = row.qualified_name,
-                          m.type = row.type, m.definition = row.definition,
+                          m.type_signature = row.type_signature, m.definition = row.definition,
                           m.argsstring = row.argsstring,
                           m.file_path = row.file_path, m.line_number = row.line_number,
                           m.brief_description = row.brief_description,
@@ -208,7 +206,7 @@ def _write_members(session, result: ParseResult):
                           m.is_constexpr = row.is_constexpr,
                           m.is_virtual = row.is_virtual, m.is_inline = row.is_inline,
                           m.is_explicit = row.is_explicit, m.source = row.source,
-                          m.layer = "dependency"
+                          m.layer = row.layer
             ON MATCH SET m.source = CASE WHEN m.source CONTAINS row.source THEN m.source
                                           ELSE m.source + ',' + row.source END
             """,
@@ -221,7 +219,7 @@ def _write_parameters(session, result: ParseResult):
     if not result.parameters:
         return
     batch_size = 1000
-    batch_dicts = [asdict(p) for p in result.parameters]
+    batch_dicts = [p.model_dump() for p in result.parameters]
     for i in range(0, len(batch_dicts), batch_size):
         batch = batch_dicts[i:i + batch_size]
         session.run(

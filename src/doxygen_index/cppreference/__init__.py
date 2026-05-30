@@ -19,7 +19,8 @@ import itertools
 import sys
 from pathlib import Path
 
-from doxygen_index.parser import NamespaceEntry, ParseResult
+from codegraph import NamespaceNode
+from doxygen_index.parser import ParseResult
 
 from .classifier import PageType, classify_pages
 
@@ -231,8 +232,8 @@ def _replace_or_add_member(
     result.members.append(member)
 
 
-def _synthesize_namespaces(compounds, members) -> list[NamespaceEntry]:
-    """Create NamespaceEntry records from qualified names."""
+def _synthesize_namespaces(compounds, members) -> list[NamespaceNode]:
+    """Create NamespaceNode records from qualified names."""
     ns_set: set[str] = set()
     for entry in itertools.chain(compounds, members):
         qn = entry.qualified_name
@@ -244,11 +245,12 @@ def _synthesize_namespaces(compounds, members) -> list[NamespaceEntry]:
                 ns_set.add(prefix)
 
     return [
-        NamespaceEntry(
+        NamespaceNode(
             refid=f"cppreference:ns/{qn.replace('::', '/')}",
             name=qn.split("::")[-1],
             qualified_name=qn,
             source=SOURCE,
+            layer="dependency",
         )
         for qn in sorted(ns_set)
     ]

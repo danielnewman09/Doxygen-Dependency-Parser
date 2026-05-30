@@ -14,75 +14,17 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
+from codegraph import CompoundNode, FileNode, MemberNode, NamespaceNode, ParameterNode
+
 
 # ---------------------------------------------------------------------------
 # Data model — backend-agnostic representation of parsed Doxygen output
 # ---------------------------------------------------------------------------
 
-@dataclass
-class FileEntry:
-    refid: str
-    name: str
-    path: str
-    language: str
-    source: str = "msd"
-
-
-@dataclass
-class NamespaceEntry:
-    refid: str
-    name: str
-    qualified_name: str
-    source: str = "msd"
-
-
-@dataclass
-class CompoundEntry:
-    refid: str
-    kind: str
-    name: str
-    qualified_name: str
-    file_path: str
-    line_number: Optional[int]
-    brief_description: str
-    detailed_description: str
-    base_classes: list[str]
-    is_final: bool
-    is_abstract: bool
-    source: str = "msd"
-
-
-@dataclass
-class MemberEntry:
-    refid: str
-    compound_refid: str
-    kind: str
-    name: str
-    qualified_name: str
-    type: str
-    definition: str
-    argsstring: str
-    file_path: str
-    line_number: Optional[int]
-    brief_description: str
-    detailed_description: str
-    protection: str
-    is_static: bool
-    is_const: bool
-    is_constexpr: bool
-    is_virtual: bool
-    is_inline: bool
-    is_explicit: bool
-    source: str = "msd"
-
-
-@dataclass
-class ParameterEntry:
-    member_refid: str
-    position: int
-    name: str
-    type: str
-    default_value: str
+# FileEntry, NamespaceEntry, CompoundEntry, MemberEntry, and ParameterEntry
+# are replaced by codegraph models.  See codegraph.nodes for the canonical
+# definitions of FileNode, NamespaceNode, CompoundNode, MemberNode,
+# and ParameterNode.
 
 
 @dataclass
@@ -103,11 +45,11 @@ class CallEntry:
 @dataclass
 class ParseResult:
     """Complete parsed output from a Doxygen XML directory."""
-    files: list[FileEntry] = field(default_factory=list)
-    namespaces: list[NamespaceEntry] = field(default_factory=list)
-    compounds: list[CompoundEntry] = field(default_factory=list)
-    members: list[MemberEntry] = field(default_factory=list)
-    parameters: list[ParameterEntry] = field(default_factory=list)
+    files: list[FileNode] = field(default_factory=list)
+    namespaces: list[NamespaceNode] = field(default_factory=list)
+    compounds: list[CompoundNode] = field(default_factory=list)
+    members: list[MemberNode] = field(default_factory=list)
+    parameters: list[ParameterNode] = field(default_factory=list)
     includes: list[IncludeEntry] = field(default_factory=list)
     calls: list[CallEntry] = field(default_factory=list)
     called_by: list[CallEntry] = field(default_factory=list)
@@ -179,15 +121,16 @@ def _parse_member(memberdef: ET.Element, compound_refid: Optional[str],
     is_inline = memberdef.get("inline") == "yes"
     is_explicit = memberdef.get("explicit") == "yes"
 
-    result.members.append(MemberEntry(
+    result.members.append(MemberNode(
         refid=refid, compound_refid=compound_refid or "", kind=kind,
-        name=name, qualified_name=qualified_name, type=type_str,
+        name=name, qualified_name=qualified_name, type_signature=type_str,
         definition=definition, argsstring=argsstring,
         file_path=file_path or "", line_number=line_number,
         brief_description=brief, detailed_description=detailed,
         protection=prot, is_static=is_static, is_const=is_const,
         is_constexpr=is_constexpr, is_virtual=is_virtual,
         is_inline=is_inline, is_explicit=is_explicit, source=source,
+        layer="dependency",
     ))
 
     # Parameters
@@ -195,7 +138,7 @@ def _parse_member(memberdef: ET.Element, compound_refid: Optional[str],
         param_name = param.findtext("declname", "")
         param_type = get_text(param.find("type"))
         default_value = param.findtext("defval")
-        result.parameters.append(ParameterEntry(
+        result.parameters.append(ParameterNode(
             member_refid=refid, position=i, name=param_name or "",
             type=param_type, default_value=default_value or "",
         ))
@@ -235,7 +178,7 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult) -> No
         if kind == "file":
             loc = compounddef.find("location")
             file_path = loc.get("file") if loc is not None else None
-            result.files.append(FileEntry(
+            result.files.append(FileNode(
                 refid=refid, name=compoundname,
                 path=file_path or "", language=language, source=source,
             ))
@@ -252,9 +195,10 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult) -> No
         # --- Namespaces ---
         if kind == "namespace":
             name = compoundname.split("::")[-1] if "::" in compoundname else compoundname
-            result.namespaces.append(NamespaceEntry(
+            result.namespaces.append(NamespaceNode(
                 refid=refid, name=name,
                 qualified_name=compoundname, source=source,
+                layer="dependency",
             ))
             continue
 
@@ -276,12 +220,13 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult) -> No
             is_final = compounddef.get("final") == "yes"
             is_abstract = compounddef.get("abstract") == "yes"
 
-            result.compounds.append(CompoundEntry(
+            result.compounds.append(CompoundNode(
                 refid=refid, kind=kind, name=name, qualified_name=compoundname,
                 file_path=file_path or "", line_number=line_number,
                 brief_description=brief, detailed_description=detailed,
                 base_classes=base_classes, is_final=is_final,
                 is_abstract=is_abstract, source=source,
+                layer="dependency",
             ))
 
             for sectiondef in compounddef.findall("sectiondef"):

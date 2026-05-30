@@ -72,7 +72,7 @@ CREATE TABLE IF NOT EXISTS members (
     kind TEXT NOT NULL,
     name TEXT NOT NULL,
     qualified_name TEXT NOT NULL,
-    type TEXT,
+    type_signature TEXT,
     definition TEXT,
     argsstring TEXT,
     file_id INTEGER REFERENCES files(id),
@@ -242,12 +242,12 @@ def write_result(conn: sqlite3.Connection, result: ParseResult) -> dict[str, int
 
         cursor = conn.execute(
             """INSERT OR REPLACE INTO members
-               (refid, compound_id, kind, name, qualified_name, type, definition,
+               (refid, compound_id, kind, name, qualified_name, type_signature, definition,
                 argsstring, file_id, line_number, brief_description, detailed_description,
                 protection, is_static, is_const, is_constexpr, is_virtual,
                 is_inline, is_explicit, source)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (m.refid, compound_id, m.kind, m.name, m.qualified_name, m.type,
+            (m.refid, compound_id, m.kind, m.name, m.qualified_name, m.type_signature,
              m.definition, m.argsstring, file_id, m.line_number,
              m.brief_description, m.detailed_description, m.protection,
              int(m.is_static), int(m.is_const), int(m.is_constexpr),

@@ -150,9 +150,8 @@ class TestSqliteRoundTrip:
     """Test SQLite ingestion with a parsed result."""
 
     def test_round_trip(self, tmp_path):
-        from doxygen_index.parser import (
-            ParseResult, FileEntry, NamespaceEntry, CompoundEntry, MemberEntry,
-        )
+        from codegraph import CompoundNode, FileNode, MemberNode, NamespaceNode
+        from doxygen_index.parser import ParseResult
         from doxygen_index.sqlite_backend import create_schema, write_result
 
         import sqlite3
@@ -162,17 +161,25 @@ class TestSqliteRoundTrip:
         create_schema(conn)
 
         result = ParseResult(
-            files=[FileEntry("f1", "test.h", "src/test.h", "C++", "mylib")],
-            namespaces=[NamespaceEntry("ns1", "myns", "myns", "mylib")],
-            compounds=[CompoundEntry(
-                "c1", "class", "Foo", "myns::Foo", "", None,
-                "A class.", "", [], False, False, "mylib",
+            files=[FileNode(refid="f1", name="test.h", path="src/test.h", language="C++", source="mylib")],
+            namespaces=[NamespaceNode(refid="ns1", name="myns", qualified_name="myns", source="mylib", layer="dependency")],
+            compounds=[CompoundNode(
+                refid="c1", kind="class", name="Foo", qualified_name="myns::Foo",
+                file_path="", line_number=None,
+                brief_description="A class.", detailed_description="",
+                base_classes=[], is_final=False, is_abstract=False,
+                source="mylib", layer="dependency",
             )],
-            members=[MemberEntry(
-                "m1", "c1", "function", "bar", "myns::Foo::bar",
-                "void", "void myns::Foo::bar", "()", "", None,
-                "Does bar.", "", "public",
-                False, False, False, False, False, False, "mylib",
+            members=[MemberNode(
+                refid="m1", compound_refid="c1", kind="function",
+                name="bar", qualified_name="myns::Foo::bar",
+                type_signature="void", definition="void myns::Foo::bar",
+                argsstring="()", file_path="", line_number=None,
+                brief_description="Does bar.", detailed_description="",
+                protection="public",
+                is_static=False, is_const=False, is_constexpr=False,
+                is_virtual=False, is_inline=False, is_explicit=False,
+                source="mylib", layer="dependency",
             )],
         )
 

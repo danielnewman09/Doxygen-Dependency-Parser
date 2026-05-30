@@ -12,13 +12,7 @@ import re
 import sys
 from pathlib import Path
 
-from doxygen_index.parser import (
-    CompoundEntry,
-    FileEntry,
-    MemberEntry,
-    NamespaceEntry,
-    ParameterEntry,
-)
+from codegraph import CompoundNode, FileNode, MemberNode, ParameterNode
 
 from .classifier import PageInfo
 from .html_helpers import (
@@ -98,16 +92,16 @@ def _short_name(qualified_name: str) -> str:
 # Header pages
 # ---------------------------------------------------------------------------
 
-def parse_header_page(info: PageInfo, soup) -> tuple[FileEntry, list[str]]:
+def parse_header_page(info: PageInfo, soup) -> tuple[FileNode, list[str]]:
     """Parse a header reference page (e.g. ``<vector>``).
 
     Returns:
-        A tuple of (FileEntry, list of symbol refids declared in this header).
+        A tuple of (FileNode, list of symbol refids declared in this header).
         The refids can be used to create DEFINED_IN relationships.
     """
     from posixpath import normpath
 
-    file_entry = FileEntry(
+    file_entry = FileNode(
         refid=info.refid,
         name=info.header_name,
         path=info.relative,
@@ -142,7 +136,7 @@ def parse_header_page(info: PageInfo, soup) -> tuple[FileEntry, list[str]]:
 
 def parse_class_page(
     info: PageInfo, soup,
-) -> tuple[CompoundEntry, list[MemberEntry]]:
+) -> tuple[CompoundNode, list[MemberNode]]:
     """Parse a class/struct page.
 
     Returns the compound entry and stub members extracted from the
@@ -155,7 +149,7 @@ def parse_class_page(
     brief, detailed = extract_page_description(soup)
     bases = extract_base_classes(soup)
 
-    compound = CompoundEntry(
+    compound = CompoundNode(
         refid=info.refid,
         kind="class",
         name=name,
@@ -168,10 +162,11 @@ def parse_class_page(
         is_final=False,
         is_abstract=False,
         source=SOURCE,
+        layer="dependency",
     )
 
     # Extract member stubs from t-dsc tables
-    stubs: list[MemberEntry] = []
+    stubs: list[MemberNode] = []
     for item in extract_member_list(soup):
         member_name = item.name
         # Clean up member names: "(constructor)", "(destructor)", "operator=" etc.
@@ -187,13 +182,13 @@ def parse_class_page(
         else:
             stub_refid = f"{info.refid}/{member_name}"
 
-        stubs.append(MemberEntry(
+        stubs.append(MemberNode(
             refid=stub_refid,
             compound_refid=info.refid,
             kind="function",
             name=member_name,
             qualified_name=member_qn,
-            type="",
+            type_signature="",
             definition="",
             argsstring="",
             file_path="",
@@ -208,6 +203,7 @@ def parse_class_page(
             is_inline=False,
             is_explicit=False,
             source=SOURCE,
+            layer="dependency",
         ))
 
     return compound, stubs
@@ -230,17 +226,17 @@ def _strip_leading_path(relative: str) -> str:
 
 def parse_member_page(
     info: PageInfo, soup,
-) -> list[tuple[MemberEntry, list[ParameterEntry]]]:
+) -> list[tuple[MemberNode, list[ParameterNode]]]:
     """Parse a member function page (e.g. ``std::vector::push_back``).
 
-    Returns one ``(MemberEntry, [ParameterEntry, ...])`` tuple per overload.
+    Returns one ``(MemberNode, [ParameterNode, ...])`` tuple per overload.
     """
     title = extract_page_title(soup)
     brief, detailed = extract_page_description(soup)
     declarations = extract_declarations(soup)
     param_docs = extract_parameters(soup)
 
-    results: list[tuple[MemberEntry, list[ParameterEntry]]] = []
+    results: list[tuple[MemberNode, list[ParameterNode]]] = []
 
     if not declarations:
         # No declarations found — create a single entry from the title
@@ -292,12 +288,12 @@ def parse_member_page(
             detailed=detailed,
         )
 
-        # Build ParameterEntry list — merge signature params with docs
-        params: list[ParameterEntry] = []
+        # Build ParameterNode list — merge signature params with docs
+        params: list[ParameterNode] = []
         doc_map = {p.name: p.description for p in param_docs}
         for i, (ptype, pname, pdefault) in enumerate(sig_params):
             desc = doc_map.get(pname, "")
-            params.append(ParameterEntry(
+            params.append(ParameterNode(
                 member_refid=refid,
                 position=i,
                 name=pname,
@@ -307,7 +303,7 @@ def parse_member_page(
         # If no sig params but docs exist, create entries from docs alone
         if not params and param_docs:
             for i, p in enumerate(param_docs):
-                params.append(ParameterEntry(
+                params.append(ParameterNode(
                     member_refid=refid,
                     position=i,
                     name=p.name,
@@ -347,14 +343,14 @@ def _make_member(
     argsstring: str = "",
     brief: str = "",
     detailed: str = "",
-) -> MemberEntry:
-    return MemberEntry(
+) -> MemberNode:
+    return MemberNode(
         refid=refid,
         compound_refid=compound_refid,
         kind="function",
         name=name,
         qualified_name=qualified_name,
-        type=ret_type,
+        type_signature=ret_type,
         definition=definition,
         argsstring=argsstring,
         file_path="",
@@ -369,6 +365,7 @@ def _make_member(
         is_inline=False,
         is_explicit=False,
         source=SOURCE,
+        layer="dependency",
     )
 
 
@@ -378,7 +375,7 @@ def _make_member(
 
 def parse_free_function_page(
     info: PageInfo, soup,
-) -> list[tuple[MemberEntry, list[ParameterEntry]]]:
+) -> list[tuple[MemberNode, list[ParameterNode]]]:
     """Parse a free function page (e.g. ``std::sort``).
 
     Same as :func:`parse_member_page` but with ``compound_refid=""``.
@@ -392,7 +389,7 @@ def parse_free_function_page(
         info.parent_refid = original_parent
 
     # Ensure compound_refid is empty for free functions
-    cleaned: list[tuple[MemberEntry, list[ParameterEntry]]] = []
+    cleaned: list[tuple[MemberNode, list[ParameterNode]]] = []
     for member, params in results:
         member.compound_refid = ""
         cleaned.append((member, params))
