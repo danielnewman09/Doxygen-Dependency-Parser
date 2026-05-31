@@ -165,58 +165,6 @@ class TestParseXmlDir:
         assert result.includes[0].is_local is True
 
 
-class TestSqliteRoundTrip:
-    """Test SQLite ingestion with a parsed result."""
-
-    def test_round_trip(self, tmp_path):
-        from codegraph import ClassNode, AttributeNode, FileNode, NamespaceNode
-        from doxygen_index.parser import ParseResult
-        from doxygen_index.sqlite_backend import create_schema, write_result
-
-        import sqlite3
-
-        db_path = tmp_path / "test.db"
-        conn = sqlite3.connect(str(db_path))
-        create_schema(conn)
-
-        result = ParseResult(
-            files=[FileNode(refid="f1", name="test.h", path="src/test.h", language="C++", source="mylib")],
-            namespaces=[NamespaceNode(refid="ns1", name="myns", qualified_name="myns", source="mylib", layer="dependency")],
-            classes=[ClassNode(
-                refid="c1", kind="class", name="Foo",
-                qualified_name="myns::Foo",
-                file_path="", line_number=None,
-                brief_description="A class.", detailed_description="",
-                definition="", module="myns", base_classes=[],
-                is_final=False, is_abstract=False,
-                source="mylib", source_type="", layer="dependency",
-            )],
-            attributes=[AttributeNode(
-                refid="m1", compound_refid="c1", kind="variable",
-                name="bar", qualified_name="myns::Foo::bar",
-                type_signature="int", definition="int myns::Foo::bar",
-                file_path="", line_number=None,
-                brief_description="A member.", detailed_description="",
-                protection="public", is_static=False, is_const=False,
-                source="mylib", layer="dependency",
-            )],
-        )
-
-        counts = write_result(conn, result)
-        assert counts["files"] == 1
-        assert counts["compounds"] == 1
-        assert counts["members"] == 1
-
-        # Verify source column
-        row = conn.execute("SELECT source FROM compounds WHERE name = 'Foo'").fetchone()
-        assert row[0] == "mylib"
-
-        row = conn.execute("SELECT source FROM members WHERE name = 'bar'").fetchone()
-        assert row[0] == "mylib"
-
-        conn.close()
-
-
 class TestDepsConfig:
     def test_builtin_configs_exist(self):
         from doxygen_index.deps_config import BUILTIN_CONFIGS, get_config

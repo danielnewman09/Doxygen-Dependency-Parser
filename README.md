@@ -1,15 +1,12 @@
 # doxygen-index
 
-Index Doxygen XML output and Conan C++ dependencies into SQLite and Neo4j graph databases.
+Index Doxygen XML output and Conan C++ dependencies into Neo4j graph databases.
 
-Takes any Conan-managed C++ project, discovers dependency headers, generates Doxygen XML, and ingests the results into searchable databases alongside your own codebase documentation.
+Takes any Conan-managed C++ project, discovers dependency headers, generates Doxygen XML, and ingests the results into Neo4j alongside your own codebase documentation.
 
 ## Installation
 
 ```bash
-# SQLite only (no external dependencies)
-pip install doxygen-index
-
 # Development
 pip install -e ".[dev]"
 ```
@@ -31,20 +28,18 @@ doxygen-index generate --output-dir build/docs/deps
 # Generate for specific deps only
 doxygen-index generate --output-dir build/docs/deps --only eigen,sdl
 
-# Ingest into SQLite
-doxygen-index ingest --output-dir build/docs/deps --sqlite codebase.db
-
 # Ingest into Neo4j
 doxygen-index ingest --output-dir build/docs/deps --neo4j
 
 # All-in-one: discover + generate + ingest
-doxygen-index full --output-dir build/docs/deps --sqlite codebase.db --neo4j
+doxygen-index full --output-dir build/docs/deps --neo4j
 ```
 
 ## Python API
 
 ```python
-from doxygen_index import discover_packages, generate_xml, ingest_sqlite
+from doxygen_index import discover_packages, generate_xml
+from doxygen_index.neo4j_backend import ingest as ingest_neo4j
 
 # Discover Conan dependency include paths
 packages = discover_packages(build_type="Debug")
@@ -52,9 +47,9 @@ packages = discover_packages(build_type="Debug")
 # Generate Doxygen XML
 xml_dirs = generate_xml(packages, output_dir="build/docs/deps")
 
-# Ingest into SQLite
+# Ingest into Neo4j
 for name, xml_dir in xml_dirs.items():
-    ingest_sqlite(xml_dir, db_path="codebase.db", source=name)
+    ingest_neo4j(xml_dir, source=name, uri="bolt://localhost:7687")
 ```
 
 ### Neo4j
@@ -92,26 +87,13 @@ if(DOXYGEN_INDEX)
     COMMAND doxygen-index full
             --output-dir ${CMAKE_BINARY_DIR}/docs/deps
             --build-type ${CMAKE_BUILD_TYPE}
-            --sqlite ${CMAKE_BINARY_DIR}/docs/codebase.db
+            --neo4j
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
   )
 endif()
 ```
 
 ## Example Queries
-
-### SQLite
-
-```sql
--- All Eigen classes
-SELECT name, brief_description FROM compounds WHERE source = 'eigen';
-
--- Search across everything
-SELECT * FROM fts_docs WHERE fts_docs MATCH 'matrix';
-
--- What sources are indexed?
-SELECT source, COUNT(*) FROM compounds GROUP BY source;
-```
 
 ### Neo4j (Cypher)
 

@@ -5,14 +5,14 @@ build-backend = "hatchling.build"
 [project]
 name = "doxygen-index"
 version = "0.1.0"
-description = "Index Doxygen XML output and Conan C++ dependencies into SQLite and Neo4j graph databases"
+description = "Index Doxygen XML output and Conan C++ dependencies into Neo4j graph databases"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"
 authors = [
     { name = "Daniel Newman" },
 ]
-keywords = ["doxygen", "conan", "c++", "neo4j", "sqlite", "code-index", "documentation"]
+keywords = ["doxygen", "conan", "c++", "neo4j", "code-index", "documentation"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",

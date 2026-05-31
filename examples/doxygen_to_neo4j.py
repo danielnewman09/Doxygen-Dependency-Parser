@@ -5,7 +5,7 @@ Doxygen XML to Neo4j Graph Database Ingester
 Parses Doxygen XML output and creates a property graph in Neo4j for
 codebase navigation, call graph traversal, and design traceability.
 
-Replaces doxygen_to_sqlite.py — writes to Neo4j instead of SQLite.
+Writes Doxygen XML to Neo4j.
 
 Usage:
     python doxygen_to_neo4j.py <xml_dir> [options]
@@ -57,7 +57,7 @@ CONSTRAINTS_AND_INDEXES = [
 
 
 # ---------------------------------------------------------------------------
-# XML parsing helpers (same logic as doxygen_to_sqlite.py)
+# XML parsing helpers
 # ---------------------------------------------------------------------------
 
 def get_text(element: Optional[ET.Element], default: str = "") -> str:

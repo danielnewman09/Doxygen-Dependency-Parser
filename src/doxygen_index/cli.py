@@ -5,9 +5,8 @@ Usage::
 
     doxygen-index discover [--build-type Debug] [--project-dir .]
     doxygen-index generate --output-dir build/docs/deps [--only eigen,sdl]
-    doxygen-index ingest --output-dir build/docs/deps --sqlite codebase.db
     doxygen-index ingest --output-dir build/docs/deps --neo4j
-    doxygen-index full --output-dir build/docs/deps --sqlite codebase.db
+    doxygen-index full --output-dir build/docs/deps --neo4j
     doxygen-index list-deps
 """
 
@@ -37,8 +36,6 @@ def _add_output_args(parser: argparse.ArgumentParser) -> None:
 
 def _add_db_args(parser: argparse.ArgumentParser) -> None:
     """Add database target arguments."""
-    parser.add_argument("--sqlite", default=None, metavar="DB_PATH",
-                        help="SQLite database path to ingest into")
     parser.add_argument("--neo4j", action="store_true",
                         help="Ingest into Neo4j graph database")
     parser.add_argument("--neo4j-uri",
@@ -113,8 +110,8 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     """Ingest existing Doxygen XML into databases."""
     output_dir = Path(args.output_dir)
 
-    if not args.sqlite and not args.neo4j:
-        print("Error: specify --sqlite and/or --neo4j", file=sys.stderr)
+    if not args.neo4j:
+        print("Error: specify --neo4j", file=sys.stderr)
         sys.exit(1)
 
     # Find existing XML dirs
@@ -138,12 +135,6 @@ def cmd_ingest(args: argparse.Namespace) -> None:
     print(f"Ingesting {len(xml_dirs)} dependencies: {', '.join(sorted(xml_dirs))}\n")
 
     for dep_name, xml_dir in sorted(xml_dirs.items()):
-        if args.sqlite:
-            from doxygen_index.sqlite_backend import ingest as sqlite_ingest
-            print(f"--- {dep_name} → SQLite ---")
-            sqlite_ingest(xml_dir, db_path=args.sqlite, source=dep_name)
-            print()
-
         if args.neo4j:
             from doxygen_index.neo4j_backend import ingest as neo4j_ingest
             print(f"--- {dep_name} → Neo4j ---")
@@ -160,8 +151,8 @@ def cmd_full(args: argparse.Namespace) -> None:
     from doxygen_index.conan import discover_packages
     from doxygen_index.doxygen import generate_xml
 
-    if not args.sqlite and not args.neo4j:
-        print("Error: specify --sqlite and/or --neo4j", file=sys.stderr)
+    if not args.neo4j:
+        print("Error: specify --neo4j", file=sys.stderr)
         sys.exit(1)
 
     # Phase 1: Discover
@@ -185,12 +176,6 @@ def cmd_full(args: argparse.Namespace) -> None:
     # Phase 3: Ingest
     print(f"\n--- Ingesting {len(xml_dirs)} dependencies ---\n")
     for dep_name, xml_dir in sorted(xml_dirs.items()):
-        if args.sqlite:
-            from doxygen_index.sqlite_backend import ingest as sqlite_ingest
-            print(f"--- {dep_name} → SQLite ---")
-            sqlite_ingest(xml_dir, db_path=args.sqlite, source=dep_name)
-            print()
-
         if args.neo4j:
             from doxygen_index.neo4j_backend import ingest as neo4j_ingest
             print(f"--- {dep_name} → Neo4j ---")
@@ -207,8 +192,6 @@ def cmd_full(args: argparse.Namespace) -> None:
     for name, xml_dir in sorted(xml_dirs.items()):
         xml_count = len(list(xml_dir.glob("*.xml")))
         print(f"  {name}: {xml_count} XML files")
-    if args.sqlite:
-        print(f"SQLite: {args.sqlite}")
     if args.neo4j:
         print(f"Neo4j: {args.neo4j_uri}")
 
@@ -217,8 +200,8 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
     """Download, parse, and ingest cppreference into databases."""
     from doxygen_index.cppreference import download, parse
 
-    if not args.sqlite and not args.neo4j:
-        print("Error: specify --sqlite and/or --neo4j", file=sys.stderr)
+    if not args.neo4j:
+        print("Error: specify --neo4j", file=sys.stderr)
         sys.exit(1)
 
     cache_dir = Path(args.cache_dir).expanduser()
@@ -228,20 +211,6 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
     result = parse(archive_root)
 
     source = "cppreference"
-
-    if args.sqlite:
-        from doxygen_index.sqlite_backend import (
-            create_schema,
-            write_result as sqlite_write,
-        )
-        import sqlite3
-        print(f"\n--- cppreference → SQLite ({args.sqlite}) ---")
-        db_path = Path(args.sqlite)
-        conn = sqlite3.connect(db_path)
-        create_schema(conn)
-        counts = sqlite_write(conn, result)
-        conn.close()
-        print(f"  Wrote: {counts}")
 
     if args.neo4j:
         from neomodel import get_config, db

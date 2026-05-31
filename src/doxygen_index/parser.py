@@ -2,7 +2,7 @@
 Doxygen XML parser — extracts symbols, documentation, and relationships.
 
 Parses Doxygen-generated XML files into a neutral data model (dataclasses)
-that can be consumed by any backend (SQLite, Neo4j, etc.).
+that can be consumed by any backend (e.g. Neo4j).
 """
 
 from __future__ import annotations
