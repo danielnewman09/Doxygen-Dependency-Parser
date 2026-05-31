@@ -117,21 +117,40 @@ class TestParseXmlDir:
         assert result.files[0].name == "math.h"
         assert result.files[0].source == "test"
 
-        # Compounds
-        assert len(result.compounds) == 1
-        cls = result.compounds[0]
+        # Typed compound lists
+        assert len(result.classes) == 1
+        assert len(result.enums) == 0
+        assert len(result.unions) == 0
+        assert len(result.interfaces) == 0
+
+        cls = result.classes[0]
         assert cls.name == "MyClass"
         assert cls.qualified_name == "myns::MyClass"
         assert cls.kind == "class"
         assert cls.source == "test"
         assert "test class" in cls.brief_description
 
-        # Members
-        assert len(result.members) == 1
-        fn = result.members[0]
+        # Backward-compat properties
+        assert len(result.compounds) == 1
+        assert result.compounds[0] is cls
+
+        # Typed member lists
+        assert len(result.methods) == 1
+        assert len(result.attributes) == 0
+        assert len(result.enum_values) == 0
+        assert len(result.defines) == 0
+        assert len(result.functions) == 0
+
+        fn = result.methods[0]
         assert fn.name == "doSomething"
         assert fn.compound_refid == "classMyClass"
         assert fn.source == "test"
+        # qualified_name includes normalized argsstring for overload safety
+        assert fn.qualified_name == "myns::MyClass::doSomething(double, int)"
+
+        # Backward-compat members property
+        assert len(result.members) == 1
+        assert result.members[0] is fn
 
         # Parameters
         assert len(result.parameters) == 2
@@ -150,7 +169,7 @@ class TestSqliteRoundTrip:
     """Test SQLite ingestion with a parsed result."""
 
     def test_round_trip(self, tmp_path):
-        from codegraph import ClassNode, FileNode, MethodNode, NamespaceNode
+        from codegraph import ClassNode, AttributeNode, FileNode, NamespaceNode
         from doxygen_index.parser import ParseResult
         from doxygen_index.sqlite_backend import create_schema, write_result
 
@@ -164,23 +183,22 @@ class TestSqliteRoundTrip:
             files=[FileNode(refid="f1", name="test.h", path="src/test.h", language="C++", source="mylib")],
             namespaces=[NamespaceNode(refid="ns1", name="myns", qualified_name="myns", source="mylib", layer="dependency")],
             classes=[ClassNode(
-                refid="c1", kind="class", name="Foo", qualified_name="myns::Foo",
+                refid="c1", kind="class", name="Foo",
+                qualified_name="myns::Foo",
                 file_path="", line_number=None,
                 brief_description="A class.", detailed_description="",
-                definition="", module="",
-                base_classes=[], is_final=False, is_abstract=False,
+                definition="", module="myns", base_classes=[],
+                is_final=False, is_abstract=False,
                 source="mylib", source_type="", layer="dependency",
             )],
-            methods=[MethodNode(
-                refid="m1", compound_refid="c1", kind="function",
+            attributes=[AttributeNode(
+                refid="m1", compound_refid="c1", kind="variable",
                 name="bar", qualified_name="myns::Foo::bar",
-                type_signature="void", definition="void myns::Foo::bar",
-                argsstring="()", file_path="", line_number=None,
-                brief_description="Does bar.", detailed_description="",
-                protection="public",
-                is_static=False, is_const=False, is_constexpr=False,
-                is_virtual=False, is_inline=False, is_explicit=False,
-                source="mylib", source_type="", layer="dependency",
+                type_signature="int", definition="int myns::Foo::bar",
+                file_path="", line_number=None,
+                brief_description="A member.", detailed_description="",
+                protection="public", is_static=False, is_const=False,
+                source="mylib", layer="dependency",
             )],
         )
 
@@ -218,3 +236,59 @@ class TestDepsConfig:
     def test_unknown_returns_none(self):
         from doxygen_index.deps_config import get_config
         assert get_config("nonexistent") is None
+
+
+class TestNormalizeArgsstring:
+    def test_empty(self):
+        from doxygen_index.parser import _normalize_argsstring
+        assert _normalize_argsstring("") == "()"
+        assert _normalize_argsstring("()") == "()"
+        assert _normalize_argsstring("(void)") == "()"
+
+    def test_simple_types(self):
+        from doxygen_index.parser import _normalize_argsstring
+        assert _normalize_argsstring("(int)") == "(int)"
+        assert _normalize_argsstring("(int, float)") == "(int, float)"
+
+    def test_strips_param_names(self):
+        from doxygen_index.parser import _normalize_argsstring
+        assert _normalize_argsstring("(int x, const char* str)") == "(int, const char*)"
+        assert _normalize_argsstring("(double val, int count)") == "(double, int)"
+
+    def test_preserves_qualifiers(self):
+        from doxygen_index.parser import _normalize_argsstring
+        assert _normalize_argsstring("(const Foo& foo)") == "(const Foo&)"
+        assert _normalize_argsstring("(volatile int* ptr)") == "(volatile int*)"
+
+    def test_function_pointer(self):
+        from doxygen_index.parser import _normalize_argsstring
+        assert _normalize_argsstring("(int (*callback)(int))") == "(int (*callback)(int))"
+
+
+class TestDeriveModule:
+    def test_namespaced(self):
+        from doxygen_index.parser import _derive_module
+        assert _derive_module("myns::MyClass") == "myns"
+        assert _derive_module("ns1::ns2::ClassName") == "ns1::ns2"
+
+    def test_top_level(self):
+        from doxygen_index.parser import _derive_module
+        assert _derive_module("MyClass") == ""
+        assert _derive_module("") == ""
+
+
+class TestDeriveSourceType:
+    def test_header(self):
+        from doxygen_index.parser import _derive_source_type
+        assert _derive_source_type("src/Foo.h") == "header"
+        assert _derive_source_type("include/bar.hpp") == "header"
+
+    def test_source(self):
+        from doxygen_index.parser import _derive_source_type
+        assert _derive_source_type("src/Foo.cpp") == "source"
+        assert _derive_source_type("tests/test.c") == "source"
+
+    def test_unknown(self):
+        from doxygen_index.parser import _derive_source_type
+        assert _derive_source_type("") == ""
+        assert _derive_source_type("README.md") == ""

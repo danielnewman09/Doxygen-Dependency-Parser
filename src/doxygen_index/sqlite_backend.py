@@ -247,11 +247,20 @@ def write_result(conn: sqlite3.Connection, result: ParseResult) -> dict[str, int
                 protection, is_static, is_const, is_constexpr, is_virtual,
                 is_inline, is_explicit, source)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-            (m.refid, compound_id, m.kind, m.name, m.qualified_name, m.type_signature,
-             m.definition, m.argsstring, file_id, m.line_number,
-             m.brief_description, m.detailed_description, m.protection,
-             int(m.is_static), int(m.is_const), int(m.is_constexpr),
-             int(m.is_virtual), int(m.is_inline), int(m.is_explicit), m.source),
+            (m.refid, compound_id, m.kind, m.name, m.qualified_name,
+             getattr(m, 'type_signature', ''),
+             getattr(m, 'definition', ''),
+             getattr(m, 'argsstring', ''),
+             file_id, m.line_number,
+             m.brief_description, m.detailed_description,
+             getattr(m, 'protection', ''),
+             int(getattr(m, 'is_static', False)),
+             int(getattr(m, 'is_const', False)),
+             int(getattr(m, 'is_constexpr', False)),
+             int(getattr(m, 'is_virtual', False)),
+             int(getattr(m, 'is_inline', False)),
+             int(getattr(m, 'is_explicit', False)),
+             m.source),
         )
         member_id = cursor.lastrowid
 
