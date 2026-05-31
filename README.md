@@ -35,6 +35,42 @@ doxygen-index ingest --output-dir build/docs/deps --neo4j
 doxygen-index full --output-dir build/docs/deps --neo4j
 ```
 
+## C++ Standard Library (cppreference)
+
+Index the entire C++ standard library documentation from cppreference.com.
+
+```bash
+# Download, parse, and ingest into Neo4j
+# First run downloads the HTML archive (~30 MB) and caches it
+# Parsing ~18,000 pages takes 5-10 minutes
+
+# Fresh ingest (clears existing cppreference data first)
+doxygen-index cppreference --neo4j --clear
+
+# Subsequent runs (appends, skip download if cached)
+doxygen-index cppreference --neo4j
+
+# Custom cache location
+doxygen-index cppreference --neo4j --cache-dir /path/to/cache
+
+# Force re-download
+doxygen-index cppreference --neo4j --force
+```
+
+```python
+from doxygen_index.cppreference import download, parse
+from doxygen_index.neo4j_backend import write_result, ensure_schema, clear_source
+
+# Download and parse
+archive_root = download("~/.cache/doxygen-index/cppreference")
+result = parse(archive_root)
+
+# Ingest into Neo4j
+ensure_schema()
+clear_source("cppreference")
+write_result(result)
+```
+
 ## Python API
 
 ```python
@@ -94,6 +130,20 @@ endif()
 ```
 
 ## Example Queries
+
+### cppreference queries
+
+```cypher
+-- All std::vector members
+MATCH (c:Compound)-[:COMPOSES]->(m:Member)
+WHERE c.qualified_name = 'std::vector'
+RETURN m.name, m.brief_description
+
+-- Find all algorithms that work on ranges
+MATCH (c:Compound {source: "cppreference"})
+WHERE c.qualified_name STARTS WITH "std::ranges"
+RETURN c.name, c.brief_description
+```
 
 ### Neo4j (Cypher)
 
