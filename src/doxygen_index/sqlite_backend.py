@@ -209,7 +209,8 @@ def write_result(conn: sqlite3.Connection, result: ParseResult) -> dict[str, int
             if row:
                 file_id = row[0]
 
-        base_classes_json = str(c.base_classes) if c.base_classes else None
+        base_classes = getattr(c, 'base_classes', [])
+        base_classes_json = str(base_classes) if base_classes else None
 
         cursor = conn.execute(
             """INSERT OR REPLACE INTO compounds
@@ -219,7 +220,7 @@ def write_result(conn: sqlite3.Connection, result: ParseResult) -> dict[str, int
                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (c.refid, c.kind, c.name, c.qualified_name, file_id, c.line_number,
              c.brief_description, c.detailed_description, base_classes_json,
-             int(c.is_final), int(c.is_abstract), c.source),
+             int(getattr(c, 'is_final', False)), int(getattr(c, 'is_abstract', False)), c.source),
         )
         compound_cache[c.refid] = cursor.lastrowid
 
