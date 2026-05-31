@@ -37,17 +37,16 @@ def ensure_schema(stdout=None) -> None:
 # ---------------------------------------------------------------------------
 
 def clear_source(source: str) -> None:
-    """Remove all nodes with a specific source label.
-
-    Uses db.cypher_query for fast bulk deletion.
-    Label names match the neomodel class names (FileNode, CompoundNode, etc.).
-    """
+    """Remove all nodes with a specific source label."""
     queries = [
-        ("MATCH (p:ParameterNode)<-[:HAS_PARAMETER]-(m:MemberNode {source: $src}) DETACH DELETE p",
+        ("MATCH (m:Member {source: $src}) "
+         "WITH collect(m.refid) AS refids "
+         "MATCH (p:ParameterNode) WHERE p.member_refid IN refids "
+         "DETACH DELETE p",
          {"src": source}),
-        ("MATCH (m:MemberNode {source: $src}) DETACH DELETE m",
+        ("MATCH (m:Member {source: $src}) DETACH DELETE m",
          {"src": source}),
-        ("MATCH (c:CompoundNode {source: $src}) DETACH DELETE c",
+        ("MATCH (c:Compound {source: $src}) DETACH DELETE c",
          {"src": source}),
         ("MATCH (n:NamespaceNode {source: $src}) DETACH DELETE n",
          {"src": source}),
@@ -60,15 +59,11 @@ def clear_source(source: str) -> None:
 
 
 def clear_all() -> None:
-    """Remove all codebase nodes and relationships.
-
-    Uses db.cypher_query for fast bulk deletion.
-    Label names match the neomodel class names.
-    """
+    """Remove all codebase nodes and relationships."""
     queries = [
         "MATCH (p:ParameterNode) DETACH DELETE p",
-        "MATCH (m:MemberNode) DETACH DELETE m",
-        "MATCH (c:CompoundNode) DETACH DELETE c",
+        "MATCH (m:Member) DETACH DELETE m",
+        "MATCH (c:Compound) DETACH DELETE c",
         "MATCH (n:NamespaceNode) DETACH DELETE n",
         "MATCH (f:FileNode) DETACH DELETE f",
         "MATCH (md:Metadata) DETACH DELETE md",
@@ -131,7 +126,7 @@ def _write_parameters(result: ParseResult) -> None:
         batch = batch_dicts[i:i + batch_size]
         db.cypher_query("""
             UNWIND $batch AS row
-            MATCH (m:MemberNode {refid: row.member_refid})
+            MATCH (m:Member {refid: row.member_refid})
             MERGE (m)-[:HAS_PARAMETER]->(p:ParameterNode {
                 position: row.position,
                 name: row.name,
@@ -205,12 +200,12 @@ def _write_compound_member_connect(result: ParseResult) -> None:
 def _write_file_relationships() -> None:
     db.cypher_query("""
         MATCH (c:Compound) WHERE c.file_path <> ''
-        MATCH (f:File {path: c.file_path})
+        MATCH (f:FileNode {path: c.file_path})
         MERGE (c)-[:DEFINED_IN]->(f)
     """)
     db.cypher_query("""
         MATCH (m:Member) WHERE m.file_path <> ''
-        MATCH (f:File {path: m.file_path})
+        MATCH (f:FileNode {path: m.file_path})
         MERGE (m)-[:DEFINED_IN]->(f)
     """)
     print("  Relationships: DEFINED_IN")
@@ -237,10 +232,10 @@ def _write_include_relationships(result: ParseResult) -> None:
 
 def _write_inheritance_relationships() -> None:
     db.cypher_query("""
-        MATCH (derived:CompoundNode)
+        MATCH (derived:Compound)
         WHERE size(derived.base_classes) > 0
         UNWIND derived.base_classes AS base_name
-        MATCH (base:CompoundNode)
+        MATCH (base:Compound)
         WHERE base.name = base_name OR base.qualified_name = base_name
         MERGE (derived)-[:INHERITS_FROM]->(base)
     """)
@@ -258,8 +253,8 @@ def _write_call_relationships(result: ParseResult) -> None:
         batch = batch_dicts[i:i + batch_size]
         results, _meta = db.cypher_query("""
             UNWIND $batch AS row
-            MATCH (caller:MemberNode {refid: row.from_refid})
-            MATCH (callee:MemberNode {refid: row.to_refid})
+            MATCH (caller:Member {refid: row.from_refid})
+            MATCH (callee:Member {refid: row.to_refid})
             MERGE (caller)-[:CALLS]->(callee)
             RETURN count(*) AS cnt
         """, {"batch": batch})
@@ -328,10 +323,9 @@ def ingest(
     # Summary
     results, _meta = db.cypher_query("""
         MATCH (n) WHERE n.source IS NOT NULL
-        WITH n.source AS src, labels(n)[0] AS label
-        RETURN src, label, count(*) AS cnt
-        ORDER BY src, label
+        RETURN n.source AS src, count(*) AS cnt
+        ORDER BY src
     """)
     print("\nNode counts by source:")
-    for src, label, cnt in results:
-        print(f"  [{src}] {label}: {cnt}")
+    for src, cnt in results:
+        print(f"  [{src}]: {cnt}")
