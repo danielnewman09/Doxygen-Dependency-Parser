@@ -14,17 +14,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional
 
-from codegraph import CompoundNode, FileNode, MemberNode, NamespaceNode, ParameterNode
+from codegraph import (
+    ClassNode, InterfaceNode, EnumNode, UnionNode,
+    MethodNode, AttributeNode, EnumValueNode, FunctionNode, DefineNode,
+    FileNode, NamespaceNode, ParameterNode,
+)
 
 
 # ---------------------------------------------------------------------------
 # Data model — backend-agnostic representation of parsed Doxygen output
 # ---------------------------------------------------------------------------
-
-# FileEntry, NamespaceEntry, CompoundEntry, MemberEntry, and ParameterEntry
-# are replaced by codegraph models.  See codegraph.nodes for the canonical
-# definitions of FileNode, NamespaceNode, CompoundNode, MemberNode,
-# and ParameterNode.
 
 
 @dataclass
@@ -47,12 +46,29 @@ class ParseResult:
     """Complete parsed output from a Doxygen XML directory."""
     files: list[FileNode] = field(default_factory=list)
     namespaces: list[NamespaceNode] = field(default_factory=list)
-    compounds: list[CompoundNode] = field(default_factory=list)
-    members: list[MemberNode] = field(default_factory=list)
+    classes: list[ClassNode] = field(default_factory=list)
+    enums: list[EnumNode] = field(default_factory=list)
+    unions: list[UnionNode] = field(default_factory=list)
+    interfaces: list[InterfaceNode] = field(default_factory=list)
+    methods: list[MethodNode] = field(default_factory=list)
+    attributes: list[AttributeNode] = field(default_factory=list)
+    enum_values: list[EnumValueNode] = field(default_factory=list)
+    defines: list[DefineNode] = field(default_factory=list)
+    functions: list[FunctionNode] = field(default_factory=list)
     parameters: list[ParameterNode] = field(default_factory=list)
     includes: list[IncludeEntry] = field(default_factory=list)
     calls: list[CallEntry] = field(default_factory=list)
     called_by: list[CallEntry] = field(default_factory=list)
+
+    @property
+    def compounds(self) -> list:
+        """Aggregate all compound-type nodes for backward compat."""
+        return self.classes + self.enums + self.unions + self.interfaces
+
+    @property
+    def members(self) -> list:
+        """Aggregate all member-type nodes for backward compat."""
+        return self.methods + self.attributes + self.enum_values + self.defines + self.functions
 
 
 # ---------------------------------------------------------------------------
@@ -91,19 +107,61 @@ def parse_location(loc_elem: Optional[ET.Element]) -> tuple[Optional[str], Optio
     return file_path, int(line) if line else None
 
 
+def _derive_module(qualified_name: str) -> str:
+    """Extract the namespace prefix from a qualified name."""
+    if "::" not in qualified_name:
+        return ""
+    return qualified_name.rsplit("::", 1)[0]
+
+
+def _derive_source_type(file_path: str) -> str:
+    """Derive source type from file extension."""
+    if not file_path:
+        return ""
+    ext = Path(file_path).suffix.lower()
+    if ext in (".h", ".hpp", ".hxx", ".h++"):
+        return "header"
+    if ext in (".c", ".cpp", ".cxx", ".cc", ".c++"):
+        return "source"
+    return ""
+
+
+def _normalize_argsstring(argsstring: str) -> str:
+    """Strip parameter names from argsstring, keeping types only.
+
+    (int x, const char* str) → (int, const char*)
+    (void) → ()
+    """
+    if not argsstring:
+        return "()"
+    inner = argsstring.strip().strip("()")
+    if not inner or inner == "void":
+        return "()"
+    parts = [p.strip() for p in inner.split(",")]
+    normalized = []
+    for part in parts:
+        tokens = part.split()
+        if len(tokens) > 1:
+            last = tokens[-1]
+            if not any(c in last for c in "<>*&::") and last.isidentifier():
+                tokens = tokens[:-1]
+        normalized.append(" ".join(tokens))
+    return "(" + ", ".join(normalized) + ")"
+
+
 # ---------------------------------------------------------------------------
 # Compound and member parsing
 # ---------------------------------------------------------------------------
 
-def _parse_member(memberdef: ET.Element, compound_refid: Optional[str],
+def _parse_member(memberdef: ET.Element, compound_refid: str,
+                  parent_qualified_name: str,
                   source: str, result: ParseResult) -> None:
-    """Parse a member definition element into the result."""
+    """Parse a member definition element into the result using kind dispatch."""
     refid = memberdef.get("id", "")
     kind = memberdef.get("kind", "")
     prot = memberdef.get("prot", "public")
 
     name = memberdef.findtext("name", "")
-    qualified_name = memberdef.findtext("qualifiedname", name)
     type_str = get_text(memberdef.find("type"))
     definition = memberdef.findtext("definition", "")
     argsstring = memberdef.findtext("argsstring", "")
@@ -114,26 +172,85 @@ def _parse_member(memberdef: ET.Element, compound_refid: Optional[str],
     brief = parse_description(memberdef.find("briefdescription"))
     detailed = parse_description(memberdef.find("detaileddescription"))
 
-    is_static = memberdef.get("static") == "yes"
-    is_const = memberdef.get("const") == "yes"
-    is_constexpr = memberdef.get("constexpr") == "yes"
-    is_virtual = memberdef.get("virt") in ("virtual", "pure-virtual")
-    is_inline = memberdef.get("inline") == "yes"
-    is_explicit = memberdef.get("explicit") == "yes"
+    source_type = _derive_source_type(file_path or "")
 
-    result.members.append(MemberNode(
-        refid=refid, compound_refid=compound_refid or "", kind=kind,
-        name=name, qualified_name=qualified_name, type_signature=type_str,
-        definition=definition, argsstring=argsstring,
-        file_path=file_path or "", line_number=line_number,
-        brief_description=brief, detailed_description=detailed,
-        protection=prot, is_static=is_static, is_const=is_const,
-        is_constexpr=is_constexpr, is_virtual=is_virtual,
-        is_inline=is_inline, is_explicit=is_explicit, source=source,
-        layer="dependency",
-    ))
+    # --- Kind dispatch ---
+    if kind == "function" and compound_refid:
+        # Method — belongs to a compound
+        normalized_args = _normalize_argsstring(argsstring)
+        qname = f"{parent_qualified_name}::{name}{normalized_args}"
 
-    # Parameters
+        is_static = memberdef.get("static") == "yes"
+        is_const = memberdef.get("const") == "yes"
+        is_constexpr = memberdef.get("constexpr") == "yes"
+        is_virtual = memberdef.get("virt") in ("virtual", "pure-virtual")
+        is_inline = memberdef.get("inline") == "yes"
+        is_explicit = memberdef.get("explicit") == "yes"
+
+        result.methods.append(MethodNode(
+            refid=refid, compound_refid=compound_refid, kind=kind,
+            name=name, qualified_name=qname, type_signature=type_str,
+            definition=definition, argsstring=argsstring,
+            file_path=file_path or "", line_number=line_number,
+            brief_description=brief, detailed_description=detailed,
+            protection=prot, is_static=is_static, is_const=is_const,
+            is_constexpr=is_constexpr, is_virtual=is_virtual,
+            is_inline=is_inline, is_explicit=is_explicit, source=source,
+            source_type=source_type, layer="dependency",
+        ))
+
+    elif kind == "function":
+        # Free function — no compound parent
+        normalized_args = _normalize_argsstring(argsstring)
+        qname = f"::{name}{normalized_args}"
+
+        result.functions.append(FunctionNode(
+            refid=refid, kind=kind, name=name, qualified_name=qname,
+            type_signature=type_str, definition=definition,
+            argsstring=argsstring, file_path=file_path or "",
+            line_number=line_number, brief_description=brief,
+            detailed_description=detailed, source=source, layer="dependency",
+        ))
+
+    elif kind == "variable":
+        qname = f"{parent_qualified_name}::{name}" if parent_qualified_name else name
+        is_static = memberdef.get("static") == "yes"
+        is_const = memberdef.get("const") == "yes"
+
+        result.attributes.append(AttributeNode(
+            refid=refid, compound_refid=compound_refid, kind=kind,
+            name=name, qualified_name=qname, type_signature=type_str,
+            definition=definition, file_path=file_path or "",
+            line_number=line_number, brief_description=brief,
+            detailed_description=detailed, protection=prot,
+            is_static=is_static, is_const=is_const, source=source,
+            layer="dependency",
+        ))
+
+    elif kind == "enumvalue":
+        qname = f"{parent_qualified_name}::{name}" if parent_qualified_name else name
+        result.enum_values.append(EnumValueNode(
+            refid=refid, compound_refid=compound_refid, kind=kind,
+            name=name, qualified_name=qname,
+            file_path=file_path or "", line_number=line_number,
+            brief_description=brief, detailed_description=detailed,
+            source=source, layer="dependency",
+        ))
+
+    elif kind == "define":
+        result.defines.append(DefineNode(
+            refid=refid, kind=kind, name=name, qualified_name=name,
+            definition=definition, file_path=file_path or "",
+            line_number=line_number, brief_description=brief,
+            detailed_description=detailed, source=source, layer="dependency",
+        ))
+
+    else:
+        print(f"Warning: Unknown member kind '{kind}' for refid={refid}, name={name}, skipping",
+              file=sys.stderr)
+        return
+
+    # --- Parameters (shared) ---
     for i, param in enumerate(memberdef.findall("param")):
         param_name = param.findtext("declname", "")
         param_type = get_text(param.find("type"))
@@ -143,7 +260,7 @@ def _parse_member(memberdef: ET.Element, compound_refid: Optional[str],
             type=param_type, default_value=default_value or "",
         ))
 
-    # Call references
+    # --- Call references (shared) ---
     for ref in memberdef.findall("references"):
         result.calls.append(CallEntry(
             from_refid=refid,
@@ -202,36 +319,79 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult) -> No
             ))
             continue
 
-        # --- Classes, structs, unions ---
-        if kind in ("class", "struct", "union"):
-            name = compoundname.split("::")[-1] if "::" in compoundname else compoundname
+        # --- Common fields for all compound types ---
+        name = compoundname.split("::")[-1] if "::" in compoundname else compoundname
+        qualified_name = compoundname
 
-            loc = compounddef.find("location")
-            file_path, line_number = parse_location(loc)
+        loc = compounddef.find("location")
+        file_path, line_number = parse_location(loc)
 
-            brief = parse_description(compounddef.find("briefdescription"))
-            detailed = parse_description(compounddef.find("detaileddescription"))
+        brief = parse_description(compounddef.find("briefdescription"))
+        detailed = parse_description(compounddef.find("detaileddescription"))
+        definition = compounddef.findtext("definition", "")
 
+        module = _derive_module(qualified_name)
+        source_type = _derive_source_type(file_path or "")
+
+        # --- Kind dispatch ---
+        if kind in ("class", "struct"):
             base_classes = [
                 baseref.text or ""
                 for baseref in compounddef.findall("basecompoundref")
             ]
-
             is_final = compounddef.get("final") == "yes"
             is_abstract = compounddef.get("abstract") == "yes"
 
-            result.compounds.append(CompoundNode(
-                refid=refid, kind=kind, name=name, qualified_name=compoundname,
+            result.classes.append(ClassNode(
+                refid=refid, kind=kind, name=name,
+                qualified_name=qualified_name,
                 file_path=file_path or "", line_number=line_number,
                 brief_description=brief, detailed_description=detailed,
+                definition=definition, module=module,
                 base_classes=base_classes, is_final=is_final,
                 is_abstract=is_abstract, source=source,
-                layer="dependency",
+                source_type=source_type, layer="dependency",
             ))
 
-            for sectiondef in compounddef.findall("sectiondef"):
-                for memberdef in sectiondef.findall("memberdef"):
-                    _parse_member(memberdef, refid, source, result)
+        elif kind == "enum":
+            result.enums.append(EnumNode(
+                refid=refid, kind=kind, name=name,
+                qualified_name=qualified_name,
+                file_path=file_path or "", line_number=line_number,
+                brief_description=brief, detailed_description=detailed,
+                definition=definition, module=module,
+                source=source, source_type=source_type, layer="dependency",
+            ))
+
+        elif kind == "union":
+            result.unions.append(UnionNode(
+                refid=refid, kind=kind, name=name,
+                qualified_name=qualified_name,
+                file_path=file_path or "", line_number=line_number,
+                brief_description=brief, detailed_description=detailed,
+                definition=definition, module=module,
+                source=source, source_type=source_type, layer="dependency",
+            ))
+
+        elif kind == "interface":
+            result.interfaces.append(InterfaceNode(
+                refid=refid, kind=kind, name=name,
+                qualified_name=qualified_name,
+                file_path=file_path or "", line_number=line_number,
+                brief_description=brief, detailed_description=detailed,
+                definition=definition, module=module,
+                source=source, source_type=source_type, layer="dependency",
+            ))
+
+        else:
+            print(f"Warning: Unknown compound kind '{kind}' for refid={refid}, skipping",
+                  file=sys.stderr)
+            continue
+
+        # --- Parse members (shared across compound types) ---
+        for sectiondef in compounddef.findall("sectiondef"):
+            for memberdef in sectiondef.findall("memberdef"):
+                _parse_member(memberdef, refid, qualified_name, source, result)
 
 
 # ---------------------------------------------------------------------------

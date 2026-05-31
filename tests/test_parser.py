@@ -150,7 +150,7 @@ class TestSqliteRoundTrip:
     """Test SQLite ingestion with a parsed result."""
 
     def test_round_trip(self, tmp_path):
-        from codegraph import CompoundNode, FileNode, MemberNode, NamespaceNode
+        from codegraph import ClassNode, FileNode, MethodNode, NamespaceNode
         from doxygen_index.parser import ParseResult
         from doxygen_index.sqlite_backend import create_schema, write_result
 
@@ -163,14 +163,15 @@ class TestSqliteRoundTrip:
         result = ParseResult(
             files=[FileNode(refid="f1", name="test.h", path="src/test.h", language="C++", source="mylib")],
             namespaces=[NamespaceNode(refid="ns1", name="myns", qualified_name="myns", source="mylib", layer="dependency")],
-            compounds=[CompoundNode(
+            classes=[ClassNode(
                 refid="c1", kind="class", name="Foo", qualified_name="myns::Foo",
                 file_path="", line_number=None,
                 brief_description="A class.", detailed_description="",
+                definition="", module="",
                 base_classes=[], is_final=False, is_abstract=False,
-                source="mylib", layer="dependency",
+                source="mylib", source_type="", layer="dependency",
             )],
-            members=[MemberNode(
+            methods=[MethodNode(
                 refid="m1", compound_refid="c1", kind="function",
                 name="bar", qualified_name="myns::Foo::bar",
                 type_signature="void", definition="void myns::Foo::bar",
@@ -179,7 +180,7 @@ class TestSqliteRoundTrip:
                 protection="public",
                 is_static=False, is_const=False, is_constexpr=False,
                 is_virtual=False, is_inline=False, is_explicit=False,
-                source="mylib", layer="dependency",
+                source="mylib", source_type="", layer="dependency",
             )],
         )
 
