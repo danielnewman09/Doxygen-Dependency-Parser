@@ -27,6 +27,7 @@ classifiers = [
 
 dependencies = [
     "neo4j>=5.0",
+    "neomodel>=5.0",
     "codegraph",
 ]
 

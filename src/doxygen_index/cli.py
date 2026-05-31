@@ -244,30 +244,34 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
         print(f"  Wrote: {counts}")
 
     if args.neo4j:
+        from neomodel import get_config, db
         from doxygen_index.neo4j_backend import (
-            _get_driver,
             ensure_schema,
             clear_source,
             write_result as neo4j_write,
         )
         print(f"\n--- cppreference → Neo4j ({args.neo4j_uri}) ---")
-        driver = _get_driver(args.neo4j_uri, args.neo4j_user, args.neo4j_password)
-        driver.verify_connectivity()
-        ensure_schema(driver)
-        if args.clear:
-            clear_source(driver, source)
-        neo4j_write(driver, result)
 
-        with driver.session() as session:
-            r = session.run("""
-                MATCH (n) WHERE n.source CONTAINS 'cppreference'
-                WITH labels(n)[0] AS label
-                RETURN label, count(*) AS cnt ORDER BY label
-            """)
-            print("\nNode counts:")
-            for record in r:
-                print(f"  {record['label']}: {record['cnt']}")
-        driver.close()
+        # Configure neomodel connection
+        _bolt_host = args.neo4j_uri.replace("bolt://", "")
+        config = get_config()
+        config.database_url = f"bolt://{args.neo4j_user}:{args.neo4j_password}@{_bolt_host}"
+        config.database_name = getattr(args, 'neo4j_database', 'neo4j')
+        db.set_connection(config.database_url)
+
+        ensure_schema()
+        if args.clear:
+            clear_source(source)
+        neo4j_write(result)
+
+        results, _meta = db.cypher_query("""
+            MATCH (n) WHERE n.source CONTAINS 'cppreference'
+            WITH labels(n)[0] AS label
+            RETURN label, count(*) AS cnt ORDER BY label
+        """)
+        print("\nNode counts:")
+        for label, cnt in results:
+            print(f"  {label}: {cnt}")
 
 
 # ---------------------------------------------------------------------------
