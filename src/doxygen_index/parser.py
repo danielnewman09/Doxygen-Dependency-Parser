@@ -134,7 +134,9 @@ def _normalize_argsstring(argsstring: str) -> str:
     """
     if not argsstring:
         return "()"
-    inner = argsstring.strip().strip("()")
+    inner = argsstring.strip()
+    if inner.startswith("(") and inner.endswith(")"):
+        inner = inner[1:-1]
     if not inner or inner == "void":
         return "()"
     parts = [p.strip() for p in inner.split(",")]
