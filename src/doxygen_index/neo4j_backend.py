@@ -15,11 +15,9 @@ from neomodel import db
 # Import all node models so neomodel registry discovers them before
 # install_all_labels is called.
 from codegraph import (  # noqa: F401 — needed for install_all_labels
-    CompoundNode,
-    FileNode,
-    MemberNode,
-    NamespaceNode,
-    ParameterNode,
+    ClassNode, InterfaceNode, EnumNode, UnionNode,
+    MethodNode, AttributeNode, EnumValueNode, FunctionNode, DefineNode,
+    FileNode, NamespaceNode, ParameterNode,
 )
 
 from doxygen_index.parser import ParseResult, parse_xml_dir
@@ -88,34 +86,32 @@ def write_result(result: ParseResult) -> None:
     """Write a ParseResult to Neo4j.
 
     Nodes are saved via neomodel .save() (MERGE on unique identifier).
-    Relationships are created via db.cypher_query for speed and to
-    handle relationship types not modelled as neomodel relationships.
+    Relationships use .connect() where models declare them, Cypher otherwise.
     """
-    # --- Nodes ---
-    if result.files:
-        for f in result.files:
-            f.save()
-        print(f"  Files: {len(result.files)}")
-
-    if result.namespaces:
-        for ns in result.namespaces:
-            ns.save()
-        print(f"  Namespaces: {len(result.namespaces)}")
-
-    if result.compounds:
-        for c in result.compounds:
-            c.save()
-        print(f"  Compounds: {len(result.compounds)}")
-
-    if result.members:
-        for m in result.members:
-            m.save()
-        print(f"  Members: {len(result.members)}")
+    typed_batches = [
+        (result.files, "Files"),
+        (result.namespaces, "Namespaces"),
+        (result.classes, "Classes"),
+        (result.enums, "Enums"),
+        (result.unions, "Unions"),
+        (result.interfaces, "Interfaces"),
+        (result.methods, "Methods"),
+        (result.attributes, "Attributes"),
+        (result.enum_values, "EnumValues"),
+        (result.defines, "Defines"),
+        (result.functions, "Functions"),
+    ]
+    for node_list, label in typed_batches:
+        if node_list:
+            for node in node_list:
+                node.save()
+            print(f"  {label}: {len(node_list)}")
 
     # Parameters use Cypher MERGE — no UniqueIdProperty on ParameterNode
     _write_parameters(result)
 
-    # --- Relationships ---
+    # Relationships
+    _write_compound_member_connect(result)
     _write_file_relationships()
     _write_include_relationships(result)
     _write_inheritance_relationships()
@@ -147,23 +143,77 @@ def _write_parameters(result: ParseResult) -> None:
     print(f"  Parameters: {len(batch_dicts)}")
 
 
+def _write_compound_member_connect(result: ParseResult) -> None:
+    """Create COMPOSES relationships using neomodel .connect().
+
+    Builds lookup dicts by refid, then connects:
+      - ClassNode/InterfaceNode → MethodNode via .methods.connect()
+      - ClassNode → AttributeNode via .attributes.connect()
+      - EnumNode → EnumValueNode via .values.connect()
+
+    Failures are counted and reported.
+    """
+    compound_by_refid: dict[str, object] = {}
+    for c in result.classes + result.enums + result.unions + result.interfaces:
+        compound_by_refid[c.refid] = c
+
+    success, skipped, failed = 0, 0, 0
+
+    for m in result.methods:
+        parent = compound_by_refid.get(m.compound_refid)
+        if parent is None or not hasattr(parent, 'methods'):
+            skipped += 1
+            continue
+        try:
+            parent.methods.connect(m)
+            success += 1
+        except Exception as e:
+            print(f"Warning: Could not connect MethodNode {m.qualified_name} "
+                  f"to parent {m.compound_refid}: {e}", file=sys.stderr)
+            failed += 1
+
+    for a in result.attributes:
+        parent = compound_by_refid.get(a.compound_refid)
+        if parent is None or not hasattr(parent, 'attributes'):
+            skipped += 1
+            continue
+        try:
+            parent.attributes.connect(a)
+            success += 1
+        except Exception as e:
+            print(f"Warning: Could not connect AttributeNode {a.qualified_name} "
+                  f"to parent {a.compound_refid}: {e}", file=sys.stderr)
+            failed += 1
+
+    for v in result.enum_values:
+        parent = compound_by_refid.get(v.compound_refid)
+        if parent is None or not hasattr(parent, 'values'):
+            skipped += 1
+            continue
+        try:
+            parent.values.connect(v)
+            success += 1
+        except Exception as e:
+            print(f"Warning: Could not connect EnumValueNode {v.qualified_name} "
+                  f"to parent {v.compound_refid}: {e}", file=sys.stderr)
+            failed += 1
+
+    print(f"  Relationships via .connect(): {success} connected, "
+          f"{skipped} skipped, {failed} failed")
+
+
 def _write_file_relationships() -> None:
     db.cypher_query("""
-        MATCH (c:CompoundNode) WHERE c.file_path <> ''
-        MATCH (f:FileNode {path: c.file_path})
+        MATCH (c:Compound) WHERE c.file_path <> ''
+        MATCH (f:File {path: c.file_path})
         MERGE (c)-[:DEFINED_IN]->(f)
     """)
     db.cypher_query("""
-        MATCH (m:MemberNode) WHERE m.compound_refid <> ''
-        MATCH (c:CompoundNode {refid: m.compound_refid})
-        MERGE (c)-[:COMPOSES]->(m)
-    """)
-    db.cypher_query("""
-        MATCH (m:MemberNode) WHERE m.file_path <> ''
-        MATCH (f:FileNode {path: m.file_path})
+        MATCH (m:Member) WHERE m.file_path <> ''
+        MATCH (f:File {path: m.file_path})
         MERGE (m)-[:DEFINED_IN]->(f)
     """)
-    print("  Relationships: DEFINED_IN, COMPOSES")
+    print("  Relationships: DEFINED_IN")
 
 
 def _write_include_relationships(result: ParseResult) -> None:
