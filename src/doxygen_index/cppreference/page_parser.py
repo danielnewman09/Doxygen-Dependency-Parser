@@ -12,7 +12,9 @@ import re
 import sys
 from pathlib import Path
 
-from codegraph import CompoundNode, FileNode, MemberNode, ParameterNode
+from codegraph import ClassNode, FileNode, MethodNode, FunctionNode, ParameterNode
+
+from doxygen_index.parser import _normalize_argsstring, _derive_module, _derive_source_type
 
 from .classifier import PageInfo
 from .html_helpers import (
@@ -136,7 +138,7 @@ def parse_header_page(info: PageInfo, soup) -> tuple[FileNode, list[str]]:
 
 def parse_class_page(
     info: PageInfo, soup,
-) -> tuple[CompoundNode, list[MemberNode]]:
+) -> tuple[ClassNode, list[MethodNode]]:
     """Parse a class/struct page.
 
     Returns the compound entry and stub members extracted from the
@@ -149,7 +151,7 @@ def parse_class_page(
     brief, detailed = extract_page_description(soup)
     bases = extract_base_classes(soup)
 
-    compound = CompoundNode(
+    compound = ClassNode(
         refid=info.refid,
         kind="class",
         name=name,
@@ -162,11 +164,14 @@ def parse_class_page(
         is_final=False,
         is_abstract=False,
         source=SOURCE,
+        source_type="header",
+        definition="",
+        module=_derive_module(qualified_name),
         layer="dependency",
     )
 
     # Extract member stubs from t-dsc tables
-    stubs: list[MemberNode] = []
+    stubs: list[MethodNode] = []
     for item in extract_member_list(soup):
         member_name = item.name
         # Clean up member names: "(constructor)", "(destructor)", "operator=" etc.
@@ -182,7 +187,7 @@ def parse_class_page(
         else:
             stub_refid = f"{info.refid}/{member_name}"
 
-        stubs.append(MemberNode(
+        stubs.append(MethodNode(
             refid=stub_refid,
             compound_refid=info.refid,
             kind="function",
@@ -226,23 +231,23 @@ def _strip_leading_path(relative: str) -> str:
 
 def parse_member_page(
     info: PageInfo, soup,
-) -> list[tuple[MemberNode, list[ParameterNode]]]:
+) -> list[tuple[MethodNode, list[ParameterNode]]]:
     """Parse a member function page (e.g. ``std::vector::push_back``).
 
-    Returns one ``(MemberNode, [ParameterNode, ...])`` tuple per overload.
+    Returns one ``(MethodNode, [ParameterNode, ...])`` tuple per overload.
     """
     title = extract_page_title(soup)
     brief, detailed = extract_page_description(soup)
     declarations = extract_declarations(soup)
     param_docs = extract_parameters(soup)
 
-    results: list[tuple[MemberNode, list[ParameterNode]]] = []
+    results: list[tuple[MethodNode, list[ParameterNode]]] = []
 
     if not declarations:
         # No declarations found — create a single entry from the title
         qualified_name = _qualified_name_from_title(title, info)
         name = _short_name(qualified_name)
-        member = _make_member(
+        member = _make_method(
             refid=f"{info.refid}#0",
             compound_refid=info.parent_refid,
             name=name,
@@ -273,14 +278,17 @@ def parse_member_page(
                     if parent_qn:
                         qualified_name = f"{parent_qn}::{func_name}"
 
+        # Append normalized argsstring for overload safety
+        normalized_args = _normalize_argsstring(argsstring)
+
         refid = f"{info.refid}#{decl.overload_index}"
         definition = decl.text.rstrip(";").strip()
 
-        member = _make_member(
+        member = _make_method(
             refid=refid,
             compound_refid=info.parent_refid,
             name=func_name,
-            qualified_name=qualified_name,
+            qualified_name=f"{qualified_name}{normalized_args}",
             ret_type=ret_type,
             definition=definition,
             argsstring=argsstring,
@@ -333,7 +341,7 @@ def _qn_from_refid(refid: str) -> str:
     return entity
 
 
-def _make_member(
+def _make_method(
     refid: str,
     compound_refid: str,
     name: str,
@@ -343,8 +351,8 @@ def _make_member(
     argsstring: str = "",
     brief: str = "",
     detailed: str = "",
-) -> MemberNode:
-    return MemberNode(
+) -> MethodNode:
+    return MethodNode(
         refid=refid,
         compound_refid=compound_refid,
         kind="function",
@@ -375,12 +383,11 @@ def _make_member(
 
 def parse_free_function_page(
     info: PageInfo, soup,
-) -> list[tuple[MemberNode, list[ParameterNode]]]:
+) -> list[tuple[FunctionNode, list[ParameterNode]]]:
     """Parse a free function page (e.g. ``std::sort``).
 
-    Same as :func:`parse_member_page` but with ``compound_refid=""``.
+    Uses FunctionNode with qualified_name = ::name(args).
     """
-    # Reuse member parser with an empty parent
     original_parent = info.parent_refid
     info.parent_refid = ""
     try:
@@ -388,9 +395,26 @@ def parse_free_function_page(
     finally:
         info.parent_refid = original_parent
 
-    # Ensure compound_refid is empty for free functions
-    cleaned: list[tuple[MemberNode, list[ParameterNode]]] = []
+    # Convert MethodNode results to FunctionNode
+    cleaned: list[tuple[FunctionNode, list[ParameterNode]]] = []
     for member, params in results:
-        member.compound_refid = ""
-        cleaned.append((member, params))
+        fn = FunctionNode(
+            refid=member.refid,
+            kind="function",
+            name=member.name,
+            qualified_name=f"::{member.name}{_normalize_argsstring(member.argsstring)}",
+            type_signature=member.type_signature,
+            definition=member.definition,
+            argsstring=member.argsstring,
+            file_path=member.file_path,
+            line_number=member.line_number,
+            brief_description=member.brief_description,
+            detailed_description=member.detailed_description,
+            source=SOURCE,
+            layer="dependency",
+        )
+        # Update parameter refids to point to the FunctionNode
+        for p in params:
+            p.member_refid = fn.refid
+        cleaned.append((fn, params))
     return cleaned

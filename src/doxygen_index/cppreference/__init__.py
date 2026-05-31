@@ -15,7 +15,6 @@ Quick start::
 
 from __future__ import annotations
 
-import itertools
 import sys
 from pathlib import Path
 
@@ -105,10 +104,10 @@ def parse(
         try:
             soup = _parse_html(info.path)
             compound, stubs = parse_class_page(info, soup)
-            result.compounds.append(compound)
+            result.classes.append(compound)
             for stub in stubs:
                 stub_refids.add(stub.refid)
-                result.members.append(stub)
+                result.methods.append(stub)
         except Exception as e:
             print(f"  Warning: Failed to parse {info.relative}: {e}", file=sys.stderr)
 
@@ -125,7 +124,7 @@ def parse(
             entries = parse_member_page(info, soup)
             for member, params in entries:
                 # If this member was already added as a stub, replace it
-                _replace_or_add_member(result, member, stub_refids)
+                _replace_or_add_method(result, member, stub_refids)
                 result.parameters.extend(params)
         except Exception as e:
             print(f"  Warning: Failed to parse {info.relative}: {e}", file=sys.stderr)
@@ -142,7 +141,7 @@ def parse(
             soup = _parse_html(info.path)
             entries = parse_free_function_page(info, soup)
             for member, params in entries:
-                result.members.append(member)
+                result.functions.append(member)
                 result.parameters.extend(params)
         except Exception as e:
             print(f"  Warning: Failed to parse {info.relative}: {e}", file=sys.stderr)
@@ -155,13 +154,19 @@ def parse(
     print(f"\nPass 4: Parsing {len(header_pages)} header pages ...")
 
     # Build lookup maps: refid → compound/member for DEFINED_IN linking
-    compound_by_refid = {c.refid: c for c in result.compounds}
-    member_by_refid = {m.refid: m for m in result.members}
+    compound_by_refid = {c.refid: c for c in result.classes}
+    member_by_refid = {m.refid: m for m in result.methods}
     # Also map base refid (without #N overload suffix) → list of members
     member_by_base_refid: dict[str, list] = {}
-    for m in result.members:
+    for m in result.methods:
         base = m.refid.split("#")[0]
         member_by_base_refid.setdefault(base, []).append(m)
+
+    # Also index functions by refid for header linking
+    for fn in result.functions:
+        member_by_refid[fn.refid] = fn
+        base = fn.refid.split("#")[0]
+        member_by_base_refid.setdefault(base, []).append(fn)
 
     defined_in_count = 0
     for info in header_pages:
@@ -187,14 +192,17 @@ def parse(
     print(f"  Linked {defined_in_count} symbols to headers (DEFINED_IN)")
 
     # --- Synthesize namespaces ---
-    result.namespaces = _synthesize_namespaces(result.compounds, result.members)
+    result.namespaces = _synthesize_namespaces(
+        result.classes + result.methods + result.functions, []
+    )
 
     # --- Summary ---
     print(f"\nParsed cppreference:")
     print(f"  Files:      {len(result.files)}")
     print(f"  Namespaces: {len(result.namespaces)}")
-    print(f"  Compounds:  {len(result.compounds)}")
-    print(f"  Members:    {len(result.members)}")
+    print(f"  Classes:    {len(result.classes)}")
+    print(f"  Methods:    {len(result.methods)}")
+    print(f"  Functions:  {len(result.functions)}")
     print(f"  Parameters: {len(result.parameters)}")
 
     return result
@@ -212,30 +220,30 @@ def _parse_html(path: Path):
         return BeautifulSoup(f, "lxml")
 
 
-def _replace_or_add_member(
+def _replace_or_add_method(
     result: ParseResult,
     member,
     stub_refids: set[str],
 ) -> None:
-    """Replace a stub member with the full version, or add as new."""
-    # Check if any existing member is a stub for this member's base refid
+    """Replace a stub method with the full version, or add as new."""
+    # Check if any existing method is a stub for this member's base refid
     base_refid = member.refid.split("#")[0]
-    for i, existing in enumerate(result.members):
+    for i, existing in enumerate(result.methods):
         if existing.refid.split("#")[0] == base_refid and existing.refid in stub_refids:
             # Replace stub with full version, preserving brief from stub if
             # the full version doesn't have one
             if not member.brief_description and existing.brief_description:
                 member.brief_description = existing.brief_description
-            result.members[i] = member
+            result.methods[i] = member
             stub_refids.discard(existing.refid)
             return
-    result.members.append(member)
+    result.methods.append(member)
 
 
-def _synthesize_namespaces(compounds, members) -> list[NamespaceNode]:
+def _synthesize_namespaces(entries, _unused) -> list[NamespaceNode]:
     """Create NamespaceNode records from qualified names."""
     ns_set: set[str] = set()
-    for entry in itertools.chain(compounds, members):
+    for entry in entries:
         qn = entry.qualified_name
         parts = qn.split("::")
         # Build all namespace prefixes (e.g. std, std::ranges)
