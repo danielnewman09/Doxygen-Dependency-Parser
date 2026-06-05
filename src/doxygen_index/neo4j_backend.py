@@ -99,7 +99,7 @@ def write_result(result: ParseResult) -> None:
     for node_list, label in typed_batches:
         if node_list:
             for node in node_list:
-                node.save()
+                node.__class__.create_or_update(node.__properties__)
             print(f"  {label}: {len(node_list)}")
 
     # Parameters use Cypher MERGE — no UniqueIdProperty on ParameterNode
@@ -110,7 +110,8 @@ def write_result(result: ParseResult) -> None:
     _write_file_relationships()
     _write_include_relationships(result)
     _write_inheritance_relationships()
-    _write_call_relationships(result)
+    _write_specialization_relationships(result)
+    _write_invoke_relationships(result)
 
 
 # ---------------------------------------------------------------------------
@@ -242,25 +243,55 @@ def _write_inheritance_relationships() -> None:
     print("  Relationships: INHERITS_FROM")
 
 
-def _write_call_relationships(result: ParseResult) -> None:
-    if not result.calls:
-        print("  Calls: 0")
+def _write_specialization_relationships(result: ParseResult) -> None:
+    """Create SPECIALIZES edges: specialization → primary template."""
+    # Build lookup: qualified_name → compound node (must have element_id from save)
+    compounds_by_qn: dict[str, object] = {}
+    for node_list in [result.classes, result.enums, result.unions, result.interfaces]:
+        for node in node_list:
+            compounds_by_qn[node.qualified_name] = node
+
+    count = 0
+    for qn, spec in compounds_by_qn.items():
+        if "<" not in qn or not qn.endswith(">"):
+            continue
+        # Only treat as specialization if <...> is in the leaf segment
+        segments = qn.split("::")
+        if "<" not in segments[-1]:
+            continue  # nested type carrying outer template params (e.g. chunk_view<V>::iterator)
+        leaf_name = segments[-1].split("<")[0]
+        primary_qn = "::".join(segments[:-1] + [leaf_name])
+        primary = compounds_by_qn.get(primary_qn)
+        if primary:
+            try:
+                spec.specializes.connect(primary)
+                count += 1
+            except Exception as e:
+                print(f"Warning: could not connect SPECIALIZES {qn} → {primary_qn}: {e}",
+                      file=sys.stderr)
+
+    print(f"  Relationships: SPECIALIZES ({count} edges)")
+
+
+def _write_invoke_relationships(result: ParseResult) -> None:
+    if not result.invokes:
+        print("  Invokes: 0")
         return
     batch_size = 1000
-    batch_dicts = [asdict(c) for c in result.calls]
+    batch_dicts = [asdict(c) for c in result.invokes]
     created = 0
     for i in range(0, len(batch_dicts), batch_size):
         batch = batch_dicts[i:i + batch_size]
         results, _meta = db.cypher_query("""
             UNWIND $batch AS row
-            MATCH (caller:Member {refid: row.from_refid})
-            MATCH (callee:Member {refid: row.to_refid})
-            MERGE (caller)-[:CALLS]->(callee)
+            MATCH (invoker:Method|Function {refid: row.from_refid})
+            MATCH (invokee:Method|Function {refid: row.to_refid})
+            MERGE (invoker)-[:INVOKES]->(invokee)
             RETURN count(*) AS cnt
         """, {"batch": batch})
         if results:
             created += results[0][0]
-    print(f"  Calls: {created} (of {len(batch_dicts)} references)")
+    print(f"  Invokes: {created} (of {len(batch_dicts)} references)")
 
 
 # ---------------------------------------------------------------------------
