@@ -35,7 +35,7 @@ class IncludeEntry:
 
 
 @dataclass
-class CallEntry:
+class InvokeEntry:
     from_refid: str
     to_refid: str
     to_name: str
@@ -57,8 +57,8 @@ class ParseResult:
     functions: list[FunctionNode] = field(default_factory=list)
     parameters: list[ParameterNode] = field(default_factory=list)
     includes: list[IncludeEntry] = field(default_factory=list)
-    calls: list[CallEntry] = field(default_factory=list)
-    called_by: list[CallEntry] = field(default_factory=list)
+    invokes: list[InvokeEntry] = field(default_factory=list)
+    invoked_by: list[InvokeEntry] = field(default_factory=list)
 
     @property
     def compounds(self) -> list:
@@ -262,16 +262,16 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
             type=param_type, default_value=default_value or "",
         ))
 
-    # --- Call references (shared) ---
+    # --- Invoke references (shared) ---
     for ref in memberdef.findall("references"):
-        result.calls.append(CallEntry(
+        result.invokes.append(InvokeEntry(
             from_refid=refid,
             to_refid=ref.get("refid", ""),
             to_name=ref.text or "",
         ))
 
     for ref in memberdef.findall("referencedby"):
-        result.called_by.append(CallEntry(
+        result.invoked_by.append(InvokeEntry(
             from_refid=refid,
             to_refid=ref.get("refid", ""),
             to_name=ref.text or "",
