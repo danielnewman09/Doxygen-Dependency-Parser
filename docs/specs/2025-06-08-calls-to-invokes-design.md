@@ -2,17 +2,19 @@
 
 **Date:** 2025-06-08
 **Status:** Approved
-**Scope:** Rename all CALLS relationship labels, tool names, and terminology to INVOKES/invokers/invokees
+**Scope:** Write path only — rename CALLS→INVOKES in the ingestion pipeline (parser, backend, example). Query path (tools.py, MCP server) is a separate issue.
 
 ## Overview
 
 codegraph defines `MethodNode.invokes = RelationshipTo('MethodNode', 'INVOKES')` for
-call-callee relationships. doxygen-index writes `[:CALLS]` edges and queries them as
-`[:CALLS]`. This mismatch means the dependency layer and design layer store the same
-concept under different relationship types.
+call-callee relationships. doxygen-index writes `[:CALLS]` edges. This mismatch means
+the dependency layer and design layer store the same concept under different
+relationship types.
 
-This design renames everything to match: `CALLS` → `INVOKES` in Neo4j, and all
-user-facing tool/method names shift from "callers/callees" to "invokers/invokees".
+This spec covers the **write path** — renaming the parser data model and Neo4j
+ingestion to use INVOKES terminology. The **query path** (tools.py, MCP server)
+will be addressed separately by migrating query methods into codegraph's
+`GraphRepository`, which also resolves the stale label issue (Issue 2).
 
 **Migration:** Clean break — no backward compatibility with existing `[:CALLS]` edges.
 Re-ingest after changes.
@@ -44,7 +46,7 @@ class InvokeEntry:
 ### 2.1 Rename _write_call_relationships → _write_invoke_relationships
 
 - Cypher: `MERGE (caller)-[:CALLS]->(callee)` → `MERGE (invoker)-[:INVOKES]->(invokee)`
-- Cypher label fix (scoped to this method): `MATCH (caller:Member)` / `MATCH (callee:Member)` → `MATCH (caller:Method|Function)` / `MATCH (callee:Method|Function)`
+- Cypher label fix: `MATCH (caller:Member)` / `MATCH (callee:Member)` → `MATCH (caller:Method|Function)` / `MATCH (callee:Method|Function)`
 - Print: `"Calls:"` → `"Invokes:"`
 - Parameter: `result.calls` → `result.invokes`
 
@@ -52,80 +54,42 @@ class InvokeEntry:
 
 - `_write_call_relationships(result)` → `_write_invoke_relationships(result)`
 
-## 3. Query tools — `tools.py`
-
-### 3.1 Rename find_callers_and_callees → find_invokers_and_invokees
-
-- Method name, docstring, parameter names, variable names all shift to invoke terminology
-- Parameter `direction` choices: `"invokees"`, `"invokers"`, `"both"` (was `"callees"`, `"callers"`, `"both"`)
-- Default stays `"both"`
-- Cypher: `[:CALLS]` → `[:INVOKES]`
-- Cypher labels: `:Member` → `:Method|Function` (scoped to this method only; full label cleanup is Issue 2)
-- Variable names: `caller_name` → `invoker_name`, `callee_name` → `invokee_name`, etc.
-- Update `DependencyGraphTools.schemas()` method list: `self.find_callers_and_callees` → `self.find_invokers_and_invokees`
-
-## 4. MCP server — `mcp/mcp_neo4j_codebase_server.py`
-
-### 4.1 Method renames
-
-- `get_callers()` → `get_invokers()`
-- `get_callees()` → `get_invokees()`
-
-### 4.2 MCP tool renames (in create_mcp_server)
-
-- `get_callers` → `get_invokers`
-- `get_callees` → `get_invokees`
-
-### 4.3 Cypher updates in these two methods
-
-- All `[:CALLS]` → `[:INVOKES]`
-- `:Member` label → `:Method|Function`
-- Remove `[:CONTAINS]` traversals that joined members to compounds (INVOKES is a method-to-method relationship only)
-- Variable names: `caller`/`callee` → `invoker`/`invokee`
-
-### 4.4 CLI command renames (in main())
-
-- `get_callers` → `get_invokers`
-- `get_callees` → `get_invokees`
-- Help text updated accordingly
-
-### 4.5 No changes to other methods
-
-Other MCP server methods (find_class, get_class_members, search_symbols, etc.) still
-use `:Compound`/`:Member`/`:CONTAINS` labels. Those are addressed in Issue 2.
-
-## 5. Example script — `examples/doxygen_to_neo4j.py`
+## 3. Example script — `examples/doxygen_to_neo4j.py`
 
 - `_write_call_relationships()` → `_write_invoke_relationships()`
 - `[:CALLS]` → `[:INVOKES]`
 - `CallEntry` → `InvokeEntry`
-- Print text: `"Relationships: DEFINED_IN, CONTAINS"` → update if CONTAINS appears elsewhere (this is Issue 8 territory; minimal change here)
+- Print text updated accordingly
 
-## 6. Cppreference parser — `src/doxygen_index/cppreference/__init__.py`
+## 4. Cppreference parser — `src/doxygen_index/cppreference/__init__.py`
 
-No changes needed. The `parse()` function creates a `ParseResult()` whose `invokes`/`invoked_by` fields default to empty lists. Cppreference data doesn't include call references.
+No changes needed. The `parse()` function creates a `ParseResult()` whose
+`invokes`/`invoked_by` fields default to empty lists. Cppreference data doesn't
+include call references.
 
-## 7. Tests — `tests/test_parser.py`
+## 5. Tests — `tests/test_parser.py`
 
 - Update any `CallEntry` imports → `InvokeEntry`
-- The XML fixture has no `<references>` elements, so no assertion changes needed for call data
-- The `TestNormalizeArgsstring`, `TestDeriveModule`, `TestDeriveSourceType`, `TestDepsConfig` classes are unaffected
+- The XML fixture has no `<references>` elements, so no assertion changes needed
+  for invoke data
 
-## 8. Changes NOT in scope
+## 6. Out of scope (separate issue)
 
-- `ParseResult.compounds` / `ParseResult.members` backward-compat properties — unchanged
-- Full Compound/Member label cleanup across all Cypher queries — Issue 2
-- Namespace COMPOSES writes — Issue 3
-- FTS index — Issue 7
-- Docstrings in MCP server methods outside get_invokers/get_invokees — Issue 2
+The following are **not** changed in this issue and will be addressed when
+query methods migrate to codegraph's `GraphRepository`:
+
+- `tools.py` — `find_callers_and_callees()` stays as-is for now; will be
+  replaced by codegraph query methods
+- `mcp_neo4j_codebase_server.py` — `get_callers()`/`get_callees()` stay as-is;
+  will be replaced by codegraph query methods
+- Stale `Compound`/`Member`/`CONTAINS` labels in query Cypher — resolves
+  naturally when queries move to codegraph
 
 ## Summary of file changes
 
 | File | Change type |
 |---|---|
 | `src/doxygen_index/parser.py` | Rename CallEntry→InvokeEntry, calls→invokes, called_by→invoked_by |
-| `src/doxygen_index/neo4j_backend.py` | Rename function, CALLS→INVOKES, result.calls→result.invokes |
-| `src/doxygen_index/tools.py` | Rename method, CALLS→INVOKES, callers/callees→invokers/invokees |
-| `mcp/mcp_neo4j_codebase_server.py` | Rename methods/tools/CLI, CALLS→INVOKES, label fix scoped to invoke methods |
+| `src/doxygen_index/neo4j_backend.py` | Rename function, CALLS→INVOKES, result.calls→result.invokes, label fix |
 | `examples/doxygen_to_neo4j.py` | Rename function/class, CALLS→INVOKES |
 | `tests/test_parser.py` | Import rename CallEntry→InvokeEntry |

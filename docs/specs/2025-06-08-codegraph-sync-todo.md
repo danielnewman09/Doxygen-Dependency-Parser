@@ -57,9 +57,19 @@ COMPOSES edges.
 it will create `[:INVOKES]` edges. The dependency layer writes `[:CALLS]`. Two
 different relationship types for the same semantic relationship.
 
-**Approach:** Rename all `[:CALLS]` references to `[:INVOKES]` to match codegraph's
-model. Update `_write_call_relationships()`, all Cypher queries in `tools.py`,
-and all Cypher queries in `mcp_neo4j_codebase_server.py`.
+**Design:** `docs/specs/2025-06-08-calls-to-invokes-design.md`
+
+**Split into two sub-issues:**
+
+- **2a — Write path (in progress):** Rename `CallEntry`→`InvokeEntry`,
+  `calls`→`invokes`, `[:CALLS]`→`[:INVOKES]` in parser, neo4j_backend, and
+  example script. Design doc covers this scope.
+
+- **2b — Query path (deferred):** Migrate `tools.py` and MCP server query methods
+  into codegraph's `GraphRepository`. This also resolves the stale label issue
+  (Issue 3) for those methods, since codegraph's queries will use atomized labels
+  natively. The tools will call `GraphRepository.find_invokers()` etc. instead
+  of writing raw Cypher.
 
 ---
 
@@ -201,8 +211,8 @@ pattern, matching the current `neo4j_backend.py`.
 
 ## Priority order (suggested)
 
-1. **Issue 2** (CALLS→INVOKES) — correctness: different rel types for same concept
-2. **Issue 3** (stale labels & CONTAINS) — correctness: queries return nothing
+1. **Issue 2a** (CALLS→INVOKES write path) — correctness: different rel types for same concept
+2. **Issue 2b** (migrate queries to codegraph) — resolves Issue 2 and Issue 3 together
 3. **Issue 1** (Namespace COMPOSES) — completeness: missing graph edges
 4. **Issue 4** (clear_source labels) — completeness: Module cleanup gap
 5. **Issue 6** (ModuleNode parser) — completeness: skipped Doxygen kind
