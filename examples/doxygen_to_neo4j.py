@@ -111,8 +111,8 @@ class Neo4jBatchWriter:
         self.members: list[dict] = []
         self.parameters: list[dict] = []
         self.includes: list[dict] = []
-        self.calls: list[dict] = []       # from_refid -> to_refid (calls)
-        self.called_by: list[dict] = []   # from_refid -> to_refid (called_by)
+        self.invokes: list[dict] = []       # from_refid -> to_refid (invokes)
+        self.invoked_by: list[dict] = []   # from_refid -> to_refid (invoked_by)
 
         # Caches for resolving file paths to refids
         self.file_path_to_refid: dict[str, str] = {}
@@ -239,18 +239,18 @@ class Neo4jBatchWriter:
             "is_local": is_local,
         })
 
-    def add_call(self, from_member_refid: str, to_member_refid: str, to_member_name: str):
-        self.calls.append({
+    def add_invoke(self, from_member_refid: str, to_member_refid: str, to_member_name: str):
+        self.invokes.append({
             "from_refid": from_member_refid,
             "to_refid": to_member_refid,
             "to_name": to_member_name,
         })
 
-    def add_called_by(self, member_refid: str, caller_refid: str, caller_name: str):
-        self.called_by.append({
+    def add_invoked_by(self, member_refid: str, invoker_refid: str, invoker_name: str):
+        self.invoked_by.append({
             "member_refid": member_refid,
-            "caller_refid": caller_refid,
-            "caller_name": caller_name,
+            "invoker_refid": invoker_refid,
+            "invoker_name": invoker_name,
         })
 
     # ---- Batch write methods ----
@@ -266,7 +266,7 @@ class Neo4jBatchWriter:
             self._write_file_relationships(session)
             self._write_include_relationships(session)
             self._write_inheritance_relationships(session)
-            self._write_call_relationships(session)
+            self._write_invoke_relationships(session)
             if metadata:
                 self._write_metadata(session, metadata)
 
@@ -452,27 +452,27 @@ class Neo4jBatchWriter:
         )
         print("  Relationships: INHERITS_FROM")
 
-    def _write_call_relationships(self, session):
-        """Create CALLS relationships between Members."""
-        if not self.calls:
-            print("  Calls: 0")
+    def _write_invoke_relationships(self, session):
+        """Create INVOKES relationships between Members."""
+        if not self.invokes:
+            print("  Invokes: 0")
             return
         batch_size = 1000
         created = 0
-        for i in range(0, len(self.calls), batch_size):
-            batch = self.calls[i:i + batch_size]
+        for i in range(0, len(self.invokes), batch_size):
+            batch = self.invokes[i:i + batch_size]
             result = session.run(
                 """
                 UNWIND $batch AS row
-                MATCH (caller:Member {refid: row.from_refid})
-                MATCH (callee:Member {refid: row.to_refid})
-                MERGE (caller)-[:CALLS]->(callee)
+                MATCH (invoker:Member {refid: row.from_refid})
+                MATCH (invokee:Member {refid: row.to_refid})
+                MERGE (invoker)-[:INVOKES]->(invokee)
                 RETURN count(*) AS cnt
                 """,
                 batch=batch,
             )
             created += result.single()["cnt"]
-        print(f"  Calls: {created} (of {len(self.calls)} references)")
+        print(f"  Invokes: {created} (of {len(self.invokes)} references)")
 
     def _write_metadata(self, session, metadata: dict):
         """Write metadata as a single Metadata node."""
@@ -595,13 +595,13 @@ def parse_member(writer: Neo4jBatchWriter, memberdef: ET.Element,
     for ref in memberdef.findall("references"):
         to_refid = ref.get("refid", "")
         to_name = ref.text or ""
-        writer.add_call(refid, to_refid, to_name)
+        writer.add_invoke(refid, to_refid, to_name)
 
-    # Parse called-by references
+    # Parse invoked-by references
     for ref in memberdef.findall("referencedby"):
-        caller_refid = ref.get("refid", "")
-        caller_name = ref.text or ""
-        writer.add_called_by(refid, caller_refid, caller_name)
+        invoker_refid = ref.get("refid", "")
+        invoker_name = ref.text or ""
+        writer.add_invoked_by(refid, invoker_refid, invoker_name)
 
 
 def parse_index(index_path: Path) -> list[tuple[str, str]]:
