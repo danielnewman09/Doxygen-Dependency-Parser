@@ -67,8 +67,6 @@ def _qualified_name_from_title(title: str, info: PageInfo) -> str:
     If the title doesn't start with ``std::``, infer the namespace from the
     URL path.
     """
-    # Clean up common title artifacts
-    title = re.sub(r"\s*<[^>]+>", "", title)  # strip template params for class name
     # Fix whitespace around :: that BS4 text extraction introduces
     title = re.sub(r"\s*::\s*", "::", title)
     title = title.strip()

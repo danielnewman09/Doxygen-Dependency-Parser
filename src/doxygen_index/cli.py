@@ -3,11 +3,15 @@ CLI entry point for doxygen-index.
 
 Usage::
 
+    doxygen-index project <project-dir>
     doxygen-index discover [--build-type Debug] [--project-dir .]
     doxygen-index generate --output-dir build/docs/deps [--only eigen,sdl]
     doxygen-index ingest --output-dir build/docs/deps --neo4j
     doxygen-index full --output-dir build/docs/deps --neo4j
     doxygen-index list-deps
+
+Project mode requires a ``.doxygen-index.toml`` config file in the project directory.
+See the README or ``doxygen-index project --help`` for details.
 """
 
 from __future__ import annotations
@@ -58,6 +62,94 @@ def _parse_only(only_str: str | None) -> set[str] | None:
 # ---------------------------------------------------------------------------
 # Subcommands
 # ---------------------------------------------------------------------------
+
+def cmd_project(args: argparse.Namespace) -> None:
+    """Parse an arbitrary C++ project's source code via Doxygen.
+
+    Loads .doxygen-index.toml from the project directory, generates
+    Doxygen XML, parses it, and outputs results (JSON by default).
+    """
+    from doxygen_index.project import load_config, ProjectConfig
+    from doxygen_index.doxygen import run_doxygen
+    from doxygen_index.parser import parse_xml_dir
+    from doxygen_index.json_backend import write_result as json_write
+
+    project_dir = Path(args.project_dir).resolve()
+
+    # Load config
+    config, config_dir = load_config(project_dir)
+    print(f"Project: {config.name}")
+    print(f"Input paths: {', '.join(str(p) for p in config.input_paths)}")
+
+    # Determine output directory
+    output_dir = Path(args.output_dir) if args.output_dir else (
+        config_dir / "build" / "docs" / f"doxygen-{config.name}"
+    )
+    print(f"Output dir: {output_dir}")
+
+    # Phase 1: Generate Doxygen XML (unless --parse-only)
+    if not args.parse_only:
+        print(f"\nFile patterns: {config.file_patterns}")
+        if config.exclude_patterns:
+            print(f"Exclude: {config.exclude_patterns}")
+        if config.predefined:
+            print(f"Predefined: {config.predefined}")
+        print()
+
+        xml_dir = run_doxygen(
+            name=config.name,
+            input_paths=config.input_paths,
+            output_base=output_dir,
+            config=config,
+            xml_subdir="xml",
+        )
+        if xml_dir is None:
+            print("Doxygen generation failed.", file=sys.stderr)
+            sys.exit(1)
+    else:
+        xml_dir = Path(args.xml_dir)
+        if not xml_dir.exists():
+            print(f"Error: XML directory not found: {xml_dir}", file=sys.stderr)
+            sys.exit(1)
+
+    # Phase 2: Parse XML (unless --generate-only)
+    if args.generate_only:
+        print(f"\nXML generated at: {xml_dir}")
+        return
+
+    print(f"\nParsing XML...")
+    result = parse_xml_dir(xml_dir, source=config.name, layer="codebase")
+
+    # Phase 3: Output
+    source = args.source or config.name
+    json_path = output_dir / f"{config.name}.json"
+
+    if args.format == "neo4j":
+        from doxygen_index.neo4j_backend import ingest as neo4j_ingest
+        print(f"\n--- {config.name} → Neo4j ---")
+        neo4j_ingest(
+            xml_dir, source=source,
+            uri=args.neo4j_uri, user=args.neo4j_user,
+            password=args.neo4j_password,
+            layer="codebase",
+        )
+    else:
+        json_write(result, json_path, source=source)
+        print(f"Output: {json_path}")
+
+    # Summary
+    print()
+    print(f"  Classes:      {len(result.classes)}")
+    print(f"  Methods:      {len(result.methods)}")
+    print(f"  Functions:    {len(result.functions)}")
+    print(f"  Enums:        {len(result.enums)}")
+    print(f"  Namespaces:   {len(result.namespaces)}")
+    print(f"  Files:        {len(result.files)}")
+    print(f"  Includes:     {len(result.includes)}")
+    print(f"  Invokes:      {len(result.invokes)}")
+    if args.format != "neo4j":
+        print(f"\nOutput: {json_path}")
+
 
 def cmd_list_deps(args: argparse.Namespace) -> None:
     """List all known dependency configurations."""
@@ -254,6 +346,25 @@ def main() -> None:
     )
     parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
     subparsers = parser.add_subparsers(dest="command", required=True)
+
+    # project — parse an arbitrary C++ repository
+    sp = subparsers.add_parser("project",
+                               help="Parse a C++ project via Doxygen (requires .doxygen-index.toml)")
+    sp.add_argument("project_dir", help="Path to project directory containing .doxygen-index.toml")
+    sp.add_argument("--output-dir", default=None,
+                    help="Base directory for output (default: <project>/build/docs/doxygen-<name>/)")
+    sp.add_argument("--format", choices=["json", "neo4j"], default="json",
+                    help="Output format (default: json)")
+    sp.add_argument("--source", default=None,
+                    help="Source label for provenance (default: project name from config)")
+    sp.add_argument("--generate-only", action="store_true",
+                    help="Only run Doxygen, skip XML parsing")
+    sp.add_argument("--parse-only", action="store_true",
+                    help="Only parse existing XML, skip Doxygen generation")
+    sp.add_argument("--xml-dir", default=None,
+                    help="XML directory to parse (required with --parse-only)")
+    _add_db_args(sp)
+    sp.set_defaults(func=cmd_project)
 
     # list-deps
     sp = subparsers.add_parser("list-deps", help="List known dependency configurations")

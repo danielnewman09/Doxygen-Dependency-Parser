@@ -39,14 +39,14 @@ def ensure_schema(stdout=None) -> None:
 def clear_source(source: str) -> None:
     """Remove all nodes with a specific source label."""
     queries = [
-        ("MATCH (m:Member {source: $src}) "
+        ("MATCH (m:_MemberMixin {source: $src}) "
          "WITH collect(m.refid) AS refids "
          "MATCH (p:ParameterNode) WHERE p.member_refid IN refids "
          "DETACH DELETE p",
          {"src": source}),
-        ("MATCH (m:Member {source: $src}) DETACH DELETE m",
+        ("MATCH (m:_MemberMixin {source: $src}) DETACH DELETE m",
          {"src": source}),
-        ("MATCH (c:Compound {source: $src}) DETACH DELETE c",
+        ("MATCH (c:_CompoundMixin {source: $src}) DETACH DELETE c",
          {"src": source}),
         ("MATCH (n:NamespaceNode {source: $src}) DETACH DELETE n",
          {"src": source}),
@@ -62,8 +62,8 @@ def clear_all() -> None:
     """Remove all codebase nodes and relationships."""
     queries = [
         "MATCH (p:ParameterNode) DETACH DELETE p",
-        "MATCH (m:Member) DETACH DELETE m",
-        "MATCH (c:Compound) DETACH DELETE c",
+        "MATCH (m:_MemberMixin) DETACH DELETE m",
+        "MATCH (c:_CompoundMixin) DETACH DELETE c",
         "MATCH (n:NamespaceNode) DETACH DELETE n",
         "MATCH (f:FileNode) DETACH DELETE f",
         "MATCH (md:Metadata) DETACH DELETE md",
@@ -83,24 +83,29 @@ def write_result(result: ParseResult) -> None:
     Nodes are saved via neomodel .save() (MERGE on unique identifier).
     Relationships use .connect() where models declare them, Cypher otherwise.
     """
-    typed_batches = [
-        (result.files, "Files"),
-        (result.namespaces, "Namespaces"),
-        (result.classes, "Classes"),
-        (result.enums, "Enums"),
-        (result.unions, "Unions"),
-        (result.interfaces, "Interfaces"),
-        (result.methods, "Methods"),
-        (result.attributes, "Attributes"),
-        (result.enum_values, "EnumValues"),
-        (result.defines, "Defines"),
-        (result.functions, "Functions"),
+    batch_refs: list[list] = [
+        result.files, result.namespaces, result.classes,
+        result.enums, result.unions, result.interfaces,
+        result.methods, result.attributes, result.enum_values,
+        result.defines, result.functions,
     ]
-    for node_list, label in typed_batches:
+    batch_labels = [
+        "Files", "Namespaces", "Classes", "Enums", "Unions",
+        "Interfaces", "Methods", "Attributes", "EnumValues",
+        "Defines", "Functions",
+    ]
+    # Persist nodes, replacing result lists in-place with saved instances
+    # so element_id is set for subsequent .connect() calls.
+    # create_or_update() returns a list; we unwrap the first element.
+    for i, node_list in enumerate(batch_refs):
         if node_list:
+            saved = []
             for node in node_list:
-                node.__class__.create_or_update(node.__properties__)
-            print(f"  {label}: {len(node_list)}")
+                result_nodes = node.__class__.create_or_update(node.__properties__)
+                saved.append(result_nodes[0])
+            # Replace in-place: update the actual result attribute
+            batch_refs[i][:] = saved
+            print(f"  {batch_labels[i]}: {len(node_list)}")
 
     # Parameters use Cypher MERGE — no UniqueIdProperty on ParameterNode
     _write_parameters(result)
@@ -127,7 +132,7 @@ def _write_parameters(result: ParseResult) -> None:
         batch = batch_dicts[i:i + batch_size]
         db.cypher_query("""
             UNWIND $batch AS row
-            MATCH (m:Member {refid: row.member_refid})
+            MATCH (m:_MemberMixin {refid: row.member_refid})
             MERGE (m)-[:HAS_PARAMETER]->(p:ParameterNode {
                 position: row.position,
                 name: row.name,
@@ -200,12 +205,12 @@ def _write_compound_member_connect(result: ParseResult) -> None:
 
 def _write_file_relationships() -> None:
     db.cypher_query("""
-        MATCH (c:Compound) WHERE c.file_path <> ''
+        MATCH (c:_CompoundMixin) WHERE c.file_path <> ''
         MATCH (f:FileNode {path: c.file_path})
         MERGE (c)-[:DEFINED_IN]->(f)
     """)
     db.cypher_query("""
-        MATCH (m:Member) WHERE m.file_path <> ''
+        MATCH (m:_MemberMixin) WHERE m.file_path <> ''
         MATCH (f:FileNode {path: m.file_path})
         MERGE (m)-[:DEFINED_IN]->(f)
     """)
@@ -233,10 +238,10 @@ def _write_include_relationships(result: ParseResult) -> None:
 
 def _write_inheritance_relationships() -> None:
     db.cypher_query("""
-        MATCH (derived:Compound)
+        MATCH (derived:_CompoundMixin)
         WHERE size(derived.base_classes) > 0
         UNWIND derived.base_classes AS base_name
-        MATCH (base:Compound)
+        MATCH (base:_CompoundMixin)
         WHERE base.name = base_name OR base.qualified_name = base_name
         MERGE (derived)-[:INHERITS_FROM]->(base)
     """)
@@ -284,8 +289,8 @@ def _write_invoke_relationships(result: ParseResult) -> None:
         batch = batch_dicts[i:i + batch_size]
         results, _meta = db.cypher_query("""
             UNWIND $batch AS row
-            MATCH (invoker:Method|Function {refid: row.from_refid})
-            MATCH (invokee:Method|Function {refid: row.to_refid})
+            MATCH (invoker:MethodNode|FunctionNode {refid: row.from_refid})
+            MATCH (invokee:MethodNode|FunctionNode {refid: row.to_refid})
             MERGE (invoker)-[:INVOKES]->(invokee)
             RETURN count(*) AS cnt
         """, {"batch": batch})
@@ -306,6 +311,7 @@ def ingest(
     password: str | None = None,
     database: str = "neo4j",
     clear: bool = False,
+    layer: str = "dependency",
 ) -> None:
     """Parse Doxygen XML and ingest into Neo4j.
 
@@ -317,6 +323,7 @@ def ingest(
         password: Neo4j password (default: ``$NEO4J_PASSWORD`` or ``msd-local-dev``).
         database: Neo4j database name.
         clear: If True, clear existing data for this source before ingesting.
+        layer: Layer label ("codebase" for project code, "dependency" for deps).
     """
     from neomodel import get_config
 
@@ -345,8 +352,8 @@ def ingest(
     if clear:
         clear_source(source)
 
-    print(f"Parsing {xml_dir}...")
-    result = parse_xml_dir(xml_dir, source=source)
+    print(f"Parsing {xml_dir}... (layer={layer})")
+    result = parse_xml_dir(xml_dir, source=source, layer=layer)
 
     print("Writing to Neo4j...")
     write_result(result)

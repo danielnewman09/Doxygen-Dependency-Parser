@@ -157,7 +157,8 @@ def _normalize_argsstring(argsstring: str) -> str:
 
 def _parse_member(memberdef: ET.Element, compound_refid: str,
                   parent_qualified_name: str,
-                  source: str, result: ParseResult) -> None:
+                  source: str, result: ParseResult,
+                  layer: str = "dependency") -> None:
     """Parse a member definition element into the result using kind dispatch."""
     refid = memberdef.get("id", "")
     kind = memberdef.get("kind", "")
@@ -198,20 +199,7 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
             protection=prot, is_static=is_static, is_const=is_const,
             is_constexpr=is_constexpr, is_virtual=is_virtual,
             is_inline=is_inline, is_explicit=is_explicit, source=source,
-            source_type=source_type, layer="dependency",
-        ))
-
-    elif kind == "function":
-        # Free function — no compound parent
-        normalized_args = _normalize_argsstring(argsstring)
-        qname = f"::{name}{normalized_args}"
-
-        result.functions.append(FunctionNode(
-            refid=refid, kind=kind, name=name, qualified_name=qname,
-            type_signature=type_str, definition=definition,
-            argsstring=argsstring, file_path=file_path or "",
-            line_number=line_number, brief_description=brief,
-            detailed_description=detailed, source=source, layer="dependency",
+            source_type=source_type, layer=layer,
         ))
 
     elif kind == "variable":
@@ -226,7 +214,7 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
             line_number=line_number, brief_description=brief,
             detailed_description=detailed, protection=prot,
             is_static=is_static, is_const=is_const, source=source,
-            layer="dependency",
+            layer=layer,
         ))
 
     elif kind == "enumvalue":
@@ -236,7 +224,7 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
             name=name, qualified_name=qname,
             file_path=file_path or "", line_number=line_number,
             brief_description=brief, detailed_description=detailed,
-            source=source, layer="dependency",
+            source=source, layer=layer,
         ))
 
     elif kind == "define":
@@ -244,7 +232,7 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
             refid=refid, kind=kind, name=name, qualified_name=name,
             definition=definition, file_path=file_path or "",
             line_number=line_number, brief_description=brief,
-            detailed_description=detailed, source=source, layer="dependency",
+            detailed_description=detailed, source=source, layer=layer,
         ))
 
     else:
@@ -278,7 +266,8 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
         ))
 
 
-def _parse_compound_file(xml_path: Path, source: str, result: ParseResult) -> None:
+def _parse_compound_file(xml_path: Path, source: str, result: ParseResult,
+                         layer: str = "dependency") -> None:
     """Parse a compound (class/struct/file) XML file."""
     try:
         tree = ET.parse(xml_path)
@@ -317,7 +306,7 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult) -> No
             result.namespaces.append(NamespaceNode(
                 refid=refid, name=name,
                 qualified_name=compoundname, source=source,
-                layer="dependency",
+                layer=layer,
             ))
             continue
 
@@ -352,7 +341,7 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult) -> No
                 definition=definition, module=module,
                 base_classes=base_classes, is_final=is_final,
                 is_abstract=is_abstract, source=source,
-                source_type=source_type, layer="dependency",
+                source_type=source_type, layer=layer,
             ))
 
         elif kind == "enum":
@@ -362,7 +351,7 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult) -> No
                 file_path=file_path or "", line_number=line_number,
                 brief_description=brief, detailed_description=detailed,
                 definition=definition, module=module,
-                source=source, source_type=source_type, layer="dependency",
+                source=source, source_type=source_type, layer=layer,
             ))
 
         elif kind == "union":
@@ -372,7 +361,7 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult) -> No
                 file_path=file_path or "", line_number=line_number,
                 brief_description=brief, detailed_description=detailed,
                 definition=definition, module=module,
-                source=source, source_type=source_type, layer="dependency",
+                source=source, source_type=source_type, layer=layer,
             ))
 
         elif kind == "interface":
@@ -382,7 +371,7 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult) -> No
                 file_path=file_path or "", line_number=line_number,
                 brief_description=brief, detailed_description=detailed,
                 definition=definition, module=module,
-                source=source, source_type=source_type, layer="dependency",
+                source=source, source_type=source_type, layer=layer,
             ))
 
         else:
@@ -393,7 +382,7 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult) -> No
         # --- Parse members (shared across compound types) ---
         for sectiondef in compounddef.findall("sectiondef"):
             for memberdef in sectiondef.findall("memberdef"):
-                _parse_member(memberdef, refid, qualified_name, source, result)
+                _parse_member(memberdef, refid, qualified_name, source, result, layer)
 
 
 # ---------------------------------------------------------------------------
@@ -416,13 +405,15 @@ def parse_index(index_path: Path) -> list[tuple[str, str]]:
 
 
 def parse_xml_dir(xml_dir: Path, source: str = "msd",
-                  progress_interval: int = 50) -> ParseResult:
+                  progress_interval: int = 50,
+                  layer: str = "dependency") -> ParseResult:
     """Parse all Doxygen XML in a directory and return a ParseResult.
 
     Args:
         xml_dir: Directory containing Doxygen XML output (must have index.xml).
         source: Source label for provenance tracking.
         progress_interval: Print progress every N compounds (0 to disable).
+        layer: Layer label ("codebase" for project code, "dependency" for deps).
 
     Returns:
         ParseResult with all parsed data.
@@ -437,7 +428,7 @@ def parse_xml_dir(xml_dir: Path, source: str = "msd",
     for i, (refid, kind) in enumerate(compounds):
         xml_file = xml_dir / f"{refid}.xml"
         if xml_file.exists():
-            _parse_compound_file(xml_file, source, result)
+            _parse_compound_file(xml_file, source, result, layer)
 
         if progress_interval and (i + 1) % progress_interval == 0:
             print(f"  Parsed {i + 1}/{len(compounds)} XML files...")

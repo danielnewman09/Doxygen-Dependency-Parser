@@ -20,6 +20,8 @@ __version__ = "0.1.0"
 from doxygen_index.conan import discover_packages
 from doxygen_index.doxygen import generate_xml, generate_doxyfile
 from doxygen_index.parser import parse_xml_dir
+from doxygen_index.project import ProjectConfig, load_config
+from doxygen_index.json_backend import write_result as write_json
 from doxygen_index.tools import create_toolset, DependencyGraphTools
 
 __all__ = [
@@ -27,6 +29,9 @@ __all__ = [
     "generate_xml",
     "generate_doxyfile",
     "parse_xml_dir",
+    "ProjectConfig",
+    "load_config",
+    "write_json",
     "create_toolset",
     "DependencyGraphTools",
 ]

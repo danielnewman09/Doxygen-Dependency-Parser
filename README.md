@@ -2,7 +2,8 @@
 
 Index Doxygen XML output and Conan C++ dependencies into Neo4j graph databases.
 
-Takes any Conan-managed C++ project, discovers dependency headers, generates Doxygen XML, and ingests the results into Neo4j alongside your own codebase documentation.
+Takes any C++ project, generates Doxygen XML, and outputs structured results (JSON or Neo4j).
+Works with Conan-managed dependencies and standalone projects alike.
 
 ## Installation
 
@@ -11,11 +12,54 @@ Takes any Conan-managed C++ project, discovers dependency headers, generates Dox
 pip install -e ".[dev]"
 ```
 
-**System requirements:** `doxygen` and `conan` on PATH.
+**System requirements:** `doxygen` on PATH. `conan` is optional (only needed for Conan dependency mode).
+
+## Quick Start: Index Your Own Project
+
+1. Create a `.doxygen-index.toml` in your project root:
+
+```toml
+[project]
+name = "myproject"
+input_paths = ["include", "src"]
+# file_patterns = "*.h *.hpp *.cpp"   # default
+# exclude_patterns = "*/test/* */build/*"
+# predefined = "SOME_MACRO=1"
+```
+
+2. Run:
+
+```bash
+doxygen-index project /path/to/myproject
+```
+
+3. Get a JSON output with all parsed symbols:
+
+```bash
+cat build/docs/doxygen-myproject/myproject.json | jq '.classes[] | .name'
+```
 
 ## CLI Usage
 
 ```bash
+# Parse an arbitrary C++ project (requires .doxygen-index.toml)
+doxygen-index project /path/to/project
+
+# Parse with custom output
+doxygen-index project /path/to/project --output-dir custom/docs
+
+# Parse and ingest into Neo4j
+doxygen-index project /path/to/project --format neo4j
+
+# Just generate Doxygen XML (don't parse)
+doxygen-index project /path/to/project --generate-only
+
+# Just parse existing XML
+doxygen-index project /path/to/project --parse-only --xml-dir build/docs/xml
+
+# -----------------------------------------------------------------------
+# Conan dependency mode (requires conan):
+
 # List known dependency configurations
 doxygen-index list-deps
 
