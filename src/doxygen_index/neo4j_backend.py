@@ -18,9 +18,10 @@ from codegraph import (  # noqa: F401 — needed for install_all_labels
     ClassNode, InterfaceNode, EnumNode, UnionNode, ConceptNode,
     MethodNode, AttributeNode, EnumValueNode, FunctionNode, DefineNode,
     FileNode, NamespaceNode, ParameterNode,
+    ImplementationNode,
 )
 
-from doxygen_index.parser import ParseResult, parse_xml_dir, TemplateParamRef, SpecializesRef
+from doxygen_index.parser import ParseResult, parse_xml_dir, TemplateParamRef, SpecializesRef, ImplementationRef
 
 
 # ---------------------------------------------------------------------------
@@ -39,6 +40,9 @@ def ensure_schema(stdout=None) -> None:
 def clear_source(source: str) -> None:
     """Remove all nodes with a specific source label."""
     queries = [
+        # Delete ImplementationNodes first (members have HAS_IMPLEMENTATION edges to them)
+        ("MATCH (impl:ImplementationNode {source: $src}) DETACH DELETE impl",
+         {"src": source}),
         # Delete ParameterNodes first (they reference member refids)
         ("MATCH (m:_MemberMixin {source: $src}) "
          "WITH collect(m.refid) AS refids "
@@ -67,6 +71,7 @@ def clear_source(source: str) -> None:
 def clear_all() -> None:
     """Remove all codebase nodes and relationships."""
     queries = [
+        "MATCH (impl:ImplementationNode) DETACH DELETE impl",
         "MATCH (p:ParameterNode) DETACH DELETE p",
         "MATCH (m:_MemberMixin) DETACH DELETE m",
         "MATCH (c:_CompoundMixin) DETACH DELETE c",
@@ -93,12 +98,12 @@ def write_result(result: ParseResult) -> None:
         result.files, result.namespaces, result.classes,
         result.enums, result.unions, result.interfaces, result.concepts,
         result.methods, result.attributes, result.enum_values,
-        result.defines, result.functions,
+        result.defines, result.functions, result.implementations,
     ]
     batch_labels = [
         "Files", "Namespaces", "Classes", "Enums", "Unions",
         "Interfaces", "Concepts", "Methods", "Attributes", "EnumValues",
-        "Defines", "Functions",
+        "Defines", "Functions", "Implementations",
     ]
     # Persist nodes, replacing result lists in-place with saved instances
     # so element_id is set for subsequent .connect() calls.
@@ -124,6 +129,7 @@ def write_result(result: ParseResult) -> None:
     _write_specialization_relationships(result)
     _write_template_param_relationships(result)
     _write_invoke_relationships(result)
+    _write_implementation_relationships(result)
 
 
 # ---------------------------------------------------------------------------
@@ -398,6 +404,42 @@ def _write_template_param_relationships(result: ParseResult) -> None:
         print(f"  Relationships: ENFORCES_CONCEPT ({ec_count} edges)")
     else:
         print("  Relationships: ENFORCES_CONCEPT (0 edges)")
+
+
+def _write_implementation_relationships(result: ParseResult) -> None:
+    """Create HAS_IMPLEMENTATION relationships from members to ImplementationNodes."""
+    if not result.implementation_refs:
+        print("  Relationships: HAS_IMPLEMENTATION (0 edges)")
+        return
+
+    # Build refid → saved member lookup
+    member_by_refid: dict[str, object] = {}
+    for node_list in [result.methods, result.attributes, result.enum_values,
+                      result.defines, result.functions]:
+        for node in node_list:
+            member_by_refid[node.refid] = node
+
+    # Build qualified_name → saved implementation lookup
+    impl_by_qname: dict[str, object] = {}
+    for impl in result.implementations:
+        impl_by_qname[impl.qualified_name] = impl
+
+    success, failed = 0, 0
+    for ref in result.implementation_refs:
+        member = member_by_refid.get(ref.member_refid)
+        impl = impl_by_qname.get(ref.implementation.qualified_name)
+        if member is None or impl is None:
+            failed += 1
+            continue
+        try:
+            member.implementation_ref.connect(impl)
+            success += 1
+        except Exception as e:
+            print(f"Warning: Could not connect HAS_IMPLEMENTATION for "
+                  f"{ref.member_refid}: {e}", file=sys.stderr)
+            failed += 1
+
+    print(f"  Relationships: HAS_IMPLEMENTATION ({success} edges, {failed} failed)")
 
 
 def _write_invoke_relationships(result: ParseResult) -> None:

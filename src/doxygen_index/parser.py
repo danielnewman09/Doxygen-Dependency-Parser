@@ -19,6 +19,7 @@ from codegraph import (
     ClassNode, InterfaceNode, EnumNode, UnionNode, ConceptNode,
     MethodNode, AttributeNode, EnumValueNode, FunctionNode, DefineNode,
     FileNode, NamespaceNode, ParameterNode,
+    ImplementationNode,
 )
 
 
@@ -85,6 +86,18 @@ class InvokeEntry:
 
 
 @dataclass
+class ImplementationRef:
+    """Association between a member and its extracted implementation source.
+
+    Links the member's refid to the ImplementationNode so that
+    write_result() can create the HAS_IMPLEMENTATION relationship
+    after persisting both the member and the implementation node.
+    """
+    member_refid: str
+    implementation: ImplementationNode
+
+
+@dataclass
 class ParseResult:
     """Complete parsed output from a Doxygen XML directory."""
     files: list[FileNode] = field(default_factory=list)
@@ -105,6 +118,8 @@ class ParseResult:
     invoked_by: list[InvokeEntry] = field(default_factory=list)
     template_param_refs: list[TemplateParamRef] = field(default_factory=list)
     specializes_refs: list[SpecializesRef] = field(default_factory=list)
+    implementations: list[ImplementationNode] = field(default_factory=list)
+    implementation_refs: list[ImplementationRef] = field(default_factory=list)
 
     @property
     def compounds(self) -> list:
@@ -144,13 +159,22 @@ def parse_description(desc_elem: Optional[ET.Element]) -> str:
     return get_text(desc_elem)
 
 
-def parse_location(loc_elem: Optional[ET.Element]) -> tuple[Optional[str], Optional[int]]:
-    """Extract file path and line number from location element."""
+def parse_location(loc_elem: Optional[ET.Element]) -> tuple[Optional[str], Optional[int], Optional[int], Optional[int]]:
+    """Extract file path, line number, body start, and body end from location element.
+
+    Returns:
+        (file_path, line_number, body_start, body_end)
+        body_start and body_end are None if not present or -1 (no body).
+    """
     if loc_elem is None:
-        return None, None
+        return None, None, None, None
     file_path = loc_elem.get("file")
     line = loc_elem.get("line")
-    return file_path, int(line) if line else None
+    bodystart = loc_elem.get("bodystart")
+    bodyend = loc_elem.get("bodyend")
+    body_start = int(bodystart) if bodystart and bodystart != "-1" else None
+    body_end = int(bodyend) if bodyend and bodyend != "-1" else None
+    return file_path, int(line) if line else None, body_start, body_end
 
 
 def _derive_module(qualified_name: str) -> str:
@@ -285,7 +309,7 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
     argsstring = memberdef.findtext("argsstring", "")
 
     loc = memberdef.find("location")
-    file_path, line_number = parse_location(loc)
+    file_path, line_number, body_start, body_end = parse_location(loc)
 
     brief = parse_description(memberdef.find("briefdescription"))
     detailed = parse_description(memberdef.find("detaileddescription"))
@@ -323,6 +347,7 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
             name=name, qualified_name=qname, type_signature=type_str,
             definition=definition, argsstring=argsstring,
             file_path=file_path or "", line_number=line_number,
+            body_start=body_start or 0, body_end=body_end or 0,
             brief_description=brief, detailed_description=detailed,
             protection=prot, is_static=is_static, is_const=is_const,
             is_constexpr=is_constexpr, is_virtual=is_virtual,
@@ -339,7 +364,9 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
             refid=refid, compound_refid=compound_refid, kind=kind,
             name=name, qualified_name=qname, type_signature=type_str,
             definition=definition, file_path=file_path or "",
-            line_number=line_number, brief_description=brief,
+            line_number=line_number,
+            body_start=body_start or 0, body_end=body_end or 0,
+            brief_description=brief,
             detailed_description=detailed, protection=prot,
             is_static=is_static, is_const=is_const, source=source,
             layer=layer,
@@ -351,6 +378,7 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
             refid=refid, compound_refid=compound_refid, kind=kind,
             name=name, qualified_name=qname,
             file_path=file_path or "", line_number=line_number,
+            body_start=body_start or 0, body_end=body_end or 0,
             brief_description=brief, detailed_description=detailed,
             source=source, layer=layer,
         ))
@@ -359,7 +387,9 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
         result.defines.append(DefineNode(
             refid=refid, kind=kind, name=name, qualified_name=name,
             definition=definition, file_path=file_path or "",
-            line_number=line_number, brief_description=brief,
+            line_number=line_number,
+            body_start=body_start or 0, body_end=body_end or 0,
+            brief_description=brief,
             detailed_description=detailed, source=source, layer=layer,
         ))
 
@@ -443,7 +473,7 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult,
         qualified_name = compoundname
 
         loc = compounddef.find("location")
-        file_path, line_number = parse_location(loc)
+        file_path, line_number, _, _ = parse_location(loc)
 
         brief = parse_description(compounddef.find("briefdescription"))
         detailed = parse_description(compounddef.find("detaileddescription"))
@@ -603,7 +633,110 @@ def parse_xml_dir(xml_dir: Path, source: str = "msd",
     # Post-processing: resolve type_constraint text to concept qualified names
     _resolve_concept_constraints(result)
 
+    # Extract implementation source code from source files
+    extract_implementations(result)
+
     return result
+
+
+def extract_implementations(
+    result: ParseResult,
+    source_base: Path | str | None = None,
+) -> None:
+    """Extract implementation source code from source files using body_start/body_end.
+
+    For each member with body_start > 0 and body_end > 0, reads the
+    source file and extracts lines body_start..body_end (inclusive),
+    creates an ImplementationNode, and records the association.
+
+    Members without implementation bodies (body_start == 0, body_end == 0,
+    or missing source file) are skipped.
+
+    Args:
+        result: The ParseResult to augment with implementations.
+        source_base: Optional base directory for resolving relative file paths.
+            If None, file_path values must be absolute paths.
+    """
+    if source_base is not None:
+        source_base = Path(source_base)
+
+    # Cache for file contents to avoid re-reading the same file
+    file_cache: dict[str, list[str] | None] = {}
+
+    def _read_lines(file_path: str) -> list[str] | None:
+        """Read file lines from cache or disk. Returns None if file not found."""
+        if file_path in file_cache:
+            return file_cache[file_path]
+
+        path = Path(file_path)
+        if not path.is_absolute() and source_base is not None:
+            path = source_base / path
+
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+            file_cache[file_path] = lines
+            return lines
+        except FileNotFoundError:
+            print(f"  Warning: Source file not found for implementation extraction: {path}",
+                  file=sys.stderr)
+            file_cache[file_path] = None  # Cache the miss
+            return None
+
+    # Collect all members that have body locations
+    members_with_bodies: list[tuple[object, str]] = []  # (member_node, member_refid)
+    for m in result.methods:
+        if m.body_start > 0 and m.body_end > 0 and m.file_path:
+            members_with_bodies.append((m, m.refid))
+    for f in result.functions:
+        if f.body_start > 0 and f.body_end > 0 and f.file_path:
+            members_with_bodies.append((f, f.refid))
+    for d in result.defines:
+        if d.body_start > 0 and d.body_end > 0 and d.file_path:
+            members_with_bodies.append((d, d.refid))
+
+    if not members_with_bodies:
+        return
+
+    impl_count = 0
+    skip_count = 0
+
+    for member, refid in members_with_bodies:
+        lines = _read_lines(member.file_path)
+        if lines is None:
+            skip_count += 1
+            continue
+
+        # Doxygen bodystart/bodyend are 1-based line numbers, inclusive
+        start = member.body_start - 1  # Convert to 0-based index
+        end = member.body_end            # 1-based inclusive, so slice end is this value
+
+        if start < 0 or end > len(lines) or start >= end:
+            skip_count += 1
+            continue
+
+        source_text = "".join(lines[start:end]).rstrip("\n")
+
+        if not source_text.strip():
+            skip_count += 1
+            continue
+
+        impl_node = ImplementationNode(
+            qualified_name=member.qualified_name,
+            kind="implementation",
+            implementation=source_text,
+            impl_embedding=[],  # Embeddings deferred to a later phase
+            source=member.source if hasattr(member, 'source') else "",
+            layer=member.layer if hasattr(member, 'layer') else "dependency",
+        )
+
+        result.implementations.append(impl_node)
+        result.implementation_refs.append(ImplementationRef(
+            member_refid=refid,
+            implementation=impl_node,
+        ))
+        impl_count += 1
+
+    print(f"  Implementations extracted: {impl_count} (skipped: {skip_count})")
 
 
 def _resolve_concept_constraints(result: ParseResult) -> None:

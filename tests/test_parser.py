@@ -147,6 +147,9 @@ class TestParseXmlDir:
         assert fn.source == "test"
         # qualified_name includes normalized argsstring for overload safety
         assert fn.qualified_name == "myns::MyClass::doSomething(double, int)"
+        # No bodystart/bodyend in this fixture (method declaration only, not definition)
+        assert fn.body_start == 0
+        assert fn.body_end == 0
 
         # Backward-compat members property
         assert len(result.members) == 1
@@ -553,3 +556,290 @@ class TestParseTemplateSpecialization:
         spec = result.specializes_refs[0]
         assert spec.from_qualified_name == "Foo< int >"
         assert spec.primary_template_qualified_name == "Foo"
+
+
+class TestBodyLocationExtraction:
+    """Test that bodystart/bodyend are parsed from <location> elements."""
+
+    @pytest.fixture
+    def method_with_body_xml(self, tmp_path):
+        """Create Doxygen XML with a method that has a body location."""
+        (tmp_path / "index.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygenindex>
+              <compound refid="classWidget" kind="class">
+                <name>Widget</name>
+              </compound>
+            </doxygenindex>
+        """))
+
+        (tmp_path / "classWidget.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="classWidget" kind="class" language="C++">
+                <compoundname>Widget</compoundname>
+                <briefdescription><para>A widget.</para></briefdescription>
+                <detaileddescription/>
+                <location file="src/widget.h" line="5"/>
+                <sectiondef kind="public-func">
+                  <memberdef kind="function" id="classWidget_1adraw"
+                             prot="public" static="no" const="no">
+                    <name>draw</name>
+                    <qualifiedname>Widget::draw</qualifiedname>
+                    <type>void</type>
+                    <definition>void Widget::draw</definition>
+                    <argsstring>()</argsstring>
+                    <briefdescription><para>Draw the widget.</para></briefdescription>
+                    <detaileddescription/>
+                    <location file="src/widget.cpp" line="10"
+                             bodystart="10" bodyend="15"/>
+                  </memberdef>
+                </sectiondef>
+              </compounddef>
+            </doxygen>
+        """))
+        return tmp_path
+
+    def test_method_body_start_end_parsed(self, method_with_body_xml):
+        result = parse_xml_dir(method_with_body_xml, source="test", progress_interval=0)
+        assert len(result.methods) == 1
+        method = result.methods[0]
+        assert method.body_start == 10
+        assert method.body_end == 15
+
+    def test_method_no_body_defaults_zero(self, tmp_path):
+        """Members without body locations should default to 0."""
+        (tmp_path / "index.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygenindex>
+              <compound refid="classFoo" kind="class">
+                <name>Foo</name>
+              </compound>
+            </doxygenindex>
+        """))
+
+        (tmp_path / "classFoo.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="classFoo" kind="class" language="C++">
+                <compoundname>Foo</compoundname>
+                <location file="src/foo.h" line="5"/>
+                <sectiondef kind="public-func">
+                  <memberdef kind="function" id="classFoo_1abar"
+                             prot="public" static="no" const="no">
+                    <name>bar</name>
+                    <qualifiedname>Foo::bar</qualifiedname>
+                    <type>void</type>
+                    <definition>void Foo::bar</definition>
+                    <argsstring>()</argsstring>
+                    <briefdescription><para>A function.</para></briefdescription>
+                    <detaileddescription/>
+                    <location file="src/foo.h" line="10"/>
+                  </memberdef>
+                </sectiondef>
+              </compounddef>
+            </doxygen>
+        """))
+        result = parse_xml_dir(tmp_path, source="test", progress_interval=0)
+        assert len(result.methods) == 1
+        method = result.methods[0]
+        assert method.body_start == 0
+        assert method.body_end == 0
+
+    def test_method_bodystart_negative_one(self, tmp_path):
+        """bodystart=-1 means no implementation body."""
+        (tmp_path / "index.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygenindex>
+              <compound refid="classBar" kind="class">
+                <name>Bar</name>
+              </compound>
+            </doxygenindex>
+        """))
+
+        (tmp_path / "classBar.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="classBar" kind="class" language="C++">
+                <compoundname>Bar</compoundname>
+                <location file="src/bar.h" line="5"/>
+                <sectiondef kind="public-func">
+                  <memberdef kind="function" id="classBar_1afunc"
+                             prot="public" static="no" const="no">
+                    <name>func</name>
+                    <qualifiedname>Bar::func</qualifiedname>
+                    <type>void</type>
+                    <definition>void Bar::func</definition>
+                    <argsstring>()</argsstring>
+                    <briefdescription><para>A pure virtual.</para></briefdescription>
+                    <detaileddescription/>
+                    <location file="src/bar.h" line="10" bodystart="-1" bodyend="-1"/>
+                  </memberdef>
+                </sectiondef>
+              </compounddef>
+            </doxygen>
+        """))
+        result = parse_xml_dir(tmp_path, source="test", progress_interval=0)
+        assert len(result.methods) == 1
+        method = result.methods[0]
+        assert method.body_start is None or method.body_start == 0
+
+
+class TestExtractImplementations:
+    """Test implementation source extraction from body location data."""
+
+    @pytest.fixture
+    def xml_with_source(self, tmp_path):
+        """Create Doxygen XML with methods that have body locations, plus source files."""
+        # Create source file
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        (src_dir / "widget.cpp").write_text(
+            "#include \"widget.h\"\n"
+            "\n"
+            "void Widget::draw() {\n"      # line 3
+            "    canvas.begin();\n"       # line 4
+            "    render();\n"              # line 5
+            "    canvas.end();\n"         # line 6
+            "}\n"                        # line 7
+        )
+
+        # Create Doxygen XML pointing to the source file
+        # Note: bodystart/bodyend use 1-based line numbers
+        (tmp_path / "index.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygenindex>
+              <compound refid="classWidget" kind="class">
+                <name>Widget</name>
+              </compound>
+            </doxygenindex>
+        """))
+
+        source_file = str(src_dir / "widget.cpp")
+        (tmp_path / "classWidget.xml").write_text(textwrap.dedent(f"""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="classWidget" kind="class" language="C++">
+                <compoundname>Widget</compoundname>
+                <briefdescription><para>A widget.</para></briefdescription>
+                <detaileddescription/>
+                <location file="src/widget.h" line="5"/>
+                <sectiondef kind="public-func">
+                  <memberdef kind="function" id="classWidget_1adraw"
+                             prot="public" static="no" const="no">
+                    <name>draw</name>
+                    <qualifiedname>Widget::draw</qualifiedname>
+                    <type>void</type>
+                    <definition>void Widget::draw</definition>
+                    <argsstring>()</argsstring>
+                    <briefdescription><para>Draw the widget.</para></briefdescription>
+                    <detaileddescription/>
+                    <location file="{source_file}" line="3"
+                             bodystart="3" bodyend="7"/>
+                  </memberdef>
+                </sectiondef>
+              </compounddef>
+            </doxygen>
+        """))
+        return tmp_path
+
+    def test_extract_creates_implementation_node(self, xml_with_source):
+        """Members with body locations should produce ImplementationNodes."""
+        result = parse_xml_dir(xml_with_source, source="test", progress_interval=0)
+        assert len(result.implementations) == 1
+        impl = result.implementations[0]
+        assert impl.kind == "implementation"
+        assert "void Widget::draw()" in impl.implementation
+        assert impl.impl_embedding == []  # Embeddings deferred
+
+    def test_extract_implementation_ref_links_member(self, xml_with_source):
+        """ImplementationRef should link member refid to ImplementationNode."""
+        result = parse_xml_dir(xml_with_source, source="test", progress_interval=0)
+        assert len(result.implementation_refs) == 1
+        ref = result.implementation_refs[0]
+        method = result.methods[0]
+        assert ref.member_refid == method.refid
+
+    def test_extract_implementation_source_text(self, xml_with_source):
+        """ImplementationNode.implementation should contain the correct source lines."""
+        result = parse_xml_dir(xml_with_source, source="test", progress_interval=0)
+        impl = result.implementations[0]
+        # Lines 3-7 from the source file (1-based, inclusive)
+        lines = impl.implementation.split("\n")
+        assert len(lines) >= 5  # 5 lines of code
+        assert "void Widget::draw()" in lines[0]
+
+    def test_extract_skips_members_without_body(self, tmp_path):
+        """Members without body locations should not produce implementations."""
+        (tmp_path / "index.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygenindex>
+              <compound refid="classFoo" kind="class">
+                <name>Foo</name>
+              </compound>
+            </doxygenindex>
+        """))
+
+        # Method with no bodystart/bodyend
+        (tmp_path / "classFoo.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="classFoo" kind="class" language="C++">
+                <compoundname>Foo</compoundname>
+                <location file="src/foo.h" line="5"/>
+                <sectiondef kind="public-func">
+                  <memberdef kind="function" id="classFoo_1anoBody"
+                             prot="public" static="no" const="no">
+                    <name>noBody</name>
+                    <qualifiedname>Foo::noBody</qualifiedname>
+                    <type>void</type>
+                    <definition>void Foo::noBody</definition>
+                    <argsstring>()</argsstring>
+                    <briefdescription><para>No body.</para></briefdescription>
+                    <detaileddescription/>
+                    <location file="src/foo.h" line="10"/>
+                  </memberdef>
+                </sectiondef>
+              </compounddef>
+            </doxygen>
+        """))
+        result = parse_xml_dir(tmp_path, source="test", progress_interval=0)
+        assert len(result.implementations) == 0
+
+    def test_extract_skips_missing_source_file(self, tmp_path):
+        """Source files that don't exist should be skipped gracefully."""
+        (tmp_path / "index.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygenindex>
+              <compound refid="classMissing" kind="class">
+                <name>Missing</name>
+              </compound>
+            </doxygenindex>
+        """))
+
+        source_file = "/nonexistent/path/missing.cpp"
+        (tmp_path / "classMissing.xml").write_text(textwrap.dedent(f"""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="classMissing" kind="class" language="C++">
+                <compoundname>Missing</compoundname>
+                <location file="src/missing.h" line="5"/>
+                <sectiondef kind="public-func">
+                  <memberdef kind="function" id="classMissing_1amissing"
+                             prot="public" static="no" const="no">
+                    <name>missing</name>
+                    <qualifiedname>Missing::missing</qualifiedname>
+                    <type>void</type>
+                    <definition>void Missing::missing</definition>
+                    <argsstring>()</argsstring>
+                    <briefdescription><para>Missing.</para></briefdescription>
+                    <detaileddescription/>
+                    <location file="{source_file}" line="10"
+                             bodystart="10" bodyend="15"/>
+                  </memberdef>
+                </sectiondef>
+              </compounddef>
+            </doxygen>
+        """))
+        result = parse_xml_dir(tmp_path, source="test", progress_interval=0)
+        assert len(result.implementations) == 0  # File not found, skipped
