@@ -191,95 +191,95 @@ class TestDepsConfig:
 
 class TestNormalizeArgsstring:
     def test_empty(self):
-        from doxygen_index.parser import _normalize_argsstring
-        assert _normalize_argsstring("") == "()"
-        assert _normalize_argsstring("()") == "()"
-        assert _normalize_argsstring("(void)") == "()"
+        from doxygen_index.parser import normalize_argsstring
+        assert normalize_argsstring("") == "()"
+        assert normalize_argsstring("()") == "()"
+        assert normalize_argsstring("(void)") == "()"
 
     def test_simple_types(self):
-        from doxygen_index.parser import _normalize_argsstring
-        assert _normalize_argsstring("(int)") == "(int)"
-        assert _normalize_argsstring("(int, float)") == "(int, float)"
+        from doxygen_index.parser import normalize_argsstring
+        assert normalize_argsstring("(int)") == "(int)"
+        assert normalize_argsstring("(int, float)") == "(int, float)"
 
     def test_strips_param_names(self):
-        from doxygen_index.parser import _normalize_argsstring
-        assert _normalize_argsstring("(int x, const char* str)") == "(int, const char*)"
-        assert _normalize_argsstring("(double val, int count)") == "(double, int)"
+        from doxygen_index.parser import normalize_argsstring
+        assert normalize_argsstring("(int x, const char* str)") == "(int, const char*)"
+        assert normalize_argsstring("(double val, int count)") == "(double, int)"
 
     def test_preserves_qualifiers(self):
-        from doxygen_index.parser import _normalize_argsstring
-        assert _normalize_argsstring("(const Foo& foo)") == "(const Foo&)"
-        assert _normalize_argsstring("(volatile int* ptr)") == "(volatile int*)"
+        from doxygen_index.parser import normalize_argsstring
+        assert normalize_argsstring("(const Foo& foo)") == "(const Foo&)"
+        assert normalize_argsstring("(volatile int* ptr)") == "(volatile int*)"
 
     def test_function_pointer(self):
-        from doxygen_index.parser import _normalize_argsstring
-        assert _normalize_argsstring("(int (*callback)(int))") == "(int (*callback)(int))"
+        from doxygen_index.parser import normalize_argsstring
+        assert normalize_argsstring("(int (*callback)(int))") == "(int (*callback)(int))"
 
 
 class TestDeriveModule:
     def test_namespaced(self):
-        from doxygen_index.parser import _derive_module
-        assert _derive_module("myns::MyClass") == "myns"
-        assert _derive_module("ns1::ns2::ClassName") == "ns1::ns2"
+        from doxygen_index.parser import derive_module
+        assert derive_module("myns::MyClass") == "myns"
+        assert derive_module("ns1::ns2::ClassName") == "ns1::ns2"
 
     def test_top_level(self):
-        from doxygen_index.parser import _derive_module
-        assert _derive_module("MyClass") == ""
-        assert _derive_module("") == ""
+        from doxygen_index.parser import derive_module
+        assert derive_module("MyClass") == ""
+        assert derive_module("") == ""
 
 
 class TestDeriveSourceType:
     def test_header(self):
-        from doxygen_index.parser import _derive_source_type
-        assert _derive_source_type("src/Foo.h") == "header"
-        assert _derive_source_type("include/bar.hpp") == "header"
+        from doxygen_index.parser import derive_source_type
+        assert derive_source_type("src/Foo.h") == "header"
+        assert derive_source_type("include/bar.hpp") == "header"
 
     def test_source(self):
-        from doxygen_index.parser import _derive_source_type
-        assert _derive_source_type("src/Foo.cpp") == "source"
-        assert _derive_source_type("tests/test.c") == "source"
+        from doxygen_index.parser import derive_source_type
+        assert derive_source_type("src/Foo.cpp") == "source"
+        assert derive_source_type("tests/test.c") == "source"
 
     def test_unknown(self):
-        from doxygen_index.parser import _derive_source_type
-        assert _derive_source_type("") == ""
-        assert _derive_source_type("README.md") == ""
+        from doxygen_index.parser import derive_source_type
+        assert derive_source_type("") == ""
+        assert derive_source_type("README.md") == ""
 
 
 class TestDetectTemplateSpecialization:
     def test_simple_specialization(self):
-        from doxygen_index.parser import _detect_template_specialization
-        assert _detect_template_specialization("std::vector<int>") == (True, "std::vector")
-        assert _detect_template_specialization("ns::Foo<Bar>") == (True, "ns::Foo")
+        from doxygen_index.parser import detect_template_specialization
+        assert detect_template_specialization("std::vector<int>") == (True, "std::vector")
+        assert detect_template_specialization("ns::Foo<Bar>") == (True, "ns::Foo")
 
     def test_no_specialization(self):
-        from doxygen_index.parser import _detect_template_specialization
-        assert _detect_template_specialization("MyClass") == (False, "")
-        assert _detect_template_specialization("ns::Foo") == (False, "")
-        assert _detect_template_specialization("Foo") == (False, "")
+        from doxygen_index.parser import detect_template_specialization
+        assert detect_template_specialization("MyClass") == (False, "")
+        assert detect_template_specialization("ns::Foo") == (False, "")
+        assert detect_template_specialization("Foo") == (False, "")
 
     def test_nested_angle_brackets(self):
-        from doxygen_index.parser import _detect_template_specialization
-        assert _detect_template_specialization(
+        from doxygen_index.parser import detect_template_specialization
+        assert detect_template_specialization(
             "IsVector< std::vector< T, Allocator > >") == (True, "IsVector")
-        assert _detect_template_specialization(
+        assert detect_template_specialization(
             "cpp_sqlite::ForeignKeyTypeT< ForeignKey< T > >") == (True, "cpp_sqlite::ForeignKeyTypeT")
-        assert _detect_template_specialization(
+        assert detect_template_specialization(
             "cpp_sqlite::GetRepeatedFieldParams< RepeatedFieldTransferObject< T > >") == (
             True, "cpp_sqlite::GetRepeatedFieldParams")
 
     def test_spaced_brackets(self):
-        from doxygen_index.parser import _detect_template_specialization
-        assert _detect_template_specialization("std::vector< int >") == (True, "std::vector")
+        from doxygen_index.parser import detect_template_specialization
+        assert detect_template_specialization("std::vector< int >") == (True, "std::vector")
 
 
 class TestParseTemplateParams:
     def test_none_input(self):
-        from doxygen_index.parser import _parse_template_params
+        from doxygen_index.parser import parse_template_params
         import xml.etree.ElementTree as ET
-        assert _parse_template_params(None) == []
+        assert parse_template_params(None) == []
 
     def test_single_param_with_constraint(self):
-        from doxygen_index.parser import _parse_template_params
+        from doxygen_index.parser import parse_template_params
         import xml.etree.ElementTree as ET
         xml_str = '''<templateparamlist>
             <param>
@@ -289,14 +289,14 @@ class TestParseTemplateParams:
             </param>
         </templateparamlist>'''
         elem = ET.fromstring(xml_str)
-        params = _parse_template_params(elem)
+        params = parse_template_params(elem)
         assert len(params) == 1
         assert params[0].type_constraint == "ValidTransferObject"
         assert params[0].declname == "T"
         assert params[0].defname == "T"
 
     def test_typename_param(self):
-        from doxygen_index.parser import _parse_template_params
+        from doxygen_index.parser import parse_template_params
         import xml.etree.ElementTree as ET
         xml_str = '''<templateparamlist>
             <param>
@@ -304,13 +304,13 @@ class TestParseTemplateParams:
             </param>
         </templateparamlist>'''
         elem = ET.fromstring(xml_str)
-        params = _parse_template_params(elem)
+        params = parse_template_params(elem)
         assert len(params) == 1
         assert params[0].type_constraint == "typename T"
         assert params[0].declname == ""
 
     def test_multiple_params(self):
-        from doxygen_index.parser import _parse_template_params
+        from doxygen_index.parser import parse_template_params
         import xml.etree.ElementTree as ET
         xml_str = '''<templateparamlist>
             <param>
@@ -323,7 +323,7 @@ class TestParseTemplateParams:
             </param>
         </templateparamlist>'''
         elem = ET.fromstring(xml_str)
-        params = _parse_template_params(elem)
+        params = parse_template_params(elem)
         assert len(params) == 2
         assert params[0].type_constraint == "typename T"
         assert params[1].type_constraint == "typename Allocator"

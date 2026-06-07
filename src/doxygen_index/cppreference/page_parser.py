@@ -14,7 +14,7 @@ from pathlib import Path
 
 from codegraph import ClassNode, FileNode, MethodNode, FunctionNode, ParameterNode
 
-from doxygen_index.parser import _normalize_argsstring, _derive_module, _derive_source_type
+from doxygen_index.parser import normalize_argsstring, derive_module, derive_source_type
 
 from .classifier import PageInfo
 from .html_helpers import (
@@ -164,7 +164,7 @@ def parse_class_page(
         source=SOURCE,
         source_type="header",
         definition="",
-        module=_derive_module(qualified_name),
+        module=derive_module(qualified_name),
         layer="dependency",
     )
 
@@ -277,7 +277,7 @@ def parse_member_page(
                         qualified_name = f"{parent_qn}::{func_name}"
 
         # Append normalized argsstring for overload safety
-        normalized_args = _normalize_argsstring(argsstring)
+        normalized_args = normalize_argsstring(argsstring)
 
         refid = f"{info.refid}#{decl.overload_index}"
         definition = decl.text.rstrip(";").strip()
@@ -400,7 +400,7 @@ def parse_free_function_page(
             refid=member.refid,
             kind="function",
             name=member.name,
-            qualified_name=f"::{member.name}{_normalize_argsstring(member.argsstring)}",
+            qualified_name=f"::{member.name}{normalize_argsstring(member.argsstring)}",
             type_signature=member.type_signature,
             definition=member.definition,
             argsstring=member.argsstring,
