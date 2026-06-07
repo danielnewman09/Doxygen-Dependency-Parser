@@ -240,3 +240,316 @@ class TestDeriveSourceType:
         from doxygen_index.parser import _derive_source_type
         assert _derive_source_type("") == ""
         assert _derive_source_type("README.md") == ""
+
+
+class TestDetectTemplateSpecialization:
+    def test_simple_specialization(self):
+        from doxygen_index.parser import _detect_template_specialization
+        assert _detect_template_specialization("std::vector<int>") == (True, "std::vector")
+        assert _detect_template_specialization("ns::Foo<Bar>") == (True, "ns::Foo")
+
+    def test_no_specialization(self):
+        from doxygen_index.parser import _detect_template_specialization
+        assert _detect_template_specialization("MyClass") == (False, "")
+        assert _detect_template_specialization("ns::Foo") == (False, "")
+        assert _detect_template_specialization("Foo") == (False, "")
+
+    def test_nested_angle_brackets(self):
+        from doxygen_index.parser import _detect_template_specialization
+        assert _detect_template_specialization(
+            "IsVector< std::vector< T, Allocator > >") == (True, "IsVector")
+        assert _detect_template_specialization(
+            "cpp_sqlite::ForeignKeyTypeT< ForeignKey< T > >") == (True, "cpp_sqlite::ForeignKeyTypeT")
+        assert _detect_template_specialization(
+            "cpp_sqlite::GetRepeatedFieldParams< RepeatedFieldTransferObject< T > >") == (
+            True, "cpp_sqlite::GetRepeatedFieldParams")
+
+    def test_spaced_brackets(self):
+        from doxygen_index.parser import _detect_template_specialization
+        assert _detect_template_specialization("std::vector< int >") == (True, "std::vector")
+
+
+class TestParseTemplateParams:
+    def test_none_input(self):
+        from doxygen_index.parser import _parse_template_params
+        import xml.etree.ElementTree as ET
+        assert _parse_template_params(None) == []
+
+    def test_single_param_with_constraint(self):
+        from doxygen_index.parser import _parse_template_params
+        import xml.etree.ElementTree as ET
+        xml_str = '''<templateparamlist>
+            <param>
+                <type>ValidTransferObject</type>
+                <declname>T</declname>
+                <defname>T</defname>
+            </param>
+        </templateparamlist>'''
+        elem = ET.fromstring(xml_str)
+        params = _parse_template_params(elem)
+        assert len(params) == 1
+        assert params[0].type_constraint == "ValidTransferObject"
+        assert params[0].declname == "T"
+        assert params[0].defname == "T"
+
+    def test_typename_param(self):
+        from doxygen_index.parser import _parse_template_params
+        import xml.etree.ElementTree as ET
+        xml_str = '''<templateparamlist>
+            <param>
+                <type>typename T</type>
+            </param>
+        </templateparamlist>'''
+        elem = ET.fromstring(xml_str)
+        params = _parse_template_params(elem)
+        assert len(params) == 1
+        assert params[0].type_constraint == "typename T"
+        assert params[0].declname == ""
+
+    def test_multiple_params(self):
+        from doxygen_index.parser import _parse_template_params
+        import xml.etree.ElementTree as ET
+        xml_str = '''<templateparamlist>
+            <param>
+                <type>typename T</type>
+                <declname>T</declname>
+                <defname>T</defname>
+            </param>
+            <param>
+                <type>typename Allocator</type>
+            </param>
+        </templateparamlist>'''
+        elem = ET.fromstring(xml_str)
+        params = _parse_template_params(elem)
+        assert len(params) == 2
+        assert params[0].type_constraint == "typename T"
+        assert params[1].type_constraint == "typename Allocator"
+
+
+class TestParseConceptXml:
+    """Test parsing of C++20 concept compounds."""
+
+    @pytest.fixture
+    def concept_xml_dir(self, tmp_path):
+        """Create a minimal Doxygen XML with a concept compound."""
+        (tmp_path / "index.xml").write_text(
+            '<?xml version="1.0"?>\n'
+            '<doxygenindex>\n'
+            '  <compound refid="conceptns_1_1MyConcept" kind="concept">\n'
+            '    <name>ns::MyConcept</name>\n'
+            '  </compound>\n'
+            '</doxygenindex>\n'
+        )
+
+        (tmp_path / "conceptns_1_1MyConcept.xml").write_text(
+            '<?xml version="1.0"?>\n'
+            '<doxygen>\n'
+            '  <compounddef id="conceptns_1_1MyConcept" kind="concept" language="C++">\n'
+            '    <compoundname>ns::MyConcept</compoundname>\n'
+            '    <templateparamlist>\n'
+            '      <param>\n'
+            '        <type>typename T</type>\n'
+            '      </param>\n'
+            '    </templateparamlist>\n'
+            '    <initializer>template&lt;typename T&gt;\nconcept ns::MyConcept = std::integral&lt;T&gt;</initializer>\n'
+            '    <briefdescription><para>A test concept.</para></briefdescription>\n'
+            '    <detaileddescription/>\n'
+            '    <location file="src/concept.hpp" line="10"/>\n'
+            '  </compounddef>\n'
+            '</doxygen>\n'
+        )
+        return tmp_path
+
+    def test_concept_parsed(self, concept_xml_dir):
+        from doxygen_index.parser import parse_xml_dir
+        result = parse_xml_dir(concept_xml_dir, source="test", progress_interval=0)
+        assert len(result.concepts) == 1
+        concept = result.concepts[0]
+        assert concept.qualified_name == "ns::MyConcept"
+        assert concept.kind == "concept"
+        assert len(result.template_param_refs) == 1
+        tp = result.template_param_refs[0]
+        assert tp.type_constraint == "typename T"
+        assert tp.declname == ""
+
+
+class TestParseTemplateClassXml:
+    """Test parsing of class template parameters."""
+
+    @pytest.fixture
+    def template_xml_dir(self, tmp_path):
+        """Create a minimal Doxygen XML with a template class."""
+        (tmp_path / "index.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygenindex>
+              <compound refid="classMyTemplate" kind="class">
+                <name>MyTemplate</name>
+              </compound>
+            </doxygenindex>
+        """))
+
+        (tmp_path / "classMyTemplate.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="classMyTemplate" kind="class" language="C++">
+                <compoundname>MyTemplate</compoundname>
+                <templateparamlist>
+                  <param>
+                    <type>typename T</type>
+                    <declname>T</declname>
+                    <defname>T</defname>
+                  </param>
+                  <param>
+                    <type>int</type>
+                    <declname>N</declname>
+                    <defname>N</defname>
+                    <defval>10</defval>
+                  </param>
+                </templateparamlist>
+                <briefdescription><para>A template class.</para></briefdescription>
+                <detaileddescription/>
+                <location file="src/template.hpp" line="5"/>
+              </compounddef>
+            </doxygen>
+        """))
+        return tmp_path
+
+    def test_template_class_parsed(self, template_xml_dir):
+        from doxygen_index.parser import parse_xml_dir
+        result = parse_xml_dir(template_xml_dir, source="test", progress_interval=0)
+        assert len(result.classes) == 1
+        cls = result.classes[0]
+        assert cls.qualified_name == "MyTemplate"
+        # Template params are stored as relationship entries
+        assert len(result.template_param_refs) == 2
+        tp0 = result.template_param_refs[0]
+        assert tp0.type_constraint == "typename T"
+        assert tp0.declname == "T"
+        assert tp0.from_refid == "classMyTemplate"
+        assert tp0.position == 0
+        tp1 = result.template_param_refs[1]
+        assert tp1.type_constraint == "int"
+        assert tp1.declname == "N"
+        assert tp1.defval == "10"
+        assert tp1.position == 1
+
+
+class TestConceptConstraintResolution:
+    """Test that type_constraint text resolves to concept qualified names."""
+
+    @pytest.fixture
+    def constraint_xml_dir(self, tmp_path):
+        """Create Doxygen XML with a template class constrained by a concept."""
+        (tmp_path / "index.xml").write_text(
+            '<?xml version="1.0"?>\n'
+            '<doxygenindex>\n'
+            '  <compound refid="classMyClass" kind="class">\n'
+            '    <name>ns::MyClass</name>\n'
+            '  </compound>\n'
+            '  <compound refid="conceptns_1_1Valid" kind="concept">\n'
+            '    <name>ns::Valid</name>\n'
+            '  </compound>\n'
+            '</doxygenindex>\n'
+        )
+
+        (tmp_path / "classMyClass.xml").write_text(
+            '<?xml version="1.0"?>\n'
+            '<doxygen>\n'
+            '  <compounddef id="classMyClass" kind="class" language="C++">\n'
+            '    <compoundname>ns::MyClass</compoundname>\n'
+            '    <templateparamlist>\n'
+            '      <param>\n'
+            '        <type>Valid</type>\n'
+            '        <declname>T</declname>\n'
+            '        <defname>T</defname>\n'
+            '      </param>\n'
+            '    </templateparamlist>\n'
+            '    <location file="src/MyClass.hpp" line="5"/>\n'
+            '  </compounddef>\n'
+            '</doxygen>\n'
+        )
+
+        (tmp_path / "conceptns_1_1Valid.xml").write_text(
+            '<?xml version="1.0"?>\n'
+            '<doxygen>\n'
+            '  <compounddef id="conceptns_1_1Valid" kind="concept" language="C++">\n'
+            '    <compoundname>ns::Valid</compoundname>\n'
+            '    <templateparamlist>\n'
+            '      <param>\n'
+            '        <type>typename T</type>\n'
+            '      </param>\n'
+            '    </templateparamlist>\n'
+            '    <initializer>concept ns::Valid = true</initializer>\n'
+            '    <location file="src/concept.hpp" line="5"/>\n'
+            '  </compounddef>\n'
+            '</doxygen>\n'
+        )
+        return tmp_path
+
+    def test_concept_resolution(self, constraint_xml_dir):
+        from doxygen_index.parser import parse_xml_dir
+        result = parse_xml_dir(constraint_xml_dir, source="test", progress_interval=0)
+        # Two template param refs: one from the class, one from the concept itself
+        assert len(result.template_param_refs) == 2
+        # Find the class's template param ref
+        class_tp = [tp for tp in result.template_param_refs
+                     if tp.from_refid == "classMyClass"][0]
+        assert class_tp.type_constraint == "Valid"
+        assert class_tp.concept_qualified_name == "ns::Valid"
+        # The concept's own template param (typename T) should not resolve to a concept
+        concept_tp = [tp for tp in result.template_param_refs
+                      if tp.from_refid == "conceptns_1_1Valid"][0]
+        assert concept_tp.type_constraint == "typename T"
+        assert concept_tp.concept_qualified_name == ""
+
+
+class TestParseTemplateSpecialization:
+    """Test parsing of template specialization compounds."""
+
+    @pytest.fixture
+    def spec_xml_dir(self, tmp_path):
+        """Create Doxygen XML with a primary template and its specialization."""
+        (tmp_path / "index.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygenindex>
+              <compound refid="structFoo" kind="struct">
+                <name>Foo</name>
+              </compound>
+              <compound refid="structFoo_3_01int_01_4" kind="struct">
+                <name>Foo&lt; int &gt;</name>
+              </compound>
+            </doxygenindex>
+        """))
+
+        (tmp_path / "structFoo.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="structFoo" kind="struct" language="C++">
+                <compoundname>Foo</compoundname>
+                <templateparamlist>
+                  <param><type>typename T</type></param>
+                </templateparamlist>
+                <location file="src/foo.hpp" line="1"/>
+              </compounddef>
+            </doxygen>
+        """))
+
+        (tmp_path / "structFoo_3_01int_01_4.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="structFoo_3_01int_01_4" kind="struct" language="C++">
+                <compoundname>Foo&lt; int &gt;</compoundname>
+                <location file="src/foo.hpp" line="10"/>
+              </compounddef>
+            </doxygen>
+        """))
+        return tmp_path
+
+    def test_specialization_detected(self, spec_xml_dir):
+        from doxygen_index.parser import parse_xml_dir
+        result = parse_xml_dir(spec_xml_dir, source="test", progress_interval=0)
+        assert len(result.classes) == 2
+        assert len(result.specializes_refs) == 1
+        spec = result.specializes_refs[0]
+        assert spec.from_qualified_name == "Foo< int >"
+        assert spec.primary_template_qualified_name == "Foo"

@@ -7,6 +7,7 @@ that can be consumed by any backend (e.g. Neo4j).
 
 from __future__ import annotations
 
+import json
 import re
 import sys
 import xml.etree.ElementTree as ET
@@ -15,7 +16,7 @@ from pathlib import Path
 from typing import Optional
 
 from codegraph import (
-    ClassNode, InterfaceNode, EnumNode, UnionNode,
+    ClassNode, InterfaceNode, EnumNode, UnionNode, ConceptNode,
     MethodNode, AttributeNode, EnumValueNode, FunctionNode, DefineNode,
     FileNode, NamespaceNode, ParameterNode,
 )
@@ -35,6 +36,48 @@ class IncludeEntry:
 
 
 @dataclass
+class TemplateParamEntry:
+    """A single template parameter extracted from <templateparamlist>."""
+    type_constraint: str = ""
+    declname: str = ""
+    defname: str = ""
+    defval: str = ""
+
+
+@dataclass
+class TemplateParamRef:
+    """A TEMPLATE_PARAM relationship from a compound to its type parameter.
+
+    This is a relationship-style entry (like IncludeEntry or InvokeEntry)
+    that will be written as a TEMPLATE_PARAM edge in the graph.
+    The target node (a ClassNode with kind='type_parameter') will be
+    created on-the-fly during Neo4j ingestion.
+
+    If the type_constraint matches a known ConceptNode qualified name,
+    an ENFORCES_CONCEPT edge will also be created from the type-parameter
+    node to that concept.
+    """
+    from_refid: str
+    position: int
+    type_constraint: str = ""
+    declname: str = ""
+    defname: str = ""
+    defval: str = ""
+    concept_qualified_name: str = ""
+    """Qualified name of the Concept that constrains this parameter.
+    Empty string if the constraint is just 'typename' (unconstrained) or
+    if the constraint text doesn't match any known concept."""
+
+
+@dataclass
+class SpecializesRef:
+    """A SPECIALIZES relationship from a specialization to its primary template."""
+    from_refid: str
+    from_qualified_name: str
+    primary_template_qualified_name: str
+
+
+@dataclass
 class InvokeEntry:
     from_refid: str
     to_refid: str
@@ -50,6 +93,7 @@ class ParseResult:
     enums: list[EnumNode] = field(default_factory=list)
     unions: list[UnionNode] = field(default_factory=list)
     interfaces: list[InterfaceNode] = field(default_factory=list)
+    concepts: list[ConceptNode] = field(default_factory=list)
     methods: list[MethodNode] = field(default_factory=list)
     attributes: list[AttributeNode] = field(default_factory=list)
     enum_values: list[EnumValueNode] = field(default_factory=list)
@@ -59,11 +103,13 @@ class ParseResult:
     includes: list[IncludeEntry] = field(default_factory=list)
     invokes: list[InvokeEntry] = field(default_factory=list)
     invoked_by: list[InvokeEntry] = field(default_factory=list)
+    template_param_refs: list[TemplateParamRef] = field(default_factory=list)
+    specializes_refs: list[SpecializesRef] = field(default_factory=list)
 
     @property
     def compounds(self) -> list:
         """Aggregate all compound-type nodes for backward compat."""
-        return self.classes + self.enums + self.unions + self.interfaces
+        return self.classes + self.enums + self.unions + self.interfaces + self.concepts
 
     @property
     def members(self) -> list:
@@ -126,6 +172,75 @@ def _derive_source_type(file_path: str) -> str:
     return ""
 
 
+def _parse_template_params(element: Optional[ET.Element]) -> list[TemplateParamEntry]:
+    """Parse a <templateparamlist> element into TemplateParamEntry items.
+
+    Handles both compound-level and member-level template parameter lists.
+    The <type> element may contain nested <ref> children that we flatten.
+    """
+    if element is None:
+        return []
+    params = []
+    for param in element.findall("param"):
+        type_constraint = ""
+        type_elem = param.find("type")
+        if type_elem is not None:
+            type_constraint = get_text(type_elem)
+        declname = param.findtext("declname", "") or ""
+        defname = param.findtext("defname", "") or ""
+        defval = param.findtext("defval", "") or ""
+        params.append(TemplateParamEntry(
+            type_constraint=type_constraint,
+            declname=declname,
+            defname=defname,
+            defval=defval,
+        ))
+    return params
+
+
+def _detect_template_specialization(qualified_name: str) -> tuple[bool, str]:
+    """Detect if a qualified name is a template specialization.
+
+    Returns (is_specialization, primary_template_name).
+    A name like ``Foo<Bar>`` is a specialization of ``Foo``.
+    Only treats the leaf segment as the specialization.
+
+    Correctly handles nested angle brackets and qualified names inside
+    template arguments (e.g. ``IsVector<std::vector<T>>``).
+
+    Examples:
+        ("std::vector<int>", True, "std::vector")
+        ("MyClass", False, "")
+        ("ns::Foo<Bar>", True, "ns::Foo")
+        ("IsVector<std::vector<T, Allocator>>", True, "IsVector")
+    """
+    if "<" not in qualified_name or not qualified_name.endswith(">"):
+        return False, ""
+
+    # Find the position of the first '<' that opens the outer template arg list.
+    # Track angle bracket depth to find the correct top-level '<'.
+    depth = 0
+    first_angle = -1
+    for i, ch in enumerate(qualified_name):
+        if ch == "<":
+            if depth == 0 and first_angle == -1:
+                first_angle = i
+            depth += 1
+        elif ch == ">":
+            depth -= 1
+
+    if first_angle == -1:
+        return False, ""
+
+    # Everything before the first '<' is the primary template qualified name
+    primary_qn = qualified_name[:first_angle].rstrip()
+    # The name must not be empty after stripping
+    if not primary_qn:
+        return False, ""
+
+    return True, primary_qn
+
+
 def _normalize_argsstring(argsstring: str) -> str:
     """Strip parameter names from argsstring, keeping types only.
 
@@ -177,6 +292,19 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
 
     source_type = _derive_source_type(file_path or "")
 
+    # --- Template parameters (shared) ---
+    tpl_params = _parse_template_params(memberdef.find("templateparamlist"))
+    if tpl_params:
+        for idx, tp in enumerate(tpl_params):
+            result.template_param_refs.append(TemplateParamRef(
+                from_refid=refid,
+                position=idx,
+                type_constraint=tp.type_constraint,
+                declname=tp.declname,
+                defname=tp.defname,
+                defval=tp.defval,
+            ))
+
     # --- Kind dispatch ---
     if kind == "function" and compound_refid:
         # Method — belongs to a compound
@@ -202,7 +330,7 @@ def _parse_member(memberdef: ET.Element, compound_refid: str,
             source_type=source_type, layer=layer,
         ))
 
-    elif kind == "variable":
+    elif kind in ("variable", "typedef"):
         qname = f"{parent_qualified_name}::{name}" if parent_qualified_name else name
         is_static = memberdef.get("static") == "yes"
         is_const = memberdef.get("const") == "yes"
@@ -324,6 +452,34 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult,
         module = _derive_module(qualified_name)
         source_type = _derive_source_type(file_path or "")
 
+        # --- Template parameters (compound-level) ---
+        # Stored as relationship entries, not node properties.
+        tpl_params = _parse_template_params(compounddef.find("templateparamlist"))
+        for idx, tp in enumerate(tpl_params):
+            result.template_param_refs.append(TemplateParamRef(
+                from_refid=refid,
+                position=idx,
+                type_constraint=tp.type_constraint,
+                declname=tp.declname,
+                defname=tp.defname,
+                defval=tp.defval,
+            ))
+
+        # --- Template specialization detection ---
+        is_spec, primary_template = _detect_template_specialization(qualified_name)
+        if is_spec and primary_template:
+            result.specializes_refs.append(SpecializesRef(
+                from_refid=refid,
+                from_qualified_name=qualified_name,
+                primary_template_qualified_name=primary_template,
+            ))
+
+        # --- Concept initializer (for kind=concept) ---
+        initializer = ""
+        init_elem = compounddef.find("initializer")
+        if init_elem is not None:
+            initializer = get_text(init_elem)
+
         # --- Kind dispatch ---
         if kind in ("class", "struct"):
             base_classes = [
@@ -342,6 +498,17 @@ def _parse_compound_file(xml_path: Path, source: str, result: ParseResult,
                 base_classes=base_classes, is_final=is_final,
                 is_abstract=is_abstract, source=source,
                 source_type=source_type, layer=layer,
+            ))
+
+        elif kind == "concept":
+            result.concepts.append(ConceptNode(
+                refid=refid, kind=kind, name=name,
+                qualified_name=qualified_name,
+                file_path=file_path or "", line_number=line_number,
+                brief_description=brief, detailed_description=detailed,
+                definition=definition, module=module,
+                source=source, source_type=source_type, layer=layer,
+                initializer=initializer,
             ))
 
         elif kind == "enum":
@@ -433,4 +600,40 @@ def parse_xml_dir(xml_dir: Path, source: str = "msd",
         if progress_interval and (i + 1) % progress_interval == 0:
             print(f"  Parsed {i + 1}/{len(compounds)} XML files...")
 
+    # Post-processing: resolve type_constraint text to concept qualified names
+    _resolve_concept_constraints(result)
+
     return result
+
+
+def _resolve_concept_constraints(result: ParseResult) -> None:
+    """Resolve type_constraint text to concept qualified names.
+
+    After all compounds are parsed, we know which concepts exist.
+    For each TemplateParamRef, if the type_constraint matches a known
+    concept qualified name (either with or without namespace prefix),
+    set concept_qualified_name on the ref so that an ENFORCES_CONCEPT
+    edge can be created during ingestion.
+    """
+    concept_names = {c.qualified_name for c in result.concepts}
+    # Also include short names (after ::) for prefix-less matches
+    concept_short_names = {}
+    for c in result.concepts:
+        short = c.qualified_name.rsplit("::", 1)[-1] if "::" in c.qualified_name else c.qualified_name
+        if short not in concept_short_names:
+            concept_short_names[short] = c.qualified_name
+
+    for tp in result.template_param_refs:
+        if not tp.type_constraint:
+            continue
+        # Strip leading "typename " prefix — it's not a constraint
+        constraint = tp.type_constraint
+        if constraint.startswith("typename "):
+            continue
+        # Exact match against concept qualified names
+        if constraint in concept_names:
+            tp.concept_qualified_name = constraint
+            continue
+        # Try short name match
+        if constraint in concept_short_names:
+            tp.concept_qualified_name = concept_short_names[constraint]

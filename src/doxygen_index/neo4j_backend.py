@@ -15,12 +15,12 @@ from neomodel import db
 # Import all node models so neomodel registry discovers them before
 # install_all_labels is called.
 from codegraph import (  # noqa: F401 — needed for install_all_labels
-    ClassNode, InterfaceNode, EnumNode, UnionNode,
+    ClassNode, InterfaceNode, EnumNode, UnionNode, ConceptNode,
     MethodNode, AttributeNode, EnumValueNode, FunctionNode, DefineNode,
     FileNode, NamespaceNode, ParameterNode,
 )
 
-from doxygen_index.parser import ParseResult, parse_xml_dir
+from doxygen_index.parser import ParseResult, parse_xml_dir, TemplateParamRef, SpecializesRef
 
 
 # ---------------------------------------------------------------------------
@@ -39,11 +39,17 @@ def ensure_schema(stdout=None) -> None:
 def clear_source(source: str) -> None:
     """Remove all nodes with a specific source label."""
     queries = [
+        # Delete ParameterNodes first (they reference member refids)
         ("MATCH (m:_MemberMixin {source: $src}) "
          "WITH collect(m.refid) AS refids "
          "MATCH (p:ParameterNode) WHERE p.member_refid IN refids "
          "DETACH DELETE p",
          {"src": source}),
+        # Delete type_parameter ClassNodes (created by TEMPLATE_PARAM ingestion)
+        ("MATCH (tp:ClassNode {kind: 'type_parameter', source: $src}) "
+         "DETACH DELETE tp",
+         {"src": source}),
+        # Delete members, compounds, namespaces, files
         ("MATCH (m:_MemberMixin {source: $src}) DETACH DELETE m",
          {"src": source}),
         ("MATCH (c:_CompoundMixin {source: $src}) DETACH DELETE c",
@@ -85,13 +91,13 @@ def write_result(result: ParseResult) -> None:
     """
     batch_refs: list[list] = [
         result.files, result.namespaces, result.classes,
-        result.enums, result.unions, result.interfaces,
+        result.enums, result.unions, result.interfaces, result.concepts,
         result.methods, result.attributes, result.enum_values,
         result.defines, result.functions,
     ]
     batch_labels = [
         "Files", "Namespaces", "Classes", "Enums", "Unions",
-        "Interfaces", "Methods", "Attributes", "EnumValues",
+        "Interfaces", "Concepts", "Methods", "Attributes", "EnumValues",
         "Defines", "Functions",
     ]
     # Persist nodes, replacing result lists in-place with saved instances
@@ -116,6 +122,7 @@ def write_result(result: ParseResult) -> None:
     _write_include_relationships(result)
     _write_inheritance_relationships()
     _write_specialization_relationships(result)
+    _write_template_param_relationships(result)
     _write_invoke_relationships(result)
 
 
@@ -249,33 +256,148 @@ def _write_inheritance_relationships() -> None:
 
 
 def _write_specialization_relationships(result: ParseResult) -> None:
-    """Create SPECIALIZES edges: specialization → primary template."""
+    """Create SPECIALIZES edges using specialization refs from ParseResult."""
+    if not result.specializes_refs:
+        print("  Relationships: SPECIALIZES (0 edges)")
+        return
+
     # Build lookup: qualified_name → compound node (must have element_id from save)
     compounds_by_qn: dict[str, object] = {}
-    for node_list in [result.classes, result.enums, result.unions, result.interfaces]:
+    for node_list in [result.classes, result.enums, result.unions, result.interfaces, result.concepts]:
         for node in node_list:
             compounds_by_qn[node.qualified_name] = node
 
     count = 0
-    for qn, spec in compounds_by_qn.items():
-        if "<" not in qn or not qn.endswith(">"):
-            continue
-        # Only treat as specialization if <...> is in the leaf segment
-        segments = qn.split("::")
-        if "<" not in segments[-1]:
-            continue  # nested type carrying outer template params (e.g. chunk_view<V>::iterator)
-        leaf_name = segments[-1].split("<")[0]
-        primary_qn = "::".join(segments[:-1] + [leaf_name])
-        primary = compounds_by_qn.get(primary_qn)
-        if primary:
+    for spec_ref in result.specializes_refs:
+        primary = compounds_by_qn.get(spec_ref.primary_template_qualified_name)
+        spec = compounds_by_qn.get(spec_ref.from_qualified_name)
+        if primary and spec and hasattr(spec, 'specializes'):
             try:
                 spec.specializes.connect(primary)
                 count += 1
             except Exception as e:
-                print(f"Warning: could not connect SPECIALIZES {qn} → {primary_qn}: {e}",
+                print(f"Warning: could not connect SPECIALIZES "
+                      f"{spec_ref.from_qualified_name} → "
+                      f"{spec_ref.primary_template_qualified_name}: {e}",
                       file=sys.stderr)
 
     print(f"  Relationships: SPECIALIZES ({count} edges)")
+
+
+def _write_template_param_relationships(result: ParseResult) -> None:
+    """Create TEMPLATE_PARAM edges from compounds/members to type-parameter nodes,
+    and ENFORCES_CONCEPT edges from type-parameter nodes to concepts.
+
+    For each template param ref, we:
+    1. Find the source node (compound or member) by qualified_name.
+    2. Create a lightweight ClassNode(kind='type_parameter') for the param slot
+       carrying metadata (name, position, defval) on the node itself.
+    3. Connect source → type_parameter via TEMPLATE_PARAM (no edge properties).
+    4. If the type_constraint matches a known concept, connect
+       type_parameter → ConceptNode via ENFORCES_CONCEPT.
+    """
+    if not result.template_param_refs:
+        print("  Relationships: TEMPLATE_PARAM (0 edges)")
+        print("  Relationships: ENFORCES_CONCEPT (0 edges)")
+        return
+
+    # Build lookup: refid → node
+    refid_map: dict[str, object] = {}
+    for node_list in [result.classes, result.enums, result.unions, result.interfaces, result.concepts]:
+        for node in node_list:
+            refid_map[node.refid] = node
+    for node_list in [result.methods, result.attributes, result.functions]:
+        for node in node_list:
+            refid_map[node.refid] = node
+
+    # Build lookup: concept qualified_name → ConceptNode (for ENFORCES_CONCEPT)
+    concept_by_qn: dict[str, object] = {
+        c.qualified_name: c for c in result.concepts
+    }
+
+    # Use Cypher for bulk creation of type-parameter nodes and TEMPLATE_PARAM edges
+    batch_dicts = []
+    for tp in result.template_param_refs:
+        source_node = refid_map.get(tp.from_refid)
+        if source_node is None:
+            continue
+        batch_dicts.append({
+            "from_qn": source_node.qualified_name,
+            "position": tp.position,
+            "declname": tp.declname,
+            "defname": tp.defname,
+            "defval": tp.defval,
+            "source": source_node.source if hasattr(source_node, 'source') else "",
+        })
+
+    if not batch_dicts:
+        print("  Relationships: TEMPLATE_PARAM (0 edges)")
+        print("  Relationships: ENFORCES_CONCEPT (0 edges)")
+        return
+
+    batch_size = 500
+    created = 0
+    for i in range(0, len(batch_dicts), batch_size):
+        batch = batch_dicts[i:i + batch_size]
+        results, _meta = db.cypher_query("""
+            UNWIND $batch AS row
+            MATCH (source:_CompoundMixin|_MemberMixin {qualified_name: row.from_qn})
+            MERGE (tp:ClassNode {qualified_name: 'type_param:' + row.from_qn + ':' + toString(row.position)})
+            ON CREATE SET tp.kind = 'type_parameter',
+                          tp.name = CASE
+                              WHEN row.declname <> '' THEN row.declname
+                              WHEN row.defname <> '' THEN row.defname
+                              ELSE 'T'
+                          END,
+                          tp.source = row.source,
+                          tp.definition = 'position=' + toString(row.position) +
+                                        CASE WHEN row.defval <> '' THEN ' defval=' + row.defval ELSE '' END
+            ON MATCH SET tp.kind = 'type_parameter',
+                         tp.name = CASE
+                             WHEN row.declname <> '' THEN row.declname
+                             WHEN row.defname <> '' THEN row.defname
+                             ELSE 'T'
+                         END,
+                         tp.source = row.source,
+                         tp.definition = 'position=' + toString(row.position) +
+                                       CASE WHEN row.defval <> '' THEN ' defval=' + row.defval ELSE '' END
+            MERGE (source)-[r:TEMPLATE_PARAM]->(tp)
+            RETURN count(r) AS cnt
+        """, {"batch": batch})
+        if results:
+            created += sum(r[0] for r in results)
+
+    print(f"  Relationships: TEMPLATE_PARAM ({created} edges)")
+
+    # ENFORCES_CONCEPT edges: type_parameter → ConceptNode
+    enforces_batch = []
+    for tp in result.template_param_refs:
+        if tp.concept_qualified_name:
+            source_node = refid_map.get(tp.from_refid)
+            if source_node is None:
+                continue
+            source_qn = source_node.qualified_name
+            enforces_batch.append({
+                "tp_qn": f"type_param:{source_qn}:{tp.position}",
+                "concept_qn": tp.concept_qualified_name,
+            })
+
+    if enforces_batch:
+        ec_count = 0
+        for i in range(0, len(enforces_batch), batch_size):
+            batch = enforces_batch[i:i + batch_size]
+            results, _meta = db.cypher_query("""
+                UNWIND $batch AS row
+                MATCH (tp:ClassNode {qualified_name: row.tp_qn})
+                MATCH (c:ConceptNode {qualified_name: row.concept_qn})
+                MERGE (tp)-[r:ENFORCES_CONCEPT]->(c)
+                RETURN count(r) AS cnt
+            """, {"batch": batch})
+            if results:
+                ec_count += sum(r[0] for r in results)
+        print(f"  Relationships: ENFORCES_CONCEPT ({ec_count} edges)")
+    else:
+        print("  Relationships: ENFORCES_CONCEPT (0 edges)")
 
 
 def _write_invoke_relationships(result: ParseResult) -> None:

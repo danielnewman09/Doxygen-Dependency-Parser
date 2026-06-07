@@ -46,6 +46,7 @@ def _build_payload(result: ParseResult, source: str) -> dict:
         "enums": [n.__properties__ for n in result.enums],
         "unions": [n.__properties__ for n in result.unions],
         "interfaces": [n.__properties__ for n in result.interfaces],
+        "concepts": [n.__properties__ for n in result.concepts],
         "methods": [n.__properties__ for n in result.methods],
         "attributes": [n.__properties__ for n in result.attributes],
         "enum_values": [n.__properties__ for n in result.enum_values],
@@ -55,4 +56,6 @@ def _build_payload(result: ParseResult, source: str) -> dict:
         "includes": [asdict(i) for i in result.includes],
         "invokes": [asdict(i) for i in result.invokes],
         "invoked_by": [asdict(i) for i in result.invoked_by],
+        "template_param_refs": [asdict(t) for t in result.template_param_refs],
+        "specializes_refs": [asdict(s) for s in result.specializes_refs],
     }

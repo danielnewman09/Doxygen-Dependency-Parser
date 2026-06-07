@@ -142,6 +142,7 @@ def cmd_project(args: argparse.Namespace) -> None:
     print(f"  Classes:      {len(result.classes)}")
     print(f"  Methods:      {len(result.methods)}")
     print(f"  Functions:    {len(result.functions)}")
+    print(f"  Concepts:     {len(result.concepts)}")
     print(f"  Enums:        {len(result.enums)}")
     print(f"  Namespaces:   {len(result.namespaces)}")
     print(f"  Files:        {len(result.files)}")
