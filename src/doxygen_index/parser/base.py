@@ -1,47 +1,57 @@
 """
-Abstract base class for language-specific Doxygen XML parsing.
+Abstract base class for language-specific source parsing.
 
-Each programming language that Doxygen can document has its own set of
-compound and member kinds, naming conventions, and post-processing needs.
-Subclass :class:`LanguageParser` to handle a new language; implementers
-need only fill in the methods for the kinds they support.
+A :class:`LanguageParser` defines how to turn a directory of source files
+into a :class:`~doxygen_index.parser.model.ParseResult`.  Each language
+implements its own discovery and extraction logic (Doxygen XML for C++,
+AST for Python, etc.) but produces the same neutral data model.
+
+The contract has two methods:
+
+* :meth:`parse_source_dir` — walk a source directory and populate the
+  result with all discovered symbols.
+* :meth:`post_process` — run cross-referencing passes after all symbols
+  have been extracted (e.g. resolving concept constraints in C++).
+
+C++-specific implementation lives in :class:`~doxygen_index.parser.cpp_parser.CppParser`,
+which internally delegates to XML-parsing helpers.  Python support lives
+in :class:`~doxygen_index.parser.python_parser.PythonParser`.
 """
 
 from __future__ import annotations
 
-import sys
-import xml.etree.ElementTree as ET
 from abc import ABC, abstractmethod
 from pathlib import Path
 
-from codegraph import FileNode, NamespaceNode
-
-from doxygen_index.parser.model import IncludeEntry, ParseResult
+from doxygen_index.parser.model import ParseResult
 
 
 class LanguageParser(ABC):
-    """Abstract base class for language-specific Doxygen XML parsing.
+    """Abstract base class for language-specific source parsing.
 
-    A ``LanguageParser`` knows how to interpret the XML elements that
-    Doxygen produces for a particular programming language.  The core
-    extension points are:
+    A ``LanguageParser`` knows how to discover and extract symbols from a
+    directory of source files, populating a shared
+    :class:`~doxygen_index.parser.model.ParseResult` that any backend
+    (Neo4j, JSON, etc.) can consume.
 
-    * :meth:`parse_compound` — handle a ``<compounddef>`` element for a
-      type compound (class, struct, concept, enum, …).
-    * :meth:`parse_member` — handle a ``<memberdef>`` element (method,
-      variable, …).
-    * :meth:`post_process` — language-specific cross-referencing pass
-      after all files are parsed.
+    Subclasses must implement:
 
-    The base class also handles ``file`` and ``namespace`` compound kinds
-    directly in :meth:`parse_compound_file`, because those are not
-    language-specific.
+    * :meth:`parse_source_dir` — the main extraction pass.
+    * :meth:`post_process` — cross-referencing / resolution pass.
 
     Usage::
 
         from doxygen_index.parser import CppParser, parse_xml_dir
 
+        # Doxygen XML (C++)
         result = parse_xml_dir(xml_dir, language_parser=CppParser())
+
+        # Python source (AST)
+        from doxygen_index.parser import PythonParser
+        parser = PythonParser()
+        result = ParseResult()
+        parser.parse_source_dir(src_dir, "myproject", result)
+        parser.post_process(result)
     """
 
     # ------------------------------------------------------------------
@@ -49,49 +59,28 @@ class LanguageParser(ABC):
     # ------------------------------------------------------------------
 
     @abstractmethod
-    def parse_compound(
+    def parse_source_dir(
         self,
-        compounddef: ET.Element,
+        source_dir: Path,
         source: str,
         result: ParseResult,
         layer: str = "dependency",
-    ) -> str | None:
-        """Parse a type ``<compounddef>`` element and add entries to *result*.
-
-        This is called for every compound that is *not* a ``file`` or
-        ``namespace`` (those are handled by the base class).
-
-        Args:
-            compounddef: The XML element for the compound.
-            source: Source label for provenance tracking.
-            result: Accumulator for parsed entries.
-            layer: Layer label (``"codebase"`` or ``"dependency"``).
-
-        Returns:
-            The ``qualified_name`` of the parsed compound, or ``None``
-            if the compound kind is not handled by this parser.
-        """
-        ...
-
-    @abstractmethod
-    def parse_member(
-        self,
-        memberdef: ET.Element,
-        compound_refid: str,
-        parent_qualified_name: str,
-        source: str,
-        result: ParseResult,
-        layer: str = "dependency",
+        progress_interval: int = 0,
     ) -> None:
-        """Parse a ``<memberdef>`` element and add entries to *result*.
+        """Parse all source artifacts in *source_dir* and populate *result*.
+
+        Discovers files in *source_dir*, extracts symbols (classes,
+        functions, etc.), and appends them to *result*.
 
         Args:
-            memberdef: The XML element for the member.
-            compound_refid: The refid of the containing compound.
-            parent_qualified_name: Qualified name of the parent compound.
-            source: Source label for provenance tracking.
-            result: Accumulator for parsed entries.
-            layer: Layer label.
+            source_dir: Root directory of the source or build output.
+                For C++ this is the Doxygen XML directory; for Python
+                it's the root of the Python package.
+            source: Provenance label (e.g. ``"myproject"``, ``"msd"``).
+            result: Accumulator — the caller creates it, subclasses
+                populate it.
+            layer: Layer label (``"codebase"`` or ``"dependency"``).
+            progress_interval: Print progress every N files.  0 disables.
         """
         ...
 
@@ -99,121 +88,8 @@ class LanguageParser(ABC):
     def post_process(self, result: ParseResult) -> None:
         """Run language-specific post-processing on *result*.
 
-        Called after all XML files in a directory have been parsed.
-        Use this pass to resolve cross-references (e.g. matching
-        constraint text to known concept names).
+        Called after :meth:`parse_source_dir` has finished.  Use this
+        pass to resolve cross-references that require global knowledge
+        (e.g. matching constraint text to known concept names in C++).
         """
         ...
-
-    # ------------------------------------------------------------------
-    # Concrete: full compound file parsing
-    # ------------------------------------------------------------------
-
-    def parse_compound_file(
-        self,
-        xml_path: Path,
-        source: str,
-        result: ParseResult,
-        layer: str = "dependency",
-    ) -> None:
-        """Parse a compound XML file, iterating over ``<compounddef>`` elements.
-
-        For each ``<compounddef>``:
-
-        * ``file`` and ``namespace`` kinds are handled directly
-          (language-agnostic).
-        * All other kinds are delegated to :meth:`parse_compound`.
-          If it returns a qualified name, members within
-          ``<sectiondef>`` elements are then processed via
-          :meth:`parse_member`.
-        """
-        try:
-            tree = ET.parse(xml_path)
-            root = tree.getroot()
-        except ET.ParseError as e:
-            print(f"Warning: Could not parse {xml_path}: {e}", file=sys.stderr)
-            return
-
-        for compounddef in root.findall(".//compounddef"):
-            refid = compounddef.get("id", "")
-            kind = compounddef.get("kind", "")
-            compoundname = compounddef.findtext("compoundname", "")
-
-            # --- Files (language-agnostic) ---
-            if kind == "file":
-                self._parse_file_compound(compounddef, refid, compoundname, source, result)
-                continue
-
-            # --- Namespaces (language-agnostic) ---
-            if kind == "namespace":
-                self._parse_namespace_compound(compounddef, refid, compoundname, source, result, layer)
-                continue
-
-            # --- Language-specific type compound ---
-            qualified_name = self.parse_compound(compounddef, source, result, layer)
-            if qualified_name is None:
-                print(
-                    f"Warning: Unknown compound kind '{kind}' for refid={refid}, skipping",
-                    file=sys.stderr,
-                )
-                continue
-
-            # --- Parse members (shared across compound types) ---
-            for sectiondef in compounddef.findall("sectiondef"):
-                for memberdef in sectiondef.findall("memberdef"):
-                    self.parse_member(
-                        memberdef, refid, qualified_name, source, result, layer,
-                    )
-
-    # ------------------------------------------------------------------
-    # Language-agnostic compound handlers
-    # ------------------------------------------------------------------
-
-    @staticmethod
-    def _parse_file_compound(
-        compounddef: ET.Element,
-        refid: str,
-        compoundname: str,
-        source: str,
-        result: ParseResult,
-    ) -> None:
-        """Parse a ``kind="file"`` compounddef."""
-        loc = compounddef.find("location")
-        file_path = loc.get("file") if loc is not None else None
-        language = compounddef.get("language", "")
-
-        result.files.append(FileNode(
-            refid=refid,
-            name=compoundname,
-            path=file_path or "",
-            language=language,
-            source=source,
-        ))
-
-        for inc in compounddef.findall("includes"):
-            result.includes.append(IncludeEntry(
-                file_refid=refid,
-                included_file=inc.text or "",
-                included_refid=inc.get("refid") or "",
-                is_local=inc.get("local") == "yes",
-            ))
-
-    @staticmethod
-    def _parse_namespace_compound(
-        compounddef: ET.Element,
-        refid: str,
-        compoundname: str,
-        source: str,
-        result: ParseResult,
-        layer: str,
-    ) -> None:
-        """Parse a ``kind="namespace"`` compounddef."""
-        name = compoundname.split("::")[-1] if "::" in compoundname else compoundname
-
-        result.namespaces.append(NamespaceNode(
-            refid=refid,
-            name=name,
-            qualified_name=compoundname,
-            source=source,
-            layer=layer,
-        ))

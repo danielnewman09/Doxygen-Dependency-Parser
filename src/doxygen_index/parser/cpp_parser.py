@@ -25,9 +25,11 @@ from codegraph import (
     ClassNode, InterfaceNode, EnumNode, UnionNode, ConceptNode,
     MethodNode, AttributeNode, EnumValueNode, DefineNode,
     ImplementationNode, ParameterNode,
+    FileNode, NamespaceNode,
 )
 
 from doxygen_index.parser.base import LanguageParser
+from doxygen_index.parser.helpers import parse_index
 from doxygen_index.parser.helpers import (
     get_text,
     parse_description,
@@ -40,6 +42,7 @@ from doxygen_index.parser.model import (
     SpecializesRef,
     InvokeEntry,
     ImplementationRef,
+    IncludeEntry,
 )
 
 
@@ -298,6 +301,116 @@ class CppParser(LanguageParser):
     method, making the dispatch logic a thin routing layer rather than a
     monolithic function.
     """
+
+    # ------------------------------------------------------------------
+    # LanguageParser interface
+    # ------------------------------------------------------------------
+
+    def parse_source_dir(
+        self,
+        source_dir: Path,
+        source: str,
+        result: ParseResult,
+        layer: str = "dependency",
+        progress_interval: int = 0,
+    ) -> None:
+        """Parse all Doxygen XML in *source_dir* and populate *result*.
+
+        *source_dir* must contain a ``index.xml`` file produced by
+        Doxygen.  Each compound XML file is parsed to extract classes,
+        functions, etc.
+        """
+        source_dir = Path(source_dir)
+        index_path = source_dir / "index.xml"
+        if not index_path.exists():
+            raise FileNotFoundError(f"index.xml not found in {source_dir}")
+
+        compounds = parse_index(index_path)
+
+        for i, (refid, kind) in enumerate(compounds):
+            xml_file = source_dir / f"{refid}.xml"
+            if xml_file.exists():
+                self.parse_compound_file(xml_file, source, result, layer)
+
+            if progress_interval and (i + 1) % progress_interval == 0:
+                print(f"  Parsed {i + 1}/{len(compounds)} XML files...")
+
+    # ------------------------------------------------------------------
+    # Doxygen XML compound file parsing
+    # ------------------------------------------------------------------
+
+    def parse_compound_file(
+        self,
+        xml_path: Path,
+        source: str,
+        result: ParseResult,
+        layer: str = "dependency",
+    ) -> None:
+        """Parse a single Doxygen compound XML file.
+
+        For each ``<compounddef>``:
+        * ``file`` and ``namespace`` kinds are handled directly
+          (language-agnostic).
+        * All other kinds are delegated to :meth:`parse_compound`.
+          If it returns a qualified name, members within
+          ``<sectiondef>`` elements are then processed via
+          :meth:`parse_member`.
+        """
+        try:
+            tree = ET.parse(xml_path)
+            root = tree.getroot()
+        except ET.ParseError as e:
+            print(f"Warning: Could not parse {xml_path}: {e}", file=sys.stderr)
+            return
+
+        for compounddef in root.findall(".//compounddef"):
+            refid = compounddef.get("id", "")
+            kind = compounddef.get("kind", "")
+            compoundname = compounddef.findtext("compoundname", "")
+
+            # --- Files (language-agnostic) ---
+            if kind == "file":
+                loc = compounddef.find("location")
+                file_path = loc.get("file") if loc is not None else None
+                language = compounddef.get("language", "")
+                result.files.append(FileNode(
+                    refid=refid, name=compoundname,
+                    path=file_path or "", language=language, source=source,
+                ))
+                for inc in compounddef.findall("includes"):
+                    result.includes.append(IncludeEntry(
+                        file_refid=refid,
+                        included_file=inc.text or "",
+                        included_refid=inc.get("refid") or "",
+                        is_local=inc.get("local") == "yes",
+                    ))
+                continue
+
+            # --- Namespaces (language-agnostic) ---
+            if kind == "namespace":
+                name = compoundname.split("::")[-1] if "::" in compoundname else compoundname
+                result.namespaces.append(NamespaceNode(
+                    refid=refid, name=name,
+                    qualified_name=compoundname, source=source, layer=layer,
+                ))
+                continue
+
+            # --- Language-specific type compound ---
+            qualified_name = self.parse_compound(compounddef, source, result, layer)
+            if qualified_name is None:
+                print(
+                    f"Warning: Unknown compound kind '{kind}' for refid={refid}, skipping",
+                    file=sys.stderr,
+                )
+                continue
+
+            # --- Parse members (shared across compound types) ---
+            for sectiondef in compounddef.findall("sectiondef"):
+                for memberdef in sectiondef.findall("memberdef"):
+                    self.parse_member(
+                        memberdef, refid, qualified_name, source, result, layer,
+                    )
+
 
     # ------------------------------------------------------------------
     # Compound dispatch

@@ -44,7 +44,7 @@ def clear_source(source: str) -> None:
         ("MATCH (impl:ImplementationNode {source: $src}) DETACH DELETE impl",
          {"src": source}),
         # Delete ParameterNodes first (they reference member refids)
-        ("MATCH (m:_MemberMixin {source: $src}) "
+        ("MATCH (m:MemberNode {source: $src}) "
          "WITH collect(m.refid) AS refids "
          "MATCH (p:ParameterNode) WHERE p.member_refid IN refids "
          "DETACH DELETE p",
@@ -54,9 +54,9 @@ def clear_source(source: str) -> None:
          "DETACH DELETE tp",
          {"src": source}),
         # Delete members, compounds, namespaces, files
-        ("MATCH (m:_MemberMixin {source: $src}) DETACH DELETE m",
+        ("MATCH (m:MemberNode {source: $src}) DETACH DELETE m",
          {"src": source}),
-        ("MATCH (c:_CompoundMixin {source: $src}) DETACH DELETE c",
+        ("MATCH (c:CompoundNode {source: $src}) DETACH DELETE c",
          {"src": source}),
         ("MATCH (n:NamespaceNode {source: $src}) DETACH DELETE n",
          {"src": source}),
@@ -73,8 +73,8 @@ def clear_all() -> None:
     queries = [
         "MATCH (impl:ImplementationNode) DETACH DELETE impl",
         "MATCH (p:ParameterNode) DETACH DELETE p",
-        "MATCH (m:_MemberMixin) DETACH DELETE m",
-        "MATCH (c:_CompoundMixin) DETACH DELETE c",
+        "MATCH (m:MemberNode) DETACH DELETE m",
+        "MATCH (c:CompoundNode) DETACH DELETE c",
         "MATCH (n:NamespaceNode) DETACH DELETE n",
         "MATCH (f:FileNode) DETACH DELETE f",
         "MATCH (md:Metadata) DETACH DELETE md",
@@ -145,7 +145,7 @@ def _write_parameters(result: ParseResult) -> None:
         batch = batch_dicts[i:i + batch_size]
         db.cypher_query("""
             UNWIND $batch AS row
-            MATCH (m:_MemberMixin {refid: row.member_refid})
+            MATCH (m:MemberNode {refid: row.member_refid})
             MERGE (m)-[:HAS_PARAMETER]->(p:ParameterNode {
                 position: row.position,
                 name: row.name,
@@ -218,12 +218,12 @@ def _write_compound_member_connect(result: ParseResult) -> None:
 
 def _write_file_relationships() -> None:
     db.cypher_query("""
-        MATCH (c:_CompoundMixin) WHERE c.file_path <> ''
+        MATCH (c:CompoundNode) WHERE c.file_path <> ''
         MATCH (f:FileNode {path: c.file_path})
         MERGE (c)-[:DEFINED_IN]->(f)
     """)
     db.cypher_query("""
-        MATCH (m:_MemberMixin) WHERE m.file_path <> ''
+        MATCH (m:MemberNode) WHERE m.file_path <> ''
         MATCH (f:FileNode {path: m.file_path})
         MERGE (m)-[:DEFINED_IN]->(f)
     """)
@@ -251,10 +251,10 @@ def _write_include_relationships(result: ParseResult) -> None:
 
 def _write_inheritance_relationships() -> None:
     db.cypher_query("""
-        MATCH (derived:_CompoundMixin)
+        MATCH (derived:CompoundNode)
         WHERE size(derived.base_classes) > 0
         UNWIND derived.base_classes AS base_name
-        MATCH (base:_CompoundMixin)
+        MATCH (base:CompoundNode)
         WHERE base.name = base_name OR base.qualified_name = base_name
         MERGE (derived)-[:INHERITS_FROM]->(base)
     """)
@@ -347,7 +347,7 @@ def _write_template_param_relationships(result: ParseResult) -> None:
         batch = batch_dicts[i:i + batch_size]
         results, _meta = db.cypher_query("""
             UNWIND $batch AS row
-            MATCH (source:_CompoundMixin|_MemberMixin {qualified_name: row.from_qn})
+            MATCH (source:CompoundNode|MemberNode {qualified_name: row.from_qn})
             MERGE (tp:ClassNode {qualified_name: 'type_param:' + row.from_qn + ':' + toString(row.position)})
             ON CREATE SET tp.kind = 'type_parameter',
                           tp.name = CASE

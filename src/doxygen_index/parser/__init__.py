@@ -2,13 +2,16 @@
 Doxygen XML parser — extracts symbols, documentation, and relationships.
 
 Parses Doxygen-generated XML files into a neutral data model (dataclasses)
-that can be consumed by any backend (e.g. Neo4j).
+that can be consumed by any backend (e.g. Neo4j).  Also supports direct
+Python source parsing via :class:`PythonParser`.
 
 This package provides:
 
 * :class:`LanguageParser` — abstract base class for language-specific parsers.
 * :class:`CppParser` — concrete parser for C/C++ Doxygen output (default).
-* :func:`parse_xml_dir` — public entry point that parses a whole directory.
+* :class:`PythonParser` — concrete parser for Python source files.
+* :func:`parse_xml_dir` — parse Doxygen XML directory (C/C++).
+* :func:`parse_python_dir` — parse Python source directory.
 * Data model classes (:class:`ParseResult`, :class:`IncludeEntry`, …).
 * Helper functions (:func:`get_text`, :func:`parse_description`, …).
 * C++ utilities (:func:`normalize_argsstring`, :func:`derive_module`, …).
@@ -51,6 +54,9 @@ from doxygen_index.parser.cpp_parser import (
     extract_implementations,
 )
 
+# Re-export Python parser
+from doxygen_index.parser.python_parser import PythonParser
+
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -81,22 +87,36 @@ def parse_xml_dir(
     if language_parser is None:
         language_parser = CppParser()
 
-    index_path = xml_dir / "index.xml"
-    if not index_path.exists():
-        raise FileNotFoundError(f"index.xml not found in {xml_dir}")
-
-    compounds = parse_index(index_path)
     result = ParseResult()
-
-    for i, (refid, kind) in enumerate(compounds):
-        xml_file = xml_dir / f"{refid}.xml"
-        if xml_file.exists():
-            language_parser.parse_compound_file(xml_file, source, result, layer)
-
-        if progress_interval and (i + 1) % progress_interval == 0:
-            print(f"  Parsed {i + 1}/{len(compounds)} XML files...")
-
-    # Post-processing: language-specific cross-referencing
+    language_parser.parse_source_dir(xml_dir, source, result, layer, progress_interval)
     language_parser.post_process(result)
+    return result
 
+
+def parse_python_dir(
+    source_dir: Path,
+    source: str = "python",
+    progress_interval: int = 50,
+    layer: str = "codebase",
+    language_parser: PythonParser | None = None,
+) -> ParseResult:
+    """Parse all Python source files in a directory and return a ParseResult.
+
+    Args:
+        source_dir: Root directory of the Python package to parse.
+        source: Source label for provenance tracking.
+        progress_interval: Print progress every N files (0 to disable).
+        layer: Layer label ("codebase" or "dependency").
+        language_parser: Python parser instance. Defaults to a new
+            :class:`PythonParser`.
+
+    Returns:
+        ParseResult with all parsed data.
+    """
+    if language_parser is None:
+        language_parser = PythonParser()
+
+    result = ParseResult()
+    language_parser.parse_source_dir(source_dir, source, result, layer, progress_interval)
+    language_parser.post_process(result)
     return result
