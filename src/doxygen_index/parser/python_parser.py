@@ -38,10 +38,11 @@ from codegraph import (
     ClassNode, InterfaceNode, EnumNode,
     MethodNode, AttributeNode, EnumValueNode, FunctionNode,
     FileNode, NamespaceNode, ParameterNode,
+    ImplementationNode,
 )
 
 from doxygen_index.parser.base import LanguageParser
-from doxygen_index.parser.model import ParseResult, IncludeEntry
+from doxygen_index.parser.model import ParseResult, IncludeEntry, ImplementationRef
 
 
 # ---------------------------------------------------------------------------
@@ -209,10 +210,10 @@ class PythonParser(LanguageParser):
     def post_process(self, result: ParseResult) -> None:
         """Python-specific post-processing.
 
-        Currently a no-op; future extensions could resolve
-        cross-module type references.
+        Extracts implementation source code for all methods and
+        functions that have body_start/body_end line numbers.
         """
-        pass
+        _extract_implementations(result)
 
     # ------------------------------------------------------------------
     # Package registration
@@ -768,3 +769,89 @@ class _PythonVisitor(ast.NodeVisitor):
             "signature": ", ".join(param_parts),
             "params": params,
         }
+
+
+# ---------------------------------------------------------------------------
+# Implementation extraction
+# ---------------------------------------------------------------------------
+
+
+def _extract_implementations(result: ParseResult) -> None:
+    """Extract implementation source code for methods and functions.
+
+    For each member with ``body_start`` > 0 and ``body_end`` > 0, reads
+    the source file and extracts lines ``body_start`` .. ``body_end``
+    (inclusive), creates an :class:`ImplementationNode`, and records
+    the association via :class:`ImplementationRef`.
+
+    Members without implementation bodies or with missing source files
+    are skipped.
+    """
+    # Collect all members that have body locations and a file_path
+    members_with_bodies: list[tuple[object, str]] = []
+    for m in result.methods:
+        if m.body_start > 0 and m.body_end > 0 and m.file_path:
+            members_with_bodies.append((m, m.refid))
+    for f in result.functions:
+        if f.body_start > 0 and f.body_end > 0 and f.file_path:
+            members_with_bodies.append((f, f.refid))
+
+    if not members_with_bodies:
+        return
+
+    # Cache for file contents to avoid re-reading
+    file_cache: dict[str, list[str] | None] = {}
+
+    def _read_lines(file_path: str) -> list[str] | None:
+        if file_path in file_cache:
+            return file_cache[file_path]
+        try:
+            lines = Path(file_path).read_text(encoding="utf-8", errors="replace").splitlines(keepends=True)
+            file_cache[file_path] = lines
+            return lines
+        except FileNotFoundError:
+            print(f"  Warning: Source file not found for implementation extraction: {file_path}",
+                  file=sys.stderr)
+            file_cache[file_path] = None
+            return None
+
+    impl_count = 0
+    skip_count = 0
+
+    for member, refid in members_with_bodies:
+        lines = _read_lines(member.file_path)
+        if lines is None:
+            skip_count += 1
+            continue
+
+        # body_start/body_end are 1-based line numbers, inclusive
+        start = member.body_start - 1  # Convert to 0-based index
+        end = member.body_end            # 1-based inclusive → slice end
+
+        if start < 0 or end > len(lines) or start >= end:
+            skip_count += 1
+            continue
+
+        source_text = "".join(lines[start:end]).rstrip("\n")
+
+        if not source_text.strip():
+            skip_count += 1
+            continue
+
+        impl_node = ImplementationNode(
+            qualified_name=member.qualified_name,
+            kind="implementation",
+            implementation=source_text,
+            impl_embedding=[],
+            source=member.source if hasattr(member, "source") else "",
+            layer=member.layer if hasattr(member, "layer") else "codebase",
+        )
+
+        result.implementations.append(impl_node)
+        result.implementation_refs.append(ImplementationRef(
+            member_refid=refid,
+            implementation=impl_node,
+        ))
+        impl_count += 1
+
+    print(f"  Implementations extracted: {impl_count} (skipped: {skip_count})", file=sys.stderr)

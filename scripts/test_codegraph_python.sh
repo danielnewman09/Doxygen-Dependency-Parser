@@ -3,7 +3,7 @@
 #
 # Usage:
 #   ./test_codegraph_python.sh           # Parse + verify, no Neo4j
-#   ./test_codegraph_python.sh --neo4j   # Parse + Neo4j ingest + verify
+#   ./test_codegraph_python.sh --neo4j   # Clear DB → ingest → verify
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -113,7 +113,7 @@ else:
 # ---- 3. Neo4j (optional) ----
 if $NEO4J; then
     echo ""
-    echo "=== 3. Ingest into Neo4j ==="
+    echo "=== 3. Clear DB, ingest into Neo4j ==="
     python3 -c "
 import sys, os
 sys.path.insert(0, '$SCRIPT_DIR/../src')
@@ -127,11 +127,13 @@ db.set_connection('bolt://neo4j:msd-local-dev@localhost:7687')
 from doxygen_index.parser import parse_python_dir
 from doxygen_index.neo4j_backend import write_result, ensure_schema, clear_source
 
+# Wipe ALL codegraph data first
+clear_source('$SOURCE')
+
 # Parse
 result = parse_python_dir('$CODEGRAPH_SRC', source='$SOURCE', progress_interval=0)
 
-# Clear + ingest
-clear_source('$SOURCE')
+# Reinstall schema and write
 ensure_schema()
 write_result(result)
 
@@ -149,7 +151,7 @@ print(f'  {\"Total\":20s} {total}')
 
 if total == 0:
     sys.exit(1)
-"
+" 2>&1 | grep -v '^Found codegraph\|^ + Creating\|^\s*{neo4j_code'
 fi
 
 echo ""
