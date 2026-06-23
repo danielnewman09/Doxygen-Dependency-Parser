@@ -24,6 +24,8 @@ import os
 import sys
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 
 CONFIG_FILENAME = ".doxygen-index.toml"
 
@@ -124,31 +126,18 @@ def cmd_project(args: argparse.Namespace) -> None:
     json_path = output_dir / f"{config.name}.json"
 
     if args.format == "neo4j":
-        if config.language == "python":
-            from doxygen_index.neo4j_backend import (
-                ensure_schema, clear_source, write_result as neo4j_write,
-            )
-            from neomodel import get_config, db
-            print(f"\n--- {config.name} → Neo4j ---")
-            _bolt_host = args.neo4j_uri.replace("bolt://", "")
-            neo_config = get_config()
-            neo_config.database_url = f"bolt://{args.neo4j_user}:{args.neo4j_password}@{_bolt_host}"
-            neo_config.database_name = getattr(args, 'neo4j_database', 'neo4j')
-            db.set_connection(neo_config.database_url)
-            ensure_schema()
-            if args.clear:
-                clear_source(source)
-            neo4j_write(result)
-        else:
-            from doxygen_index.neo4j_backend import ingest as neo4j_ingest
-            print(f"\n--- {config.name} → Neo4j ---")
-            neo4j_ingest(
-                xml_dir, source=source,
-                uri=args.neo4j_uri, user=args.neo4j_user,
-                password=args.neo4j_password,
-                layer="codebase",
-                clear=args.clear,
-            )
+        from doxygen_index.neo4j_backend import (
+            connect_neo4j, ensure_schema, clear_source, write_result as neo4j_write,
+        )
+        print(f"\n--- {config.name} → Neo4j ---")
+        connect_neo4j(
+            uri=args.neo4j_uri, user=args.neo4j_user,
+            password=args.neo4j_password,
+        )
+        ensure_schema()
+        if args.clear:
+            clear_source(source)
+        neo4j_write(result)
     else:
         json_write(result, json_path, source=source)
         print(f"Output: {json_path}")
@@ -475,20 +464,18 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
     source = "cppreference"
 
     if args.neo4j:
-        from neomodel import get_config, db
         from doxygen_index.neo4j_backend import (
+            connect_neo4j,
             ensure_schema,
             clear_source,
             write_result as neo4j_write,
         )
         print(f"\n--- cppreference → Neo4j ({args.neo4j_uri}) ---")
 
-        # Configure neomodel connection
-        _bolt_host = args.neo4j_uri.replace("bolt://", "")
-        config = get_config()
-        config.database_url = f"bolt://{args.neo4j_user}:{args.neo4j_password}@{_bolt_host}"
-        config.database_name = getattr(args, 'neo4j_database', 'neo4j')
-        db.set_connection(config.database_url)
+        connect_neo4j(
+            uri=args.neo4j_uri, user=args.neo4j_user,
+            password=args.neo4j_password,
+        )
 
         ensure_schema()
         if args.clear:
@@ -510,6 +497,14 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
+    # Load .env from the current working directory so that
+    # NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD are available as argparse
+    # defaults.  We pass the path explicitly because python-dotenv's
+    # find_dotenv() defaults to searching from the caller's source file
+    # location, not from CWD — which is wrong for a CLI tool.
+    # Existing real environment variables always win.
+    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
+
     parser = argparse.ArgumentParser(
         prog="doxygen-index",
         description="Index Doxygen XML and Conan C++ dependencies into graph databases",

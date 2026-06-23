@@ -17,6 +17,28 @@ pip install -e ".[dev]"
 - `doxygen` on PATH — only needed for C++ projects
 - `conan` — optional, only needed for Conan dependency mode
 - Python projects need no external tools (uses the built-in ``ast`` module)
+- A running **Neo4j** instance — only needed when using `--format neo4j` / `--neo4j`
+
+### Neo4j connection via `.env`
+
+The CLI and Python API automatically load a `.env` file from the current
+working directory (or any parent).  Copy the template and adjust:
+
+```bash
+cp .env.example .env
+# Edit .env with your credentials
+```
+
+```env
+NEO4J_URI=bolt://localhost:7687
+NEO4J_USER=neo4j
+NEO4J_PASSWORD=your-password
+# NEO4J_DATABASE=neo4j   # optional
+```
+
+Values in the real environment always take precedence over `.env`.
+You can also override on the command line with `--neo4j-uri`,
+`--neo4j-user`, and `--neo4j-password`.
 
 ## Quick Start: Index Your Own Project
 

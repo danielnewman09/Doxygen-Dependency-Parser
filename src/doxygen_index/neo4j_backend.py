@@ -10,6 +10,8 @@ import os
 import sys
 from dataclasses import asdict
 from pathlib import Path
+
+from dotenv import load_dotenv
 from neomodel import db
 
 # Import all node models so neomodel registry discovers them before
@@ -22,6 +24,63 @@ from codegraph import (  # noqa: F401 — needed for install_all_labels
 )
 
 from doxygen_index.parser import ParseResult, parse_xml_dir, TemplateParamRef, SpecializesRef, ImplementationRef
+
+
+# ---------------------------------------------------------------------------
+# Connection
+# ---------------------------------------------------------------------------
+
+def connect_neo4j(
+    uri: str | None = None,
+    user: str | None = None,
+    password: str | None = None,
+    database: str | None = None,
+) -> None:
+    """Configure the neomodel connection and verify it works.
+
+    Loads ``.env`` first (without overriding real env vars), then resolves
+    credentials from arguments → environment → hardcoded defaults.
+
+    Exits with a helpful message on auth or connection failure.
+    """
+    from neomodel import get_config
+    from neo4j.exceptions import AuthError, ServiceUnavailable
+
+    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
+
+    uri = uri or os.environ.get("NEO4J_URI", "bolt://localhost:7687")
+    user = user or os.environ.get("NEO4J_USER", "neo4j")
+    password = password or os.environ.get("NEO4J_PASSWORD", "msd-local-dev")
+    database = database or os.environ.get("NEO4J_DATABASE", "neo4j")
+
+    _bolt_host = uri.replace("bolt://", "")
+    config = get_config()
+    config.database_url = f"bolt://{user}:{password}@{_bolt_host}"
+    config.database_name = database
+
+    # Verify connectivity — db.set_connection() runs an internal version
+    # check that can raise AuthError / ServiceUnavailable.
+    try:
+        db.set_connection(config.database_url)
+        db.cypher_query("RETURN 1")
+    except AuthError:
+        print(
+            f"\nError: Neo4j authentication failed for user '{user}' at {uri}.\n"
+            f"  Check the credentials in your .env file or pass them via "
+            f"--neo4j-user / --neo4j-password.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except ServiceUnavailable:
+        print(
+            f"\nError: Could not reach Neo4j at {uri}.\n"
+            f"  Is the database running?",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    except Exception as e:
+        print(f"\nError: Could not connect to Neo4j at {uri}: {e}", file=sys.stderr)
+        sys.exit(1)
 
 
 # ---------------------------------------------------------------------------
@@ -596,27 +655,9 @@ def ingest(
         clear: If True, clear existing data for this source before ingesting.
         layer: Layer label ("codebase" for project code, "dependency" for deps).
     """
-    from neomodel import get_config
+    connect_neo4j(uri=uri, user=user, password=password, database=database)
 
     xml_dir = Path(xml_dir)
-    uri = uri or os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-    user = user or os.environ.get("NEO4J_USER", "neo4j")
-    password = password or os.environ.get("NEO4J_PASSWORD", "msd-local-dev")
-    database = database or os.environ.get("NEO4J_DATABASE", "neo4j")
-
-    # Configure neomodel connection
-    config = get_config()
-    _bolt_host = uri.replace("bolt://", "")
-    config.database_url = f"bolt://{user}:{password}@{_bolt_host}"
-    config.database_name = database
-    db.set_connection(config.database_url)
-
-    # Verify connectivity
-    try:
-        db.cypher_query("RETURN 1")
-    except Exception as e:
-        print(f"Error: Could not connect to Neo4j at {uri}: {e}", file=sys.stderr)
-        return
 
     ensure_schema()
 
