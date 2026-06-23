@@ -49,6 +49,7 @@ echo "=== 2. Run doxygen-index project ==="
 if $NEO4J; then
     doxygen-index project "$CPP_SQLITE_DIR" \
         --format neo4j \
+        --clear \
         --neo4j-uri "$NEO4J_URI" \
         --neo4j-user "$NEO4J_USER" \
         --neo4j-password "$NEO4J_PASSWORD"

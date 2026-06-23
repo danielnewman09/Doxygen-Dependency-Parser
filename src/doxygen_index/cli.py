@@ -4,14 +4,17 @@ CLI entry point for doxygen-index.
 Usage::
 
     doxygen-index project <project-dir>
+    doxygen-index project            # uses .doxygen-index.toml in current dir
+    doxygen-index                    # same as above (auto-detects config)
     doxygen-index discover [--build-type Debug] [--project-dir .]
     doxygen-index generate --output-dir build/docs/deps [--only eigen,sdl]
     doxygen-index ingest --output-dir build/docs/deps --neo4j
     doxygen-index full --output-dir build/docs/deps --neo4j
     doxygen-index list-deps
 
-Project mode requires a ``.doxygen-index.toml`` config file in the project directory.
-See the README or ``doxygen-index project --help`` for details.
+The ``project`` command reads a ``.doxygen-index.toml`` config file from
+the project directory.  When no subcommand is given and a config file
+exists in the current directory, ``project`` is assumed.
 """
 
 from __future__ import annotations
@@ -20,6 +23,9 @@ import argparse
 import os
 import sys
 from pathlib import Path
+
+
+CONFIG_FILENAME = ".doxygen-index.toml"
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -64,14 +70,14 @@ def _parse_only(only_str: str | None) -> set[str] | None:
 # ---------------------------------------------------------------------------
 
 def cmd_project(args: argparse.Namespace) -> None:
-    """Parse an arbitrary C++ project's source code via Doxygen.
+    """Parse an arbitrary project's source code.
 
     Loads .doxygen-index.toml from the project directory, generates
-    Doxygen XML, parses it, and outputs results (JSON by default).
+    Doxygen XML (C++) or parses Python source directly (via ``ast``),
+    and outputs results (JSON by default).
     """
     from doxygen_index.project import load_config, ProjectConfig
-    from doxygen_index.doxygen import run_doxygen
-    from doxygen_index.parser import parse_xml_dir
+    from doxygen_index.parser import parse_xml_dir, parse_python_dir, ParseResult
     from doxygen_index.json_backend import write_result as json_write
 
     project_dir = Path(args.project_dir).resolve()
@@ -79,13 +85,134 @@ def cmd_project(args: argparse.Namespace) -> None:
     # Load config
     config, config_dir = load_config(project_dir)
     print(f"Project: {config.name}")
+    print(f"Language: {config.language}")
     print(f"Input paths: {', '.join(str(p) for p in config.input_paths)}")
 
-    # Determine output directory
-    output_dir = Path(args.output_dir) if args.output_dir else (
-        config_dir / "build" / "docs" / f"doxygen-{config.name}"
-    )
+    # Determine output directory: CLI flag > config file > default
+    if args.output_dir:
+        output_dir = Path(args.output_dir)
+    elif config.output_dir:
+        output_dir = config.output_dir
+    else:
+        output_dir = config_dir / "build" / "docs" / f"doxygen-{config.name}"
     print(f"Output dir: {output_dir}")
+
+    # ------------------------------------------------------------------
+    # Branch on language
+    # ------------------------------------------------------------------
+
+    xml_dir: Path | None = None  # only set for C++
+
+    if config.language == "python":
+        result = _parse_python_project(args, config)
+    elif config.language == "cpp":
+        result, xml_dir = _parse_cpp_project(args, config, output_dir)
+    else:
+        print(f"Error: unsupported language '{config.language}' "
+              f"(use 'cpp' or 'python')", file=sys.stderr)
+        sys.exit(1)
+
+    # --generate-only exits early (C++ only)
+    if args.generate_only:
+        return
+
+    # ------------------------------------------------------------------
+    # Output
+    # ------------------------------------------------------------------
+
+    source = args.source or config.name
+    json_path = output_dir / f"{config.name}.json"
+
+    if args.format == "neo4j":
+        if config.language == "python":
+            from doxygen_index.neo4j_backend import (
+                ensure_schema, clear_source, write_result as neo4j_write,
+            )
+            from neomodel import get_config, db
+            print(f"\n--- {config.name} → Neo4j ---")
+            _bolt_host = args.neo4j_uri.replace("bolt://", "")
+            neo_config = get_config()
+            neo_config.database_url = f"bolt://{args.neo4j_user}:{args.neo4j_password}@{_bolt_host}"
+            neo_config.database_name = getattr(args, 'neo4j_database', 'neo4j')
+            db.set_connection(neo_config.database_url)
+            ensure_schema()
+            if args.clear:
+                clear_source(source)
+            neo4j_write(result)
+        else:
+            from doxygen_index.neo4j_backend import ingest as neo4j_ingest
+            print(f"\n--- {config.name} → Neo4j ---")
+            neo4j_ingest(
+                xml_dir, source=source,
+                uri=args.neo4j_uri, user=args.neo4j_user,
+                password=args.neo4j_password,
+                layer="codebase",
+                clear=args.clear,
+            )
+    else:
+        json_write(result, json_path, source=source)
+        print(f"Output: {json_path}")
+
+    # ------------------------------------------------------------------
+    # HTML graph visualization (if [codegraph-html] is configured)
+    # ------------------------------------------------------------------
+    if config.html_config and args.format == "json":
+        _generate_html(result, config, source)
+
+    # Summary
+    print()
+    print(f"  Classes:      {len(result.classes)}")
+    print(f"  Methods:      {len(result.methods)}")
+    print(f"  Functions:    {len(result.functions)}")
+    print(f"  Concepts:     {len(result.concepts)}")
+    print(f"  Enums:        {len(result.enums)}")
+    print(f"  Namespaces:   {len(result.namespaces)}")
+    print(f"  Files:        {len(result.files)}")
+    print(f"  Includes:     {len(result.includes)}")
+    print(f"  Invokes:      {len(result.invokes)}")
+    if args.format != "neo4j":
+        print(f"\nOutput: {json_path}")
+
+
+def _parse_python_project(
+    args: argparse.Namespace,
+    config: ProjectConfig,
+) -> ParseResult:
+    """Parse a Python project using the AST-based parser.
+
+    No external tools required — uses Python's ``ast`` module.
+    """
+    from doxygen_index.parser import parse_python_dir
+
+    # Parse user exclude_patterns (space-separated globs → dir names)
+    user_excludes = []
+    if config.exclude_patterns:
+        user_excludes = config.exclude_patterns.split()
+
+    print(f"\nParsing Python source...")
+    result = parse_python_dir(
+        config.input_paths,
+        source=config.name,
+        layer="codebase",
+        exclude_dirs=user_excludes or None,
+    )
+    return result
+
+
+def _parse_cpp_project(
+    args: argparse.Namespace,
+    config: ProjectConfig,
+    output_dir: Path,
+) -> tuple[ParseResult, Path]:
+    """Parse a C++ project via Doxygen XML generation and parsing.
+
+    Returns:
+        Tuple of (ParseResult, xml_dir).  When --generate-only is set,
+        the ParseResult is empty and the function signals the caller
+        to exit early via args.generate_only.
+    """
+    from doxygen_index.doxygen import run_doxygen
+    from doxygen_index.parser import parse_xml_dir, ParseResult
 
     # Phase 1: Generate Doxygen XML (unless --parse-only)
     if not args.parse_only:
@@ -115,41 +242,83 @@ def cmd_project(args: argparse.Namespace) -> None:
     # Phase 2: Parse XML (unless --generate-only)
     if args.generate_only:
         print(f"\nXML generated at: {xml_dir}")
-        return
+        return ParseResult(), xml_dir
 
     print(f"\nParsing XML...")
     result = parse_xml_dir(xml_dir, source=config.name, layer="codebase")
+    return result, xml_dir
 
-    # Phase 3: Output
-    source = args.source or config.name
-    json_path = output_dir / f"{config.name}.json"
 
-    if args.format == "neo4j":
-        from doxygen_index.neo4j_backend import ingest as neo4j_ingest
-        print(f"\n--- {config.name} → Neo4j ---")
-        neo4j_ingest(
-            xml_dir, source=source,
-            uri=args.neo4j_uri, user=args.neo4j_user,
-            password=args.neo4j_password,
-            layer="codebase",
-        )
-    else:
-        json_write(result, json_path, source=source)
-        print(f"Output: {json_path}")
+def _generate_html(
+    result: ParseResult,
+    config: ProjectConfig,
+    source: str,
+) -> None:
+    """Generate an interactive HTML graph from a ParseResult.
 
-    # Summary
-    print()
-    print(f"  Classes:      {len(result.classes)}")
-    print(f"  Methods:      {len(result.methods)}")
-    print(f"  Functions:    {len(result.functions)}")
-    print(f"  Concepts:     {len(result.concepts)}")
-    print(f"  Enums:        {len(result.enums)}")
-    print(f"  Namespaces:   {len(result.namespaces)}")
-    print(f"  Files:        {len(result.files)}")
-    print(f"  Includes:     {len(result.includes)}")
-    print(f"  Invokes:      {len(result.invokes)}")
-    if args.format != "neo4j":
-        print(f"\nOutput: {json_path}")
+    Uses codegraph's ``export_html_from_json`` on the backend.  Writes
+    both a LayerGraph-compatible JSON and a self-contained HTML file
+    to the ``[codegraph-html]`` output directory.
+    """
+    from doxygen_index.graph_json import write_graph_json
+    from codegraph.viz import export_html_from_json
+
+    html_cfg = config.html_config
+    html_cfg.output_dir.mkdir(parents=True, exist_ok=True)
+
+    # 1. Write LayerGraph-compatible JSON
+    graph_json_path = html_cfg.output_dir / f"{config.name}.json"
+    print(f"\n--- Graph visualization ---")
+    write_graph_json(result, graph_json_path, source=source)
+    print(f"  Graph JSON: {graph_json_path}")
+
+    # 2. Render HTML
+    html_path = html_cfg.output_dir / f"{config.name}.html"
+    export_html_from_json(
+        graph_json_path, html_path,
+        title=config.name,
+        size=html_cfg.size,
+    )
+    print(f"  HTML:       {html_path}")
+
+
+def cmd_html(args: argparse.Namespace) -> None:
+    """Generate an interactive HTML graph from existing parse output.
+
+    Reads a LayerGraph-compatible JSON file (produced by ``doxygen-index``
+    when ``[codegraph-html]`` is configured) and renders it as a
+    self-contained HTML file using codegraph's visualization engine.
+    """
+    from doxygen_index.project import load_config
+    from codegraph.viz import export_html_from_json
+
+    project_dir = Path(args.project_dir).resolve()
+    config, _ = load_config(project_dir)
+
+    if not config.html_config:
+        print("Error: no [codegraph-html] section in .doxygen-index.toml",
+              file=sys.stderr)
+        sys.exit(1)
+
+    html_cfg = config.html_config
+    json_path = html_cfg.output_dir / f"{config.name}.json"
+
+    if not json_path.exists():
+        print(f"Error: graph JSON not found: {json_path}", file=sys.stderr)
+        print("  Run 'doxygen-index' first to generate the JSON.",
+              file=sys.stderr)
+        sys.exit(1)
+
+    html_path = html_cfg.output_dir / f"{config.name}.html"
+    size = args.size or html_cfg.size
+
+    print(f"Generating HTML from {json_path}...")
+    result_path = export_html_from_json(
+        json_path, html_path,
+        title=config.name,
+        size=size,
+    )
+    print(f"HTML written to {result_path}")
 
 
 def cmd_list_deps(args: argparse.Namespace) -> None:
@@ -346,12 +515,13 @@ def main() -> None:
         description="Index Doxygen XML and Conan C++ dependencies into graph databases",
     )
     parser.add_argument("--version", action="version", version="%(prog)s 0.1.0")
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command")
 
-    # project — parse an arbitrary C++ repository
+    # project — parse an arbitrary C++ or Python repository
     sp = subparsers.add_parser("project",
-                               help="Parse a C++ project via Doxygen (requires .doxygen-index.toml)")
-    sp.add_argument("project_dir", help="Path to project directory containing .doxygen-index.toml")
+                               help="Parse a project (requires .doxygen-index.toml in project dir)")
+    sp.add_argument("project_dir", nargs="?", default=".",
+                    help="Path to project directory containing .doxygen-index.toml (default: .)")
     sp.add_argument("--output-dir", default=None,
                     help="Base directory for output (default: <project>/build/docs/doxygen-<name>/)")
     sp.add_argument("--format", choices=["json", "neo4j"], default="json",
@@ -359,13 +529,24 @@ def main() -> None:
     sp.add_argument("--source", default=None,
                     help="Source label for provenance (default: project name from config)")
     sp.add_argument("--generate-only", action="store_true",
-                    help="Only run Doxygen, skip XML parsing")
+                    help="Only run Doxygen, skip XML parsing (C++ only)")
     sp.add_argument("--parse-only", action="store_true",
-                    help="Only parse existing XML, skip Doxygen generation")
+                    help="Only parse existing XML, skip Doxygen generation (C++ only)")
     sp.add_argument("--xml-dir", default=None,
                     help="XML directory to parse (required with --parse-only)")
     _add_db_args(sp)
+    sp.add_argument("--clear", action="store_true",
+                    help="Clear existing data for this source before ingesting")
     sp.set_defaults(func=cmd_project)
+
+    # html — generate HTML graph from existing parse output
+    sp = subparsers.add_parser("html",
+                               help="Generate HTML graph visualization from existing JSON")
+    sp.add_argument("project_dir", nargs="?", default=".",
+                    help="Path to project directory containing .doxygen-index.toml (default: .)")
+    sp.add_argument("--size", choices=["large", "small"], default=None,
+                    help="Layout size (default: from config or 'large')")
+    sp.set_defaults(func=cmd_html)
 
     # list-deps
     sp = subparsers.add_parser("list-deps", help="List known dependency configurations")
@@ -411,6 +592,18 @@ def main() -> None:
     sp.set_defaults(func=cmd_cppreference)
 
     args = parser.parse_args()
+
+    # If no subcommand given, default to "project" if a config file exists
+    # in the current directory.  This lets users simply `cd` into a project
+    # directory and run `doxygen-index`.
+    if args.command is None:
+        config_path = Path.cwd() / CONFIG_FILENAME
+        if config_path.exists():
+            args = parser.parse_args(["project"] + sys.argv[1:])
+        else:
+            parser.error("No subcommand given.  Run 'doxygen-index project .' "
+                         "or create a .doxygen-index.toml in the current directory.")
+
     args.func(args)
 
 

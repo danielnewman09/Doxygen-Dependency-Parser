@@ -1,9 +1,10 @@
 # doxygen-index
 
-Index Doxygen XML output and Conan C++ dependencies into Neo4j graph databases.
+Index source code into graph databases.  Supports **C++** (via Doxygen XML) and
+**Python** (via the standard library ``ast`` module — no external tools required).
 
-Takes any C++ project, generates Doxygen XML, and outputs structured results (JSON or Neo4j).
-Works with Conan-managed dependencies and standalone projects alike.
+Takes any project, generates/parses its source, and outputs structured results
+(JSON or Neo4j).  Works with Conan-managed dependencies and standalone projects alike.
 
 ## Installation
 
@@ -12,22 +13,50 @@ Works with Conan-managed dependencies and standalone projects alike.
 pip install -e ".[dev]"
 ```
 
-**System requirements:** `doxygen` on PATH. `conan` is optional (only needed for Conan dependency mode).
+**System requirements:**
+- `doxygen` on PATH — only needed for C++ projects
+- `conan` — optional, only needed for Conan dependency mode
+- Python projects need no external tools (uses the built-in ``ast`` module)
 
 ## Quick Start: Index Your Own Project
 
 1. Create a `.doxygen-index.toml` in your project root:
 
+### C++ project
+
 ```toml
 [project]
 name = "myproject"
+language = "cpp"          # default, can be omitted
 input_paths = ["include", "src"]
 # file_patterns = "*.h *.hpp *.cpp"   # default
 # exclude_patterns = "*/test/* */build/*"
 # predefined = "SOME_MACRO=1"
 ```
 
-2. Run:
+### Python project
+
+```toml
+[project]
+name = "myproject"
+language = "python"
+input_paths = ["src"]
+# exclude_patterns = "build dist"   # additional dirs to skip
+```
+
+For Python, virtual environments (`.venv`, `venv`, `env`), caches
+(`__pycache__`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`), build
+artifacts (`build`, `dist`), and other common non-source directories are
+**automatically excluded** — no need to list them.
+
+2. Run from inside the project directory:
+
+```bash
+cd /path/to/myproject
+doxygen-index
+```
+
+Or specify the path explicitly:
 
 ```bash
 doxygen-index project /path/to/myproject
@@ -39,23 +68,61 @@ doxygen-index project /path/to/myproject
 cat build/docs/doxygen-myproject/myproject.json | jq '.classes[] | .name'
 ```
 
+### HTML Graph Visualization
+
+Add a ``[codegraph-html]`` section to your ``.doxygen-index.toml`` to
+automatically generate an interactive HTML graph alongside the JSON:
+
+```toml
+[project]
+name = "myproject"
+language = "python"
+input_paths = ["src"]
+
+[codegraph-html]
+output_dir = "codegraph"   # where to write JSON + HTML (default: codegraph)
+size = "large"             # "large" (full-page) or "small" (compact)
+```
+
+With this section present, running ``doxygen-index`` produces:
+
+- ``codegraph/myproject.json`` — LayerGraph-compatible JSON for visualization
+- ``codegraph/myproject.html`` — self-contained interactive Cytoscape.js graph
+
+The HTML file is fully self-contained (no external dependencies) and can be
+opened directly in any browser.
+
+To regenerate just the HTML without re-parsing:
+
+```bash
+doxygen-index html
+doxygen-index html --size small
+```
+
 ## CLI Usage
 
 ```bash
-# Parse an arbitrary C++ project (requires .doxygen-index.toml)
-doxygen-index project /path/to/project
+# Parse a project (requires .doxygen-index.toml in project dir)
+# When run inside the project directory, the path can be omitted:
+doxygen-index                          # auto-detects config in current dir
+doxygen-index project                  # explicit subcommand
+doxygen-index project /path/to/project # explicit path
 
 # Parse with custom output
-doxygen-index project /path/to/project --output-dir custom/docs
+doxygen-index project --output-dir custom/docs
 
 # Parse and ingest into Neo4j
-doxygen-index project /path/to/project --format neo4j
+doxygen-index project --format neo4j
 
-# Just generate Doxygen XML (don't parse)
-doxygen-index project /path/to/project --generate-only
+# Just generate Doxygen XML (don't parse) — C++ only
+doxygen-index project --generate-only
 
-# Just parse existing XML
-doxygen-index project /path/to/project --parse-only --xml-dir build/docs/xml
+# Just parse existing XML — C++ only
+doxygen-index project --parse-only --xml-dir build/docs/xml
+
+# Regenerate HTML graph from existing JSON (requires [codegraph-html] in config)
+doxygen-index html
+doxygen-index html --size small
 
 # -----------------------------------------------------------------------
 # Conan dependency mode (requires conan):

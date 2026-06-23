@@ -42,12 +42,53 @@ from codegraph import (
 )
 
 from doxygen_index.parser.base import LanguageParser
-from doxygen_index.parser.model import ParseResult, IncludeEntry, ImplementationRef
+from doxygen_index.parser.model import ParseResult, IncludeEntry, CompositionEntry, InheritsEntry, DependsOnEntry, ImplementationRef
+
+
+# ---------------------------------------------------------------------------
+# Defaults
+# ---------------------------------------------------------------------------
+
+#: Directory names that are always excluded when parsing Python source.
+#: These cover virtual environments, caches, build artifacts, and tool
+#: directories that should never be indexed.
+DEFAULT_EXCLUDE_DIRS: frozenset[str] = frozenset({
+    ".venv",
+    "venv",
+    "env",
+    "__pycache__",
+    ".git",
+    ".hg",
+    ".svn",
+    "build",
+    "dist",
+    "node_modules",
+    ".pytest_cache",
+    ".ruff_cache",
+    ".mypy_cache",
+    ".tox",
+    ".eggs",
+    ".idea",
+    ".vscode",
+})
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _is_excluded(file_path: Path, base_dir: Path, exclude_dirs: set[str]) -> bool:
+    """Check whether *file_path* should be skipped.
+
+    Returns ``True`` if any component of the path (relative to *base_dir*)
+    matches a name in *exclude_dirs*.
+    """
+    try:
+        rel = file_path.relative_to(base_dir)
+    except ValueError:
+        rel = file_path
+    return any(part in exclude_dirs for part in rel.parts[:-1])
 
 
 def _module_path(file_path: Path, base_dir: Path) -> str:
@@ -170,11 +211,15 @@ class PythonParser(LanguageParser):
         result: ParseResult,
         layer: str = "codebase",
         progress_interval: int = 0,
+        exclude_dirs: Optional[set[str]] = None,
     ) -> None:
         """Parse all Python source files in *source_dir* and populate *result*.
 
         Walks the directory recursively for ``.py`` files.  Each file
         is parsed with ``ast`` and its symbols extracted.
+
+        Files whose path contains any directory in *exclude_dirs* are skipped.
+        If *exclude_dirs* is ``None``, :data:`DEFAULT_EXCLUDE_DIRS` is used.
 
         Args:
             source_dir: Root directory of the Python source tree.
@@ -182,9 +227,17 @@ class PythonParser(LanguageParser):
             result: Accumulator for parsed entries.
             layer: Layer label.
             progress_interval: Print progress every N files. 0 disables.
+            exclude_dirs: Set of directory names to skip.  Defaults to
+                :data:`DEFAULT_EXCLUDE_DIRS`.
         """
         source_dir = Path(source_dir)
-        py_files = sorted(source_dir.rglob("*.py"))
+        if exclude_dirs is None:
+            exclude_dirs = set(DEFAULT_EXCLUDE_DIRS)
+
+        py_files = sorted(
+            f for f in source_dir.rglob("*.py")
+            if not _is_excluded(f, source_dir, exclude_dirs)
+        )
         total = len(py_files)
 
         # First pass: register packages (directories with __init__.py)
@@ -210,9 +263,15 @@ class PythonParser(LanguageParser):
     def post_process(self, result: ParseResult) -> None:
         """Python-specific post-processing.
 
-        Extracts implementation source code for all methods and
-        functions that have body_start/body_end line numbers.
+        Derives namespace ``COMPOSES`` relationships (recorded on
+        ``result.compositions``) and extracts implementation source code
+        for all methods and functions that have body_start/body_end line
+        numbers.
         """
+        _derive_namespace_compositions(result)
+        _derive_inheritance(result)
+        _derive_type_dependencies(result)
+        _derive_namespace_imports(result)
         _extract_implementations(result)
 
     # ------------------------------------------------------------------
@@ -270,14 +329,23 @@ class PythonParser(LanguageParser):
             print(f"Warning: Could not parse {file_path}: {e}", file=sys.stderr)
             return
 
-        # Create a FileNode for this module
-        result.files.append(FileNode(
-            refid=module_name,
-            name=file_path.name,
-            path=str(file_path),
-            language="Python",
-            source=source,
-        ))
+        # __init__.py is a package marker, not a meaningful source file: its
+        # re-exports just duplicate the package namespace's COMPOSES edges, so
+        # it adds noise to the graph without information value.  Skip creating
+        # a FileNode (and its re-export INCLUDES) for it, but still ensure the
+        # namespace exists and visit the AST so any real definitions inside the
+        # __init__.py are captured and composed by the namespace.
+        is_init = file_path.name == "__init__.py"
+
+        if not is_init:
+            # Create a FileNode for this module
+            result.files.append(FileNode(
+                refid=module_name,
+                name=file_path.name,
+                path=str(file_path),
+                language="Python",
+                source=source,
+            ))
 
         # Ensure a NamespaceNode exists for this module
         if module_name and module_name not in {ns.qualified_name for ns in result.namespaces}:
@@ -290,26 +358,29 @@ class PythonParser(LanguageParser):
                 layer=layer,
             ))
 
-        # Add imports as IncludeEntry items
-        for node in ast.walk(tree):
-            if isinstance(node, ast.Import):
-                for alias in node.names:
-                    result.includes.append(IncludeEntry(
-                        file_refid=module_name,
-                        included_file=alias.name,
-                        included_refid=alias.name,
-                        is_local=False,
-                    ))
-            elif isinstance(node, ast.ImportFrom):
-                module = node.module or ""
-                for alias in node.names:
-                    qname = f"{module}.{alias.name}" if module else alias.name
-                    result.includes.append(IncludeEntry(
-                        file_refid=module_name,
-                        included_file=alias.name,
-                        included_refid=qname,
-                        is_local=node.level > 0,
-                    ))
+        # Add imports as IncludeEntry items (skip for __init__.py — its
+        # re-exports duplicate the namespace composition and would be orphaned
+        # without a FileNode to attach to).
+        if not is_init:
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        result.includes.append(IncludeEntry(
+                            file_refid=module_name,
+                            included_file=alias.name,
+                            included_refid=alias.name,
+                            is_local=False,
+                        ))
+                elif isinstance(node, ast.ImportFrom):
+                    module = node.module or ""
+                    for alias in node.names:
+                        qname = f"{module}.{alias.name}" if module else alias.name
+                        result.includes.append(IncludeEntry(
+                            file_refid=module_name,
+                            included_file=alias.name,
+                            included_refid=qname,
+                            is_local=node.level > 0,
+                        ))
 
         # Visit top-level definitions
         visitor = _PythonVisitor(
@@ -564,6 +635,7 @@ class _PythonVisitor(ast.NodeVisitor):
                 brief_description=brief,
                 detailed_description=docstring,
                 protection=protection,
+                visibility=protection,
                 is_static=is_static,
                 is_const=False,
                 is_constexpr=False,
@@ -657,6 +729,7 @@ class _PythonVisitor(ast.NodeVisitor):
             brief_description="",
             detailed_description="",
             protection=protection,
+            visibility=protection,
             is_static=True,  # class-level attributes are static
             is_const=False,
             source=self.source,
@@ -702,6 +775,7 @@ class _PythonVisitor(ast.NodeVisitor):
                 brief_description="",
                 detailed_description="",
                 protection=protection,
+                visibility=protection,
                 is_static=True,
                 is_const=False,
                 source=self.source,
@@ -769,6 +843,412 @@ class _PythonVisitor(ast.NodeVisitor):
             "signature": ", ".join(param_parts),
             "params": params,
         }
+
+
+# ---------------------------------------------------------------------------
+# Namespace composition derivation
+# ---------------------------------------------------------------------------
+
+
+def _parent_qualified_name(qname: str) -> str:
+    """Return the parent qualified name of a dotted Python qualified name.
+
+    Splits on the last ``.`` so that, e.g., ``samplepkg.operations.Operator``
+    yields ``samplepkg.operations``.  Returns an empty string for a
+    top-level name with no separator.
+    """
+    idx = qname.rfind(".")
+    if idx != -1:
+        return qname[:idx]
+    return ""
+
+
+def _derive_namespace_compositions(result: ParseResult) -> None:
+    """Record namespace ``COMPOSES`` relationships on ``result.compositions``.
+
+    A namespace composes its *immediate* children: direct child
+    namespaces and the top-level classes / interfaces / enums / unions /
+    functions defined directly within it (i.e. whose parent qualified
+    name equals the namespace's qualified name).
+
+    Only immediate children are composed so that, e.g., a class's
+    methods remain composed by their class (via ``compound_refid``) and
+    a deeply-nested member is composed by its own parent rather than by
+    every ancestor namespace.
+
+    The recorded :class:`CompositionEntry` items are consumed by
+    ``graph_json._build_node_edges`` to emit ``COMPOSES`` edges.
+    """
+    # Map namespace qualified_name -> refid (for python these are equal,
+    # but look them up to stay robust).
+    ns_refid_by_qname: dict[str, str] = {}
+    for ns in result.namespaces:
+        qname = getattr(ns, "qualified_name", None)
+        if qname:
+            ns_refid_by_qname[qname] = getattr(ns, "refid", None) or qname
+
+    if not ns_refid_by_qname:
+        return
+
+    # Candidate children: sub-namespaces + top-level compounds/functions.
+    child_sources = (
+        result.namespaces + result.classes + result.interfaces
+        + result.enums + result.unions + result.functions
+    )
+
+    for child in child_sources:
+        child_qname = getattr(child, "qualified_name", None)
+        child_refid = getattr(child, "refid", None)
+        if not child_qname or not child_refid:
+            continue
+        parent_qname = _parent_qualified_name(child_qname)
+        parent_refid = ns_refid_by_qname.get(parent_qname)
+        if not parent_refid:
+            continue
+        # Skip self-composition (a namespace whose own parent is empty).
+        if parent_refid == child_refid:
+            continue
+        result.compositions.append(CompositionEntry(
+            parent_refid=parent_refid,
+            child_refid=child_refid,
+            child_type=type(child).__name__,
+        ))
+
+
+def _derive_inheritance(result: ParseResult) -> None:
+    """Record ``INHERITS_FROM`` relationships on ``result.inherits``.
+
+    For every class (and interface) that declares base classes, resolve each
+    base-class name to a parsed compound (class / interface / enum) and emit
+    an :class:`InheritsEntry`.  Bases that don't resolve to any parsed
+    compound — e.g. ``Exception``, ``ABC``, ``Enum``, or anything from the
+    standard library / third parties — are silently skipped; they never
+    produce dangling edges because ``graph_json`` only emits edges whose
+    ``to_refid`` is a known node, and the graph layer drops unresolvable
+    targets anyway.
+
+    Name resolution prefers a same-namespace match (mirroring Python's
+    own class-body name lookup), then falls back to a unique global match
+    by short name, then by the trailing component of a dotted base name
+    (e.g. ``errors.CalculatorError``).
+
+    Only :class:`ClassNode` stores ``base_classes`` today, so only classes
+    originate inheritance edges; a base can still be an interface (e.g.
+    ``ToleranceVerifier`` inherits ``Verifier``), since interfaces are in
+    the resolution index.
+    """
+    # Index every parsed compound by short name -> list of (refid, namespace, type).
+    by_name: dict[str, list[tuple[str, str, str]]] = {}
+    # Also index by qualified name for exact dotted-base matches.
+    by_qname: dict[str, tuple[str, str]] = {}
+    for comp in result.classes + result.interfaces + result.enums + result.unions:
+        name = getattr(comp, "name", None)
+        refid = getattr(comp, "refid", None)
+        qname = getattr(comp, "qualified_name", None)
+        if not name or not refid or not qname:
+            continue
+        ns = _parent_qualified_name(qname)
+        type_name = type(comp).__name__
+        by_name.setdefault(name, []).append((refid, ns, type_name))
+        by_qname[qname] = (refid, type_name)
+
+    def _resolve(base: str, child_ns: str) -> tuple[str, str] | None:
+        # Exact qualified-name match (dotted base like "pkg.Mod.Cls").
+        if base in by_qname:
+            refid, type_name = by_qname[base]
+            return refid, type_name
+        candidates = by_name.get(base)
+        if not candidates:
+            # Trailing-component fallback for "module.Name" style bases.
+            short = base.rsplit(".", 1)[-1]
+            candidates = by_name.get(short)
+        if not candidates:
+            return None
+        # Prefer a base defined in the same namespace as the child.
+        same_ns = [c for c in candidates if c[1] == child_ns]
+        if same_ns:
+            refid, _ns, type_name = same_ns[0]
+            return refid, type_name
+        # Fall back to a unique global match.
+        if len(candidates) == 1:
+            refid, _ns, type_name = candidates[0]
+            return refid, type_name
+        return None
+
+    # Only ClassNode carries base_classes; iterate classes for the source side.
+    for cls in result.classes:
+        bases = getattr(cls, "base_classes", None) or []
+        if not bases:
+            continue
+        child_refid = getattr(cls, "refid", None)
+        child_qname = getattr(cls, "qualified_name", None)
+        if not child_refid or not child_qname:
+            continue
+        child_ns = _parent_qualified_name(child_qname)
+        for base in bases:
+            resolved = _resolve(base, child_ns)
+            if resolved is None:
+                continue
+            to_refid, to_type = resolved
+            # Don't emit self-inheritance.
+            if to_refid == child_refid:
+                continue
+            result.inherits.append(InheritsEntry(
+                from_refid=child_refid,
+                to_refid=to_refid,
+                to_type=to_type,
+            ))
+
+
+# ---------------------------------------------------------------------------
+# Type dependencies
+# ---------------------------------------------------------------------------
+
+# Python builtin / standard-library type names that should not produce
+# ``DEPENDS_ON`` edges (there is no parseable definition for them).
+_PYTHON_BUILTIN_TYPES: frozenset[str] = frozenset({
+    # Builtins
+    "bool", "int", "float", "complex", "str", "bytes", "bytearray",
+    "list", "tuple", "dict", "set", "frozenset", "range", "slice",
+    "type", "object", "None", "NoneType", "Ellipsis", "NotImplemented",
+    "memoryview", "property", "staticmethod", "classmethod",
+    # typing builtins
+    "Any", "Optional", "Union", "Literal", "Type", "Callable",
+    "List", "Dict", "Set", "Tuple", "FrozenSet", "Iterable", "Iterator",
+    "Sequence", "Mapping", "MutableMapping", "Generator", "Coroutine",
+    "Awaitable", "Protocol", "TypedDict", "NamedTuple",
+    # Other common stdlib
+    "Self", "Exception", "BaseException", "TypeVar",
+})
+
+
+def _strip_generic_args(type_str: str) -> str:
+    """Strip generic arguments, returning the base type name.
+
+    ``"Optional[VerificationLevel]"`` → ``"Optional"``
+    ``"dict[str, Operator]"`` → ``"dict"``
+    """
+    idx = type_str.find("[")
+    if idx != -1:
+        return type_str[:idx].strip()
+    idx = type_str.find("<")
+    if idx != -1:
+        return type_str[:idx].strip()
+    return type_str.strip()
+
+
+def _derive_type_dependencies(result: ParseResult) -> None:
+    """Record ``DEPENDS_ON`` edges from functions/methods to the types
+    they reference in parameters and return types.
+
+    Iterates every method and free function, plus the ``ParameterNode``
+    entries that belong to them, and emits a :class:`DependsOnEntry` for
+    each type that resolves to a known parsed compound.
+
+    Builtin / standard-library types (``int``, ``str``, ``float``,
+    ``Optional``, …) and types with unsupported syntax (generics with
+    bracket arguments) are silently skipped — the same way
+    ``_derive_inheritance`` skips ``Exception``.
+    """
+    # Index every parsed compound for type-name resolution.
+    by_name: dict[str, list[tuple[str, str, str]]] = {}
+    by_qname: dict[str, tuple[str, str]] = {}
+    for comp in result.classes + result.interfaces + result.enums + result.unions:
+        name = getattr(comp, "name", None)
+        refid = getattr(comp, "refid", None)
+        qname = getattr(comp, "qualified_name", None)
+        if not name or not refid or not qname:
+            continue
+        ns = _parent_qualified_name(qname)
+        type_name = type(comp).__name__
+        by_name.setdefault(name, []).append((refid, ns, type_name))
+        by_qname[qname] = (refid, type_name)
+
+    def _resolve(type_str: str, caller_ns: str) -> tuple[str, str] | None:
+        base = _strip_generic_args(type_str)
+        if not base or base.lower() in _PYTHON_BUILTIN_TYPES:
+            return None
+        # Exact dotted-name match (e.g. "samplepkg.errors.CalculatorError").
+        if base in by_qname:
+            refid, type_name = by_qname[base]
+            return refid, type_name
+        candidates = by_name.get(base)
+        if not candidates:
+            # Trailing-component fallback for "module.Name" style.
+            short = base.rsplit(".", 1)[-1]
+            candidates = by_name.get(short)
+        if not candidates:
+            return None
+        # Prefer same-namespace match.
+        same_ns = [c for c in candidates if c[1] == caller_ns]
+        if same_ns:
+            refid, _ns, type_name = same_ns[0]
+            return refid, type_name
+        if len(candidates) == 1:
+            refid, _ns, type_name = candidates[0]
+            return refid, type_name
+        return None
+
+    # Collect all callables (methods + free functions) with their namespace.
+    callables: list[tuple[str, str]] = []  # (refid, ns)
+    for m in result.methods:
+        qname = getattr(m, "qualified_name", None)
+        refid = getattr(m, "refid", None)
+        if qname and refid:
+            callables.append((refid, _parent_qualified_name(qname)))
+    for f in result.functions:
+        qname = getattr(f, "qualified_name", None)
+        refid = getattr(f, "refid", None)
+        if qname and refid:
+            callables.append((refid, _parent_qualified_name(qname)))
+
+    callable_ns = {refid: ns for refid, ns in callables}
+    seen: set[tuple[str, str]] = set()  # (from_refid, to_refid)
+
+    # Parameter types
+    for param in result.parameters:
+        refid = getattr(param, "member_refid", None)
+        ptype = (getattr(param, "type", "") or "").strip()
+        if not refid or not ptype or refid not in callable_ns:
+            continue
+        resolved = _resolve(ptype, callable_ns[refid])
+        if resolved is None:
+            continue
+        to_refid, to_type = resolved
+        if to_refid == refid:  # skip self-references (e.g. classmethod returning cls)
+            continue
+        pair = (refid, to_refid)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        result.depends_on.append(DependsOnEntry(
+            from_refid=refid, to_refid=to_refid, to_type=to_type,
+        ))
+
+    # Return types
+    for m in result.methods:
+        refid = getattr(m, "refid", None)
+        ret = (getattr(m, "type_signature", "") or "").strip()
+        if not refid or not ret or refid not in callable_ns:
+            continue
+        resolved = _resolve(ret, callable_ns[refid])
+        if resolved is None:
+            continue
+        to_refid, to_type = resolved
+        if to_refid == refid:
+            continue
+        pair = (refid, to_refid)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        result.depends_on.append(DependsOnEntry(
+            from_refid=refid, to_refid=to_refid, to_type=to_type,
+        ))
+    for f in result.functions:
+        refid = getattr(f, "refid", None)
+        ret = (getattr(f, "type_signature", "") or "").strip()
+        if not refid or not ret or refid not in callable_ns:
+            continue
+        resolved = _resolve(ret, callable_ns[refid])
+        if resolved is None:
+            continue
+        to_refid, to_type = resolved
+        if to_refid == refid:
+            continue
+        pair = (refid, to_refid)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        result.depends_on.append(DependsOnEntry(
+            from_refid=refid, to_refid=to_refid, to_type=to_type,
+        ))
+
+
+# ---------------------------------------------------------------------------
+# Namespace-level import derivation
+# ---------------------------------------------------------------------------
+
+
+def _derive_namespace_imports(result: ParseResult) -> None:
+    """Derive ``INCLUDES`` edges from namespaces to the compounds they import.
+
+    Uses the existing ``result.includes`` data (file-level import records)
+    to resolve imported symbols to known compound refids, then emits them
+    as namespace-level ``INCLUDES`` edges via ``result.namespace_includes``.
+
+    Only non-excluded files (i.e. not ``__init__.py``) are considered,
+    since ``__init__.py`` re-exports duplicate namespace composition.
+    The source of each edge is the namespace that owns the importing file.
+
+    Relative imports are resolved against the parent package; absolute
+    imports are matched directly against known compounds.
+    """
+    # Build a compound name index for resolution.
+    by_name: dict[str, list[tuple[str, str, str]]] = {}
+    by_qname: dict[str, tuple[str, str]] = {}
+    for comp in result.classes + result.interfaces + result.enums + result.unions:
+        name = getattr(comp, "name", None)
+        refid = getattr(comp, "refid", None)
+        qname = getattr(comp, "qualified_name", None)
+        if not name or not refid or not qname:
+            continue
+        ns = _parent_qualified_name(qname)
+        type_name = type(comp).__name__
+        by_name.setdefault(name, []).append((refid, ns, type_name))
+        by_qname[qname] = (refid, type_name)
+
+    # Namespace refid set (for quick lookup of valid source namespaces).
+    ns_refids = {getattr(ns, "refid", None) for ns in result.namespaces}
+
+    seen: set[tuple[str, str]] = set()
+
+    for inc in result.includes:
+        file_refid = inc.file_refid
+        if not file_refid or file_refid not in ns_refids:
+            continue
+
+        target_name = inc.included_refid or ""
+        if not target_name:
+            continue
+
+        # Resolve relative imports: parent namespace + relative name.
+        if inc.is_local:
+            parent_ns = _parent_qualified_name(file_refid)
+            if parent_ns:
+                target_name = f"{parent_ns}.{target_name}"
+
+        resolved: tuple[str, str] | None = None
+
+        # Exact qualified-name match.
+        if target_name in by_qname:
+            resolved = by_qname[target_name]
+        else:
+            # Short-name match (prefer same-parent-namespace).
+            short = target_name.rsplit(".", 1)[-1]
+            candidates = by_name.get(short)
+            if candidates:
+                parent_ns = _parent_qualified_name(file_refid)
+                same_ns = [c for c in candidates if c[1] == parent_ns]
+                if same_ns:
+                    resolved = (same_ns[0][0], same_ns[0][2])
+                elif len(candidates) == 1:
+                    resolved = (candidates[0][0], candidates[0][2])
+
+        if resolved is None:
+            continue
+        to_refid, to_type = resolved
+        pair = (file_refid, to_refid)
+        if pair in seen:
+            continue
+        seen.add(pair)
+
+        # The source namespace IS the file_refid (module name).
+        result.namespace_includes.append(IncludeEntry(
+            file_refid=file_refid,
+            included_file=inc.included_file,
+            included_refid=to_refid,
+            is_local=inc.is_local,
+        ))
 
 
 # ---------------------------------------------------------------------------

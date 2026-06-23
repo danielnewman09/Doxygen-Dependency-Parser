@@ -123,6 +123,7 @@ def write_result(result: ParseResult) -> None:
 
     # Relationships
     _write_compound_member_connect(result)
+    _write_namespace_composition(result)
     _write_file_relationships()
     _write_include_relationships(result)
     _write_inheritance_relationships()
@@ -227,6 +228,11 @@ def _write_file_relationships() -> None:
         MATCH (f:FileNode {path: m.file_path})
         MERGE (m)-[:DEFINED_IN]->(f)
     """)
+    db.cypher_query("""
+        MATCH (n:NamespaceNode) WHERE n.refid <> ''
+        MATCH (f:FileNode {refid: n.refid})
+        MERGE (n)-[:DEFINED_IN]->(f)
+    """)
     print("  Relationships: DEFINED_IN")
 
 
@@ -247,6 +253,107 @@ def _write_include_relationships(result: ParseResult) -> None:
             """, {"batch": batch})
     unresolved = [i for i in result.includes if not i.included_refid]
     print(f"  Includes: {len(resolved)} resolved, {len(unresolved)} external (skipped)")
+
+
+def _namespace_for(qualified_name: str, module: str = "") -> str:
+    """Determine the containing namespace qualified name.
+
+    For Python: module is like 'codegraph.graph' and qualified_name uses '.'.
+    For C++: module is like 'cpp_sqlite' and qualified_name uses '::'.
+    Falls back to splitting the qualified_name on the last separator.
+    """
+    if module:
+        return module
+    # Try Python-style '.' first, then C++-style '::'
+    if '.' in qualified_name:
+        return qualified_name.rsplit('.', 1)[0]
+    if '::' in qualified_name:
+        return qualified_name.rsplit('::', 1)[0]
+    return ""
+
+
+def _write_namespace_composition(result: ParseResult) -> None:
+    """Create COMPOSES relationships from namespaces to their contained entities.
+
+    For C++ (Doxygen): compounds have compound_refid pointing to their
+    parent namespace refid.
+
+    For Python: the ``module`` field on compounds and the module portion
+    of ``qualified_name`` on functions identify their containing namespace.
+    """
+    # Build namespace lookup by qualified_name (which equals refid)
+    ns_by_qname: dict[str, object] = {ns.qualified_name: ns for ns in result.namespaces}
+
+    success, skipped, failed = 0, 0, 0
+
+    # --- Namespace → ClassNode ---
+    for cls in result.classes:
+        ns_qname = _namespace_for(cls.qualified_name, getattr(cls, 'module', ''))
+        parent_ns = ns_by_qname.get(ns_qname)
+        if parent_ns is None or not hasattr(parent_ns, 'classes'):
+            skipped += 1
+            continue
+        try:
+            parent_ns.classes.connect(cls)
+            success += 1
+        except Exception:
+            failed += 1
+
+    # --- Namespace → InterfaceNode ---
+    for iface in result.interfaces:
+        ns_qname = _namespace_for(iface.qualified_name, getattr(iface, 'module', ''))
+        parent_ns = ns_by_qname.get(ns_qname)
+        if parent_ns is None or not hasattr(parent_ns, 'interfaces'):
+            skipped += 1
+            continue
+        try:
+            parent_ns.interfaces.connect(iface)
+            success += 1
+        except Exception:
+            failed += 1
+
+    # --- Namespace → EnumNode ---
+    for enum in result.enums:
+        ns_qname = _namespace_for(enum.qualified_name, getattr(enum, 'module', ''))
+        parent_ns = ns_by_qname.get(ns_qname)
+        if parent_ns is None or not hasattr(parent_ns, 'enums'):
+            skipped += 1
+            continue
+        try:
+            parent_ns.enums.connect(enum)
+            success += 1
+        except Exception:
+            failed += 1
+
+    # --- Namespace → FunctionNode ---
+    for func in result.functions:
+        ns_qname = _namespace_for(func.qualified_name)
+        parent_ns = ns_by_qname.get(ns_qname)
+        if parent_ns is None or not hasattr(parent_ns, 'functions'):
+            skipped += 1
+            continue
+        try:
+            parent_ns.functions.connect(func)
+            success += 1
+        except Exception:
+            failed += 1
+
+    # --- Namespace → child NamespaceNode (COMPOSES) ---
+    for ns in result.namespaces:
+        if '.' not in ns.qualified_name and '::' not in ns.qualified_name:
+            continue  # top-level namespace has no parent
+        parent_qname = _namespace_for(ns.qualified_name)
+        parent_ns = ns_by_qname.get(parent_qname)
+        if parent_ns is None or not hasattr(parent_ns, 'namespaces'):
+            skipped += 1
+            continue
+        try:
+            parent_ns.namespaces.connect(ns)
+            success += 1
+        except Exception:
+            failed += 1
+
+    print(f"  Relationships: NS_COMPOSES ({success} connected, {skipped} skipped, {failed} failed)")
 
 
 def _write_inheritance_relationships() -> None:

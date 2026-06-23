@@ -1,0 +1,21 @@
+# doxygen-index config for the samplepkg calculator test fixture.
+#
+# Run from this directory (or pass it as the project dir):
+#
+#     doxygen-index project tests/languages/python
+#
+# Parses the samplepkg package and writes the LayerGraph JSON plus an
+# interactive HTML graph into ./codegraph/ (i.e. the
+# tests/languages/python/codegraph/ output directory).
+
+# NOTE: input_paths points at the directory *containing* the package
+# ("."), not the package itself, so module dotted-names are derived as
+# "samplepkg", "samplepkg.backend", ... rather than flattened to "backend".
+[project]
+name = "samplepkg"
+language = "python"
+input_paths = ["."]
+
+[codegraph-html]
+output_dir = "codegraph"
+size = "large"

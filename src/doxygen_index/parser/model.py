@@ -33,6 +33,48 @@ class IncludeEntry:
 
 
 @dataclass
+class CompositionEntry:
+    """A ``COMPOSES`` relationship from a parent namespace to a child.
+
+    Recorded by the language parser (e.g. the Python parser derives it
+    from qualified-name containment) and consumed by ``graph_json`` to
+    emit ``COMPOSES`` edges.  This keeps namespace composition in the
+    parser while leaving ``graph_json`` as a thin consumer.
+    """
+    parent_refid: str
+    child_refid: str
+    child_type: str
+
+
+@dataclass
+class InheritsEntry:
+    """An ``INHERITS_FROM`` relationship from a derived compound to a base.
+
+    Recorded by the language parser (e.g. the Python parser resolves
+    ``base_classes`` names to known compound refids) and consumed by
+    ``graph_json`` to emit ``INHERITS_FROM`` edges.  Bases that don't
+    resolve to any parsed compound (e.g. ``Exception``, ``ABC``, ``Enum``)
+    are simply omitted, so they never produce dangling edges.
+    """
+    from_refid: str
+    to_refid: str
+    to_type: str
+
+
+@dataclass
+class DependsOnEntry:
+    """A ``DEPENDS_ON`` relationship from a function/method to a type it uses.
+
+    Recorded by the language parser: parameter types and return types are
+    resolved to known compound refids (skipping builtins).  Consumed by
+    ``graph_json`` to emit ``DEPENDS_ON`` edges.
+    """
+    from_refid: str
+    to_refid: str
+    to_type: str
+
+
+@dataclass
 class TemplateParamEntry:
     """A single template parameter extracted from <templateparamlist>."""
     type_constraint: str = ""
@@ -115,6 +157,13 @@ class ParseResult:
     functions: list[FunctionNode] = field(default_factory=list)
     parameters: list[ParameterNode] = field(default_factory=list)
     includes: list[IncludeEntry] = field(default_factory=list)
+    compositions: list[CompositionEntry] = field(default_factory=list)
+    inherits: list[InheritsEntry] = field(default_factory=list)
+    depends_on: list[DependsOnEntry] = field(default_factory=list)
+    # Resolved namespace-level imports: namespace → imported compound.
+    # Derived from ``result.includes`` by resolving relative import names
+    # to full qualified refids; emitted as INCLUDES edges on NamespaceNode.
+    namespace_includes: list[IncludeEntry] = field(default_factory=list)
     invokes: list[InvokeEntry] = field(default_factory=list)
     invoked_by: list[InvokeEntry] = field(default_factory=list)
     template_param_refs: list[TemplateParamRef] = field(default_factory=list)

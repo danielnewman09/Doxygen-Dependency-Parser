@@ -24,6 +24,8 @@ from pathlib import Path
 # Re-export data model
 from doxygen_index.parser.model import (
     IncludeEntry,
+    CompositionEntry,
+    InheritsEntry,
     TemplateParamEntry,
     TemplateParamRef,
     SpecializesRef,
@@ -94,21 +96,26 @@ def parse_xml_dir(
 
 
 def parse_python_dir(
-    source_dir: Path,
+    source_dir: Path | list[Path],
     source: str = "python",
     progress_interval: int = 50,
     layer: str = "codebase",
     language_parser: PythonParser | None = None,
+    exclude_dirs: list[str] | None = None,
 ) -> ParseResult:
-    """Parse all Python source files in a directory and return a ParseResult.
+    """Parse all Python source files in a directory (or directories) and return a ParseResult.
 
     Args:
-        source_dir: Root directory of the Python package to parse.
+        source_dir: Root directory of the Python package to parse, or a list
+            of directories.  When a list is given, each directory is parsed
+            into the same :class:`ParseResult`.
         source: Source label for provenance tracking.
-        progress_interval: Print progress every N files (0 to disable).
+        progress_interval: Print progress every N files (0 disables).
         layer: Layer label ("codebase" or "dependency").
         language_parser: Python parser instance. Defaults to a new
             :class:`PythonParser`.
+        exclude_dirs: Directory names to skip (e.g. ``[".venv", "build"]``).
+            Defaults to :data:`~doxygen_index.parser.python_parser.DEFAULT_EXCLUDE_DIRS`.
 
     Returns:
         ParseResult with all parsed data.
@@ -116,7 +123,18 @@ def parse_python_dir(
     if language_parser is None:
         language_parser = PythonParser()
 
+    exclude_set = set(exclude_dirs) if exclude_dirs else None
+
+    # Normalise to list
+    if isinstance(source_dir, (list, tuple)):
+        dirs = [Path(d) for d in source_dir]
+    else:
+        dirs = [Path(source_dir)]
+
     result = ParseResult()
-    language_parser.parse_source_dir(source_dir, source, result, layer, progress_interval)
+    for d in dirs:
+        language_parser.parse_source_dir(
+            d, source, result, layer, progress_interval, exclude_dirs=exclude_set,
+        )
     language_parser.post_process(result)
     return result

@@ -1,0 +1,8 @@
+[project]
+name = "doxygen-index"
+language = "python"
+input_paths = ["src"]
+output_dir = "."
+
+[codegraph-html]
+output_dir = "codegraph"

@@ -843,3 +843,293 @@ class TestExtractImplementations:
         """))
         result = parse_xml_dir(tmp_path, source="test", progress_interval=0)
         assert len(result.implementations) == 0  # File not found, skipped
+
+
+class TestProjectConfig:
+    """Tests for .doxygen-index.toml loading (project.py)."""
+
+    def test_load_cpp_config(self, tmp_path):
+        """Loading a C++ project config."""
+        from doxygen_index.project import load_config
+
+        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
+            [project]
+            name = "mylib"
+            input_paths = ["include", "src"]
+        """))
+        (tmp_path / "include").mkdir()
+        (tmp_path / "src").mkdir()
+
+        config, config_dir = load_config(tmp_path)
+        assert config.name == "mylib"
+        assert config.language == "cpp"  # default
+        assert len(config.input_paths) == 2
+        assert config.input_paths[0] == (tmp_path / "include").resolve()
+        assert config_dir == tmp_path.resolve()
+
+    def test_load_python_config(self, tmp_path):
+        """Loading a Python project config."""
+        from doxygen_index.project import load_config
+
+        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
+            [project]
+            name = "myapp"
+            language = "python"
+            input_paths = ["src"]
+            exclude_patterns = "build dist"
+        """))
+        (tmp_path / "src").mkdir()
+
+        config, _ = load_config(tmp_path)
+        assert config.name == "myapp"
+        assert config.language == "python"
+        assert config.exclude_patterns == "build dist"
+
+    def test_missing_config_exits(self, tmp_path):
+        """Missing config file should exit with an error."""
+        from doxygen_index.project import load_config
+
+        with pytest.raises(SystemExit):
+            load_config(tmp_path)
+
+    def test_missing_name_exits(self, tmp_path):
+        """Config without 'name' should exit."""
+        from doxygen_index.project import load_config
+
+        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
+            [project]
+            input_paths = ["src"]
+        """))
+        with pytest.raises(SystemExit):
+            load_config(tmp_path)
+
+
+class TestPythonParsing:
+    """Tests for Python source parsing via the CLI project command."""
+
+    @pytest.fixture
+    def py_project(self, tmp_path):
+        """Create a small Python project with a .doxygen-index.toml."""
+        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
+            [project]
+            name = "test_py"
+            language = "python"
+            input_paths = ["src"]
+        """))
+        src = tmp_path / "src" / "mypkg"
+        src.mkdir(parents=True)
+        (src / "__init__.py").write_text('"""My package."""\n')
+        (src / "core.py").write_text(textwrap.dedent("""\
+            \"\"\"Core module.\"\"\"
+
+            class Widget:
+                \"\"\"A widget.\"\"\"
+
+                def __init__(self, name: str):
+                    self.name = name
+
+                def render(self) -> str:
+                    return self.name
+
+            def factory() -> Widget:
+                \"\"\"Create a widget.\"\"\"
+                return Widget("default")
+        """))
+        return tmp_path
+
+    def test_parse_python_dir_basic(self, py_project):
+        """parse_python_dir should extract classes, methods, and functions."""
+        from doxygen_index.parser import parse_python_dir
+
+        result = parse_python_dir(
+            py_project / "src",
+            source="test_py",
+            progress_interval=0,
+        )
+        assert len(result.classes) == 1
+        assert result.classes[0].name == "Widget"
+        assert len(result.methods) == 2  # __init__ + render
+        assert len(result.functions) == 1  # factory
+
+    def test_parse_python_dir_multiple_paths(self, py_project):
+        """parse_python_dir should accept a list of paths."""
+        from doxygen_index.parser import parse_python_dir
+
+        # Add a second source dir
+        second = py_project / "extra"
+        second.mkdir()
+        (second / "helper.py").write_text(textwrap.dedent("""\
+            def helper():
+                pass
+        """))
+
+        result = parse_python_dir(
+            [py_project / "src", second],
+            source="test_py",
+            progress_interval=0,
+        )
+        assert len(result.functions) >= 2  # factory + helper
+
+    def test_exclude_dirs(self, py_project):
+        """Files in excluded directories should be skipped."""
+        from doxygen_index.parser import parse_python_dir
+
+        # Create a .venv with a .py file
+        venv = py_project / "src" / ".venv"
+        venv.mkdir()
+        (venv / "junk.py").write_text("class ShouldNotAppear:\n    pass\n")
+
+        result = parse_python_dir(
+            py_project / "src",
+            source="test_py",
+            progress_interval=0,
+        )
+        class_names = [c.name for c in result.classes]
+        assert "Widget" in class_names
+        assert "ShouldNotAppear" not in class_names
+
+    def test_custom_exclude_dirs(self, py_project):
+        """User-specified exclude_dirs should be respected."""
+        from doxygen_index.parser import parse_python_dir
+
+        # Create a 'custom_excl' dir with a .py file
+        excl = py_project / "src" / "custom_excl"
+        excl.mkdir()
+        (excl / "excluded.py").write_text("class Excluded:\n    pass\n")
+
+        result = parse_python_dir(
+            py_project / "src",
+            source="test_py",
+            progress_interval=0,
+            exclude_dirs=["custom_excl"],
+        )
+        class_names = [c.name for c in result.classes]
+        assert "Excluded" not in class_names
+
+
+class TestHtmlConfig:
+    """Tests for [codegraph-html] section in .doxygen-index.toml."""
+
+    def test_html_config_loaded(self, tmp_path):
+        """[codegraph-html] section should produce an HtmlConfig."""
+        from doxygen_index.project import load_config
+
+        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
+            [project]
+            name = "myapp"
+            language = "python"
+            input_paths = ["src"]
+
+            [codegraph-html]
+            output_dir = "codegraph"
+            size = "small"
+        """))
+        (tmp_path / "src").mkdir()
+
+        config, _ = load_config(tmp_path)
+        assert config.html_config is not None
+        assert config.html_config.output_dir == (tmp_path / "codegraph").resolve()
+        assert config.html_config.size == "small"
+
+    def test_html_config_defaults(self, tmp_path):
+        """[codegraph-html] with no options should use defaults."""
+        from doxygen_index.project import load_config
+
+        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
+            [project]
+            name = "myapp"
+            language = "python"
+            input_paths = ["src"]
+
+            [codegraph-html]
+        """))
+        (tmp_path / "src").mkdir()
+
+        config, _ = load_config(tmp_path)
+        assert config.html_config is not None
+        assert config.html_config.output_dir == (tmp_path / "codegraph").resolve()
+        assert config.html_config.size == "large"
+
+    def test_no_html_config(self, tmp_path):
+        """Config without [codegraph-html] should have html_config=None."""
+        from doxygen_index.project import load_config
+
+        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
+            [project]
+            name = "myapp"
+            language = "python"
+            input_paths = ["src"]
+        """))
+        (tmp_path / "src").mkdir()
+
+        config, _ = load_config(tmp_path)
+        assert config.html_config is None
+
+
+class TestGraphJson:
+    """Tests for ParseResult → LayerGraph JSON conversion."""
+
+    def test_result_to_graph_json(self, tmp_path):
+        """result_to_graph_json should produce valid LayerGraph-compatible JSON."""
+        from doxygen_index.parser import parse_python_dir
+        from doxygen_index.graph_json import result_to_graph_json
+
+        # Create a small Python project
+        src = tmp_path / "src" / "mypkg"
+        src.mkdir(parents=True)
+        (src / "__init__.py").write_text('"""My package."""\n')
+        (src / "core.py").write_text(textwrap.dedent("""\
+            class Widget:
+                def __init__(self):
+                    pass
+                def render(self):
+                    pass
+
+            def factory():
+                return Widget()
+        """))
+
+        result = parse_python_dir(tmp_path / "src", source="test", progress_interval=0)
+        graph_data = result_to_graph_json(result, source="test")
+
+        # Should be a list of node dicts
+        assert isinstance(graph_data, list)
+        assert len(graph_data) > 0
+
+        # Each entry should have type and tags
+        for entry in graph_data:
+            assert "type" in entry
+            assert "tags" in entry
+            assert entry["tags"] == ["as-built"]
+
+        # Should contain a ClassNode for Widget
+        types = [e["type"] for e in graph_data]
+        assert "ClassNode" in types
+
+        # Should have COMPOSES edges from class to methods
+        has_composes = any(
+            any(e.get("relation_type") == "COMPOSES" for e in entry.get("edges", []))
+            for entry in graph_data
+        )
+        assert has_composes
+
+    def test_graph_json_deserializable(self, tmp_path):
+        """The JSON should be consumable by LayerGraph.deserialize."""
+        from codegraph.graph import LayerGraph
+        from doxygen_index.parser import parse_python_dir
+        from doxygen_index.graph_json import result_to_graph_json
+
+        src = tmp_path / "src"
+        src.mkdir()
+        (src / "mod.py").write_text(textwrap.dedent("""\
+            class Foo:
+                def bar(self):
+                    pass
+        """))
+
+        result = parse_python_dir(tmp_path / "src", source="test", progress_interval=0)
+        graph_data = result_to_graph_json(result, source="test")
+
+        # This should not raise
+        graph = LayerGraph.deserialize(graph_data)
+        assert len(graph.entries) > 0
