@@ -52,6 +52,11 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
         result.defines,
         result.functions,
         result.parameters,
+        result.tests,
+        result.assertions,
+        result.test_steps,
+        result.test_fixtures,
+        result.literals,
     ]
 
     # Build refid → uid mapping for edge target resolution.
@@ -244,6 +249,77 @@ def _build_node_edges(
                     "relation_type": "DEPENDS_ON",
                     "target_uid": dep.to_refid,
                     "target_type": dep.to_type,
+                })
+
+    # --- VERIFIES (outgoing: TestNode → tested code) ---
+    if node_refid:
+        for ver in result.verifies:
+            if ver.from_refid == node_refid and ver.to_refid in refid_to_uid:
+                edges.append({
+                    "relation_type": "VERIFIES",
+                    "target_uid": ver.to_refid,
+                    "target_type": ver.to_type,
+                })
+
+    # --- LEFT_OPERAND / RIGHT_OPERAND (outgoing: AssertionNode → operand) ---
+    if node_refid:
+        for op in result.operands:
+            if op.from_refid == node_refid and op.to_refid in refid_to_uid:
+                relation = "LEFT_OPERAND" if op.side == "left" else "RIGHT_OPERAND"
+                edges.append({
+                    "relation_type": relation,
+                    "target_uid": op.to_refid,
+                    "target_type": op.to_type,
+                })
+
+    # --- CALLEE (outgoing: TestStepNode → called method/function) ---
+    if node_refid:
+        for cal in result.callees:
+            if cal.from_refid == node_refid and cal.to_refid in refid_to_uid:
+                edges.append({
+                    "relation_type": "CALLEE",
+                    "target_uid": cal.to_refid,
+                    "target_type": cal.to_type,
+                })
+
+    # --- COMPOSES (outgoing: TestNode → AssertionNode/TestStepNode) ---
+    if node_refid:
+        for tc in result.test_compositions:
+            if tc.parent_refid == node_refid and tc.child_refid in refid_to_uid:
+                edges.append({
+                    "relation_type": "COMPOSES",
+                    "target_uid": tc.child_refid,
+                    "target_type": tc.child_type,
+                })
+
+    # --- OF_TYPE (outgoing: TestFixtureNode → type definition) ---
+    if node_refid:
+        for fo in result.fixture_of_types:
+            if fo.from_refid == node_refid and fo.to_refid in refid_to_uid:
+                edges.append({
+                    "relation_type": "OF_TYPE",
+                    "target_uid": fo.to_refid,
+                    "target_type": fo.to_type,
+                })
+
+    # --- CHECKED_BY (outgoing: TestFixtureNode → AssertionNode) ---
+    if node_refid:
+        for cb in result.fixture_checked_by:
+            if cb.from_refid == node_refid and cb.to_refid in refid_to_uid:
+                edges.append({
+                    "relation_type": "CHECKED_BY",
+                    "target_uid": cb.to_refid,
+                    "target_type": "AssertionNode",
+                })
+
+    # --- DEFINED_IN (outgoing: TestFixtureNode → TestStepNode) ---
+    if node_refid:
+        for di in result.fixture_defined_in:
+            if di.from_refid == node_refid and di.to_refid in refid_to_uid:
+                edges.append({
+                    "relation_type": "DEFINED_IN",
+                    "target_uid": di.to_refid,
+                    "target_type": "TestStepNode",
                 })
 
     return edges

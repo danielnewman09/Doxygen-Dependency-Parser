@@ -44,6 +44,7 @@ class ProjectConfig:
     recursive: bool = True
     exclude_patterns: str = ""          # Doxygen EXCLUDE_PATTERNS / Python glob excludes
     predefined: str = ""                # Doxygen PREDEFINED macros
+    test_paths: list[Path] = None        # directories containing test files (Python only)
 
 
 def load_config(project_dir: Path | str) -> tuple[ProjectConfig, Path]:
@@ -92,6 +93,15 @@ def load_config(project_dir: Path | str) -> tuple[ProjectConfig, Path]:
     output_dir_raw = proj.get("output_dir")
     resolved_output_dir = (base / output_dir_raw).resolve() if output_dir_raw else None
 
+    # Resolve test_paths (relative to config file directory)
+    test_paths_raw = proj.get("test_paths", [])
+    resolved_test_paths = [
+        (base / p).resolve() for p in test_paths_raw
+    ] if test_paths_raw else None
+    for p in (resolved_test_paths or []):
+        if not p.exists():
+            print(f"Warning: test path does not exist: {p}", file=sys.stderr)
+
     # Parse optional [codegraph-html] section
     html_config = None
     if "codegraph-html" in data:
@@ -112,6 +122,7 @@ def load_config(project_dir: Path | str) -> tuple[ProjectConfig, Path]:
         recursive=proj.get("recursive", True),
         exclude_patterns=proj.get("exclude_patterns", ""),
         predefined=proj.get("predefined", ""),
+        test_paths=resolved_test_paths,
     ), project_dir
 
 
@@ -127,6 +138,7 @@ input_paths = ["include", "src"]
 # recursive = true
 # exclude_patterns = "*/test/* */build/*"
 # predefined = "SOME_MACRO=1"
+# test_paths = ["tests"]       # Python: also parse test dirs for TestNode extraction
 
 # [codegraph-html]        # uncomment to enable HTML graph visualization
 # output_dir = "codegraph"  # where to write JSON + HTML (default: codegraph)

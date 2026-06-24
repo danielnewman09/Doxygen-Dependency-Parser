@@ -48,3 +48,4 @@ packages = ["src/doxygen_index"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+norecursedirs = ["tests/languages/python/samplepkg"]

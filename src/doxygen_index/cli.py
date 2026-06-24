@@ -105,6 +105,10 @@ def cmd_project(args: argparse.Namespace) -> None:
 
     xml_dir: Path | None = None  # only set for C++
 
+    # --neo4j is a shorthand for --format neo4j
+    if getattr(args, 'neo4j', False):
+        args.format = "neo4j"
+
     if config.language == "python":
         result = _parse_python_project(args, config)
     elif config.language == "cpp":
@@ -117,6 +121,47 @@ def cmd_project(args: argparse.Namespace) -> None:
     # --generate-only exits early (C++ only)
     if args.generate_only:
         return
+
+    # ------------------------------------------------------------------
+    # LLM enrichment (optional — requires LLM_API_KEY)
+    # ------------------------------------------------------------------
+    if args.enrich:
+        from doxygen_index.enrich import (
+            enrich_result, enrichment_available, check_enrichment_config,
+        )
+        try:
+            check_enrichment_config()
+        except RuntimeError as exc:
+            print(f"Warning: enrichment skipped — {exc}", file=sys.stderr)
+        else:
+            print("\n--- LLM enrichment ---")
+            if args.dry_run_enrich:
+                print("(dry-run mode — prompts built, no LLM calls)")
+            else:
+                from doxygen_index.enrich import preflight_check
+                try:
+                    preflight_check()
+                except RuntimeError as exc:
+                    print(f"Error: enrichment aborted — {exc}", file=sys.stderr)
+                    return
+            summary = enrich_result(
+                result,
+                dry_run=args.dry_run_enrich,
+                overwrite=args.overwrite_enrich,
+                log_dir=output_dir / "logs" if not args.dry_run_enrich else None,
+                batch_size=args.enrich_batch_size,
+            )
+            print(f"  Enriched: {summary.total_enriched}")
+            print(f"  Skipped:  {summary.total_skipped}")
+            if summary.total_errors:
+                print(f"  Errors:   {summary.total_errors}")
+            if args.output_enrich_summary:
+                summary_path = output_dir / f"{config.name}_enrichment_summary.json"
+                summary_path.write_text(
+                    json.dumps(summary.to_dict(), indent=2),
+                    encoding="utf-8",
+                )
+                print(f"  Summary:  {summary_path}")
 
     # ------------------------------------------------------------------
     # Output
@@ -159,6 +204,11 @@ def cmd_project(args: argparse.Namespace) -> None:
     print(f"  Files:        {len(result.files)}")
     print(f"  Includes:     {len(result.includes)}")
     print(f"  Invokes:      {len(result.invokes)}")
+    if result.tests:
+        print(f"  Tests:        {len(result.tests)}")
+        print(f"  Test fixtures:{len(result.test_fixtures)}")
+        print(f"  Assertions:   {len(result.assertions)}")
+        print(f"  Test steps:   {len(result.test_steps)}")
     if args.format != "neo4j":
         print(f"\nOutput: {json_path}")
 
@@ -170,6 +220,10 @@ def _parse_python_project(
     """Parse a Python project using the AST-based parser.
 
     No external tools required — uses Python's ``ast`` module.
+    Source directories from ``config.input_paths`` are always parsed.
+    Test directories (from ``--test-paths`` CLI flag or ``test_paths``
+    in the config file) are also parsed so that ``test_*`` functions
+    and ``Test*`` classes are extracted as :class:`TestNode` instances.
     """
     from doxygen_index.parser import parse_python_dir
 
@@ -178,9 +232,25 @@ def _parse_python_project(
     if config.exclude_patterns:
         user_excludes = config.exclude_patterns.split()
 
+    # Collect all directories to parse: source + test paths
+    all_dirs = list(config.input_paths)
+
+    # Test paths: CLI flag overrides config
+    test_paths = None
+    if getattr(args, 'test_paths', None):
+        test_paths = [Path(p).resolve() for p in args.test_paths]
+    elif config.test_paths:
+        test_paths = config.test_paths
+
+    if test_paths:
+        for tp in test_paths:
+            if tp not in all_dirs:
+                all_dirs.append(tp)
+                print(f"  Including test path: {tp}")
+
     print(f"\nParsing Python source...")
     result = parse_python_dir(
-        config.input_paths,
+        all_dirs,
         source=config.name,
         layer="codebase",
         exclude_dirs=user_excludes or None,
@@ -529,9 +599,26 @@ def main() -> None:
                     help="Only parse existing XML, skip Doxygen generation (C++ only)")
     sp.add_argument("--xml-dir", default=None,
                     help="XML directory to parse (required with --parse-only)")
+    sp.add_argument("--test-paths", nargs="*", default=None,
+                    help="Directories containing test files to also parse (Python only). "
+                         "Overrides test_paths in .doxygen-index.toml.")
     _add_db_args(sp)
     sp.add_argument("--clear", action="store_true",
                     help="Clear existing data for this source before ingesting")
+    # LLM enrichment options
+    sp.add_argument("--enrich", action="store_true",
+                    help="Enrich test node descriptions using an LLM "
+                         "(requires LLM_API_KEY env var). "
+                         "Runs a preflight check and shows per-node progress.")
+    sp.add_argument("--dry-run-enrich", action="store_true",
+                    help="With --enrich: build prompts but do not call the LLM")
+    sp.add_argument("--overwrite-enrich", action="store_true",
+                    help="With --enrich: overwrite existing descriptions "
+                         "(default: skip already-described nodes)")
+    sp.add_argument("--output-enrich-summary", action="store_true",
+                    help="With --enrich: write enrichment summary JSON to output dir")
+    sp.add_argument("--enrich-batch-size", type=int, default=10, metavar="N",
+                    help="With --enrich: nodes per LLM batch call (default: 10)")
     sp.set_defaults(func=cmd_project)
 
     # html — generate HTML graph from existing parse output

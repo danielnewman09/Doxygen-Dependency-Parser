@@ -22,8 +22,13 @@ from codegraph import (  # noqa: F401 — needed for install_all_labels
     FileNode, NamespaceNode, ParameterNode,
     ImplementationNode,
 )
+from codegraph.models.test import (  # noqa: F401 — needed for install_all_labels
+    TestNode, AssertionNode, TestStepNode, TestFixtureNode,
+)
+from codegraph.models.literal import LiteralNode  # noqa: F401
 
 from doxygen_index.parser import ParseResult, parse_xml_dir, TemplateParamRef, SpecializesRef, ImplementationRef
+from doxygen_index.parser.model import VerifiesEntry, OperandEntry, CalleeEntry, TestCompositionEntry, FixtureOfTypeEntry, FixtureCheckedByEntry, FixtureDefinedInEntry
 
 
 # ---------------------------------------------------------------------------
@@ -121,6 +126,21 @@ def clear_source(source: str) -> None:
          {"src": source}),
         ("MATCH (f:FileNode {source: $src}) DETACH DELETE f",
          {"src": source}),
+        # Delete test-related nodes (TestNode, AssertionNode, TestStepNode,
+        # LiteralNode, TestFixtureNode)
+        ("MATCH (a:AssertionNode {source: $src}) DETACH DELETE a",
+         {"src": source}),
+        ("MATCH (s:TestStepNode {source: $src}) DETACH DELETE s",
+         {"src": source}),
+        # Delete TestFixtureNode BEFORE TestNode — TestFixtureNode has its
+        # own 'source' property so we can delete directly without relying
+        # on the COMPOSES relationship to parent TestNodes.
+        ("MATCH (f:TestFixtureNode {source: $src}) DETACH DELETE f",
+         {"src": source}),
+        ("MATCH (t:TestNode {source: $src}) DETACH DELETE t",
+         {"src": source}),
+        ("MATCH (l:LiteralNode {source: $src}) DETACH DELETE l",
+         {"src": source}),
     ]
     for query, params in queries:
         db.cypher_query(query, params)
@@ -158,11 +178,14 @@ def write_result(result: ParseResult) -> None:
         result.enums, result.unions, result.interfaces, result.concepts,
         result.methods, result.attributes, result.enum_values,
         result.defines, result.functions, result.implementations,
+        result.tests, result.assertions, result.test_steps,
+        result.test_fixtures, result.literals,
     ]
     batch_labels = [
         "Files", "Namespaces", "Classes", "Enums", "Unions",
         "Interfaces", "Concepts", "Methods", "Attributes", "EnumValues",
         "Defines", "Functions", "Implementations",
+        "Tests", "Assertions", "TestSteps", "TestFixtures", "Literals",
     ]
     # Persist nodes, replacing result lists in-place with saved instances
     # so element_id is set for subsequent .connect() calls.
@@ -190,6 +213,13 @@ def write_result(result: ParseResult) -> None:
     _write_template_param_relationships(result)
     _write_invoke_relationships(result)
     _write_implementation_relationships(result)
+    _write_test_composition_relationships(result)
+    _write_verifies_relationships(result)
+    _write_operand_relationships(result)
+    _write_callee_relationships(result)
+    _write_of_type_relationships(result)
+    _write_checked_by_relationships(result)
+    _write_defined_in_relationships(result)
 
 
 # ---------------------------------------------------------------------------
@@ -581,7 +611,7 @@ def _write_implementation_relationships(result: ParseResult) -> None:
     # Build refid → saved member lookup
     member_by_refid: dict[str, object] = {}
     for node_list in [result.methods, result.attributes, result.enum_values,
-                      result.defines, result.functions]:
+                      result.defines, result.functions, result.test_steps]:
         for node in node_list:
             member_by_refid[node.refid] = node
 
@@ -627,6 +657,188 @@ def _write_invoke_relationships(result: ParseResult) -> None:
         if results:
             created += results[0][0]
     print(f"  Invokes: {created} (of {len(batch_dicts)} references)")
+
+
+# ---------------------------------------------------------------------------
+# Test-related relationship writers
+# ---------------------------------------------------------------------------
+
+def _write_test_composition_relationships(result: ParseResult) -> None:
+    """Create COMPOSES edges for test relationships.
+
+    Two kinds:
+    - Namespace → TestNode (from result.compositions where child_type is TestNode)
+    - TestNode → AssertionNode / TestStepNode (from result.test_compositions)
+    """
+    # Namespace → TestNode
+    ns_test_count = 0
+    for comp in result.compositions:
+        if comp.child_type == "TestNode":
+            db.cypher_query("""
+                MATCH (ns:NamespaceNode {refid: $parent})
+                MATCH (t:TestNode {refid: $child})
+                MERGE (ns)-[:COMPOSES]->(t)
+            """, {"parent": comp.parent_refid, "child": comp.child_refid})
+            ns_test_count += 1
+
+    # TestNode → AssertionNode / TestStepNode
+    child_count = 0
+    if result.test_compositions:
+        batch_dicts = [asdict(tc) for tc in result.test_compositions]
+        batch_size = 1000
+        for i in range(0, len(batch_dicts), batch_size):
+            batch = batch_dicts[i:i + batch_size]
+            results, _meta = db.cypher_query("""
+                UNWIND $batch AS row
+                MATCH (parent:TestNode {refid: row.parent_refid})
+                MATCH (child {refid: row.child_refid})
+                MERGE (parent)-[:COMPOSES]->(child)
+                RETURN count(*) AS cnt
+            """, {"batch": batch})
+            if results:
+                child_count += results[0][0]
+
+    print(f"  Relationships: TEST_COMPOSES ({ns_test_count} ns→test, {child_count} test→children)")
+
+
+def _write_verifies_relationships(result: ParseResult) -> None:
+    """Create VERIFIES edges from TestNode to tested code nodes."""
+    if not result.verifies:
+        print("  Relationships: VERIFIES (0 edges)")
+        return
+    batch_dicts = [asdict(v) for v in result.verifies]
+    batch_size = 1000
+    created = 0
+    for i in range(0, len(batch_dicts), batch_size):
+        batch = batch_dicts[i:i + batch_size]
+        results, _meta = db.cypher_query("""
+            UNWIND $batch AS row
+            MATCH (test:TestNode {refid: row.from_refid})
+            MATCH (target {refid: row.to_refid})
+            MERGE (test)-[:VERIFIES]->(target)
+            RETURN count(*) AS cnt
+        """, {"batch": batch})
+        if results:
+            created += results[0][0]
+    print(f"  Relationships: VERIFIES ({created} edges)")
+
+
+def _write_operand_relationships(result: ParseResult) -> None:
+    """Create LEFT_OPERAND and RIGHT_OPERAND edges from AssertionNode to operands."""
+    if not result.operands:
+        print("  Relationships: OPERANDS (0 edges)")
+        return
+    batch_dicts = [asdict(o) for o in result.operands]
+    batch_size = 1000
+    left_count = 0
+    right_count = 0
+    for side, rel_type, counter in [("left", "LEFT_OPERAND", "left"), ("right", "RIGHT_OPERAND", "right")]:
+        side_batch = [b for b in batch_dicts if b["side"] == side]
+        if not side_batch:
+            continue
+        for i in range(0, len(side_batch), batch_size):
+            batch = side_batch[i:i + batch_size]
+            results, _meta = db.cypher_query(f"""
+                UNWIND $batch AS row
+                MATCH (assertion:AssertionNode {{refid: row.from_refid}})
+                MATCH (operand {{refid: row.to_refid}})
+                MERGE (assertion)-[:{rel_type}]->(operand)
+                RETURN count(*) AS cnt
+            """, {"batch": batch})
+            if results:
+                if side == "left":
+                    left_count += results[0][0]
+                else:
+                    right_count += results[0][0]
+    print(f"  Relationships: LEFT_OPERAND ({left_count} edges), RIGHT_OPERAND ({right_count} edges)")
+
+
+def _write_callee_relationships(result: ParseResult) -> None:
+    """Create CALLEE edges from TestStepNode to called methods/functions/classes."""
+    if not result.callees:
+        print("  Relationships: CALLEE (0 edges)")
+        return
+    batch_dicts = [asdict(c) for c in result.callees]
+    batch_size = 1000
+    created = 0
+    for i in range(0, len(batch_dicts), batch_size):
+        batch = batch_dicts[i:i + batch_size]
+        results, _meta = db.cypher_query("""
+            UNWIND $batch AS row
+            MATCH (step:TestStepNode {refid: row.from_refid})
+            MATCH (callee {refid: row.to_refid})
+            MERGE (step)-[:CALLEE]->(callee)
+            RETURN count(*) AS cnt
+        """, {"batch": batch})
+        if results:
+            created += results[0][0]
+    print(f"  Relationships: CALLEE ({created} edges)")
+
+
+def _write_of_type_relationships(result: ParseResult) -> None:
+    """Create OF_TYPE edges from TestFixtureNode to type definitions."""
+    if not result.fixture_of_types:
+        print("  Relationships: OF_TYPE (0 edges)")
+        return
+    batch_dicts = [asdict(fo) for fo in result.fixture_of_types]
+    batch_size = 1000
+    created = 0
+    for i in range(0, len(batch_dicts), batch_size):
+        batch = batch_dicts[i:i + batch_size]
+        results, _meta = db.cypher_query("""
+            UNWIND $batch AS row
+            MATCH (fixture:TestFixtureNode {refid: row.from_refid})
+            MATCH (target {refid: row.to_refid})
+            MERGE (fixture)-[:OF_TYPE]->(target)
+            RETURN count(*) AS cnt
+        """, {"batch": batch})
+        if results:
+            created += results[0][0]
+    print(f"  Relationships: OF_TYPE ({created} edges)")
+
+
+def _write_checked_by_relationships(result: ParseResult) -> None:
+    """Create CHECKED_BY edges from TestFixtureNode to AssertionNode."""
+    if not result.fixture_checked_by:
+        print("  Relationships: CHECKED_BY (0 edges)")
+        return
+    batch_dicts = [asdict(cb) for cb in result.fixture_checked_by]
+    batch_size = 1000
+    created = 0
+    for i in range(0, len(batch_dicts), batch_size):
+        batch = batch_dicts[i:i + batch_size]
+        results, _meta = db.cypher_query("""
+            UNWIND $batch AS row
+            MATCH (fixture:TestFixtureNode {refid: row.from_refid})
+            MATCH (assertion:AssertionNode {refid: row.to_refid})
+            MERGE (fixture)-[:CHECKED_BY]->(assertion)
+            RETURN count(*) AS cnt
+        """, {"batch": batch})
+        if results:
+            created += results[0][0]
+    print(f"  Relationships: CHECKED_BY ({created} edges)")
+
+
+def _write_defined_in_relationships(result: ParseResult) -> None:
+    """Create DEFINED_IN edges from TestFixtureNode to TestStepNode."""
+    if not result.fixture_defined_in:
+        print("  Relationships: DEFINED_IN (0 edges)")
+        return
+    batch_dicts = [asdict(di) for di in result.fixture_defined_in]
+    batch_size = 1000
+    created = 0
+    for i in range(0, len(batch_dicts), batch_size):
+        batch = batch_dicts[i:i + batch_size]
+        results, _meta = db.cypher_query("""
+            UNWIND $batch AS row
+            MATCH (fixture:TestFixtureNode {refid: row.from_refid})
+            MATCH (step:TestStepNode {refid: row.to_refid})
+            MERGE (fixture)-[:DEFINED_IN]->(step)
+            RETURN count(*) AS cnt
+        """, {"batch": batch})
+        if results:
+            created += results[0][0]
+    print(f"  Relationships: DEFINED_IN ({created} edges)")
 
 
 # ---------------------------------------------------------------------------

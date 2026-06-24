@@ -17,6 +17,8 @@ from codegraph import (
     FileNode, NamespaceNode, ParameterNode,
     ImplementationNode,
 )
+from codegraph.models.test import TestNode, AssertionNode, TestStepNode, TestFixtureNode
+from codegraph.models.literal import LiteralNode
 
 
 # ---------------------------------------------------------------------------
@@ -135,6 +137,77 @@ class ImplementationRef:
     implementation: ImplementationNode
 
 
+@dataclass
+class VerifiesEntry:
+    """A VERIFIES relationship from a TestNode to the code it tests."""
+    from_refid: str
+    to_refid: str
+    to_type: str
+
+
+@dataclass
+class OperandEntry:
+    """A LEFT_OPERAND or RIGHT_OPERAND from AssertionNode to a code node."""
+    from_refid: str
+    to_refid: str
+    to_type: str
+    side: str  # "left" or "right"
+
+
+@dataclass
+class CalleeEntry:
+    """A CALLEE relationship from TestStepNode to a called method/function."""
+    from_refid: str
+    to_refid: str
+    to_type: str
+
+
+@dataclass
+class TestCompositionEntry:
+    """COMPOSES from TestNode to its AssertionNode/TestStepNode children."""
+    parent_refid: str
+    child_refid: str
+    child_type: str
+
+
+@dataclass
+class FixtureOfTypeEntry:
+    """An OF_TYPE relationship from a TestFixtureNode to its type definition.
+
+    Recorded by the Python parser when it detects a variable assignment
+    like ``evaluator = Evaluator(0.0)`` inside a test.  The fixture is a
+    :class:`TestFixtureNode`; ``to_refid`` points to the type definition
+    node (e.g. the ``Evaluator`` ClassNode).  Consumed by ``graph_json``
+    to emit ``OF_TYPE`` edges and by ``neo4j_backend`` to persist them.
+    """
+    from_refid: str   # TestFixtureNode refid
+    to_refid: str     # type definition node refid
+    to_type: str      # type node type (e.g. "ClassNode", "EnumNode")
+
+
+@dataclass
+class FixtureCheckedByEntry:
+    """A CHECKED_BY relationship from a TestFixtureNode to an AssertionNode.
+
+    Recorded when a fixture variable appears anywhere in an assert
+    expression (as a bare name, attribute base, subscript base, or
+    call argument).  The direction is fixture → assertion.
+    """
+    from_refid: str   # TestFixtureNode refid
+    to_refid: str     # AssertionNode refid
+
+
+@dataclass
+class FixtureDefinedInEntry:
+    """A DEFINED_IN relationship from a TestFixtureNode to a TestStepNode.
+
+    Recorded when a fixture variable is assigned within a step block.
+    The direction is fixture → step.
+    """
+    from_refid: str   # TestFixtureNode refid
+    to_refid: str     # TestStepNode refid
+
+
 # ---------------------------------------------------------------------------
 # Aggregate result
 # ---------------------------------------------------------------------------
@@ -170,6 +243,19 @@ class ParseResult:
     specializes_refs: list[SpecializesRef] = field(default_factory=list)
     implementations: list[ImplementationNode] = field(default_factory=list)
     implementation_refs: list[ImplementationRef] = field(default_factory=list)
+    # Test-related nodes and relationships
+    tests: list = field(default_factory=list)
+    assertions: list = field(default_factory=list)
+    test_steps: list = field(default_factory=list)
+    test_fixtures: list = field(default_factory=list)
+    literals: list = field(default_factory=list)
+    verifies: list[VerifiesEntry] = field(default_factory=list)
+    operands: list[OperandEntry] = field(default_factory=list)
+    callees: list[CalleeEntry] = field(default_factory=list)
+    test_compositions: list[TestCompositionEntry] = field(default_factory=list)
+    fixture_of_types: list[FixtureOfTypeEntry] = field(default_factory=list)
+    fixture_checked_by: list[FixtureCheckedByEntry] = field(default_factory=list)
+    fixture_defined_in: list[FixtureDefinedInEntry] = field(default_factory=list)
 
     @property
     def compounds(self) -> list:

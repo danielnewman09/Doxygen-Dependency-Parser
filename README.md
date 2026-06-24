@@ -18,6 +18,7 @@ pip install -e ".[dev]"
 - `conan` — optional, only needed for Conan dependency mode
 - Python projects need no external tools (uses the built-in ``ast`` module)
 - A running **Neo4j** instance — only needed when using `--format neo4j` / `--neo4j`
+- `pip install openai` + ``LLM_API_KEY`` env var — optional, only needed for ``--enrich``
 
 ### Neo4j connection via `.env`
 
@@ -63,8 +64,16 @@ input_paths = ["include", "src"]
 name = "myproject"
 language = "python"
 input_paths = ["src"]
+test_paths = ["tests"]          # also parse test dirs for TestNode extraction
 # exclude_patterns = "build dist"   # additional dirs to skip
 ```
+
+When ``test_paths`` is specified, the parser also walks those
+directories and extracts ``test_*`` functions and ``Test*`` classes as
+:class:`TestNode` instances with :class:`AssertionNode` and
+:class:`TestStepNode` children, linked to the code they exercise via
+``VERIFIES`` edges.  You can also pass ``--test-paths tests`` on the
+command line to override the config.
 
 For Python, virtual environments (`.venv`, `venv`, `env`), caches
 (`__pycache__`, `.pytest_cache`, `.ruff_cache`, `.mypy_cache`), build
@@ -120,6 +129,54 @@ To regenerate just the HTML without re-parsing:
 doxygen-index html
 doxygen-index html --size small
 ```
+
+### LLM Test Description Enrichment
+
+When ``test_paths`` is configured, the parser extracts test nodes (fixtures,
+steps, assertions) from your test suite.  You can optionally enrich these
+nodes with human-readable descriptions using an LLM:
+
+**Requirements:**
+- ``LLM_API_KEY`` environment variable (Anthropic or OpenAI key)
+- ``pip install openai`` (optional dependency)
+- Optional: ``LLM_BASE_URL`` and ``LLM_MODEL`` for custom endpoints
+
+```bash
+# Dry-run: build prompts without calling the LLM (fast, safe)
+doxygen-index project . --enrich --dry-run-enrich
+
+# Full enrichment: call the LLM to generate descriptions
+doxygen-index project . --enrich
+
+# Overwrite existing descriptions (skip by default)
+doxygen-index project . --enrich --overwrite-enrich
+
+# Save enrichment summary to output dir
+doxygen-index project . --enrich --output-enrich-summary
+```
+
+```python
+from doxygen_index.enrich import enrich_result
+from doxygen_index.parser import parse_python_dir
+
+result = parse_python_dir("src", test_paths=["tests"])
+summary = enrich_result(
+    result,
+    model="claude-sonnet-4-20250514",  # optional, default from LLM_MODEL env
+    dry_run=False,
+    overwrite=False,
+)
+print(f"Enriched {summary.total_enriched} test nodes")
+```
+
+The enrichment:
+- Generates 1–2 sentence descriptions describing *purpose* and *why*.
+- Links descriptions to code under test via ``VERIFIES`` edges.
+- Groups peer context (other fixtures/steps/assertions in the same test).
+- Is applied **in-memory** before writing to JSON or Neo4j.
+
+The ``--dry-run-enrich`` flag is useful for previewing prompts and verifying
+that the enrichment will target the right nodes before incurring API costs.
 
 ## CLI Usage
 
