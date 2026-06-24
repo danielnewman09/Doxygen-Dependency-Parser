@@ -23,6 +23,16 @@ from doxygen_index.parser import parse_xml_dir
 from doxygen_index.project import ProjectConfig, load_config
 from doxygen_index.json_backend import write_result as write_json
 from doxygen_index.tools import create_toolset, DependencyGraphTools
+from doxygen_index.enrich import (
+    EnrichmentResult,
+    EnrichmentSummary,
+    enrich_result,
+    enrich_single_test,
+    enrich_test_descriptions,
+    enrich_all_tests,
+    enrichment_available,
+    check_enrichment_config,
+)
 
 __all__ = [
     "discover_packages",
@@ -34,6 +44,14 @@ __all__ = [
     "write_json",
     "create_toolset",
     "DependencyGraphTools",
+    "EnrichmentResult",
+    "EnrichmentSummary",
+    "enrich_result",
+    "enrich_single_test",
+    "enrich_test_descriptions",
+    "enrich_all_tests",
+    "enrichment_available",
+    "check_enrichment_config",
 ]
 
 
