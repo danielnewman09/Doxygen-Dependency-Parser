@@ -85,6 +85,7 @@ def visit_test_function(
         file_path=ctx.file_path,
         line_number=node.lineno,
         source=ctx.source,
+        tags=["as-built"],
     )
     test_node.layer = ctx.layer
     ctx.result.tests.append(test_node)
@@ -375,6 +376,7 @@ def _process_assert(
         operator=operator,
         description=f"assert {operator}",
         source=ctx.source,
+        tags=["as-built"],
     )
     assertion.layer = ctx.layer
     assertion.file_path = ctx.file_path
@@ -618,6 +620,7 @@ def _process_step_block(
         body_start=body_start,
         body_end=body_end,
         source=ctx.source,
+        tags=["as-built"],
     )
     step.layer = ctx.layer
     step.file_path = ctx.file_path

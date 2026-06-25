@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
@@ -219,8 +220,79 @@ def _merge_by_keys(node) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Node writer — uses neomodel .save()
+# Enriched description preservation
 # ---------------------------------------------------------------------------
+
+# Regex patterns that match auto-generated / placeholder descriptions
+# produced by the Python parser.  Descriptions matching these are
+# considered "placeholder" and should not overwrite LLM-enriched values.
+_AUTO_DESC_PATTERNS = [
+    re.compile(r"^assert\s", re.IGNORECASE),     # "assert ==", "assert is", etc.
+    re.compile(r"^Setup block$", re.IGNORECASE),  # TestStepNode default
+    re.compile(r"^Action block\s", re.IGNORECASE), # TestStepNode default
+    re.compile(r"^$"),                            # empty string
+]
+
+
+def _is_placeholder_description(desc: str | None) -> bool:
+    """Return True if *desc* is an auto-generated placeholder."""
+    if not desc or not desc.strip():
+        return True
+    for pat in _AUTO_DESC_PATTERNS:
+        if pat.match(desc):
+            return True
+    return False
+
+
+def _preserve_descriptions(*node_lists: list) -> None:
+    """Pre-fetch existing non-placeholder descriptions and merge them
+    into incoming nodes so that ``create_or_update`` doesn't overwrite
+    enriched data with parser-generated placeholders.
+
+    Called before ``create_or_update`` in :func:`write_result`.
+    """
+    # Collect all qualified names from incoming test-related nodes
+    # whose descriptions look like placeholders.
+    candidates: dict[str, list] = {}  # qname → [node, ...]
+    for node_list in node_lists:
+        for node in node_list:
+            desc = getattr(node, "description", None)
+            if _is_placeholder_description(desc):
+                qname = getattr(node, "qualified_name", "")
+                if qname:
+                    candidates.setdefault(qname, []).append(node)
+
+    if not candidates:
+        return
+
+    # Batch-fetch existing descriptions from Neo4j
+    from neomodel import db
+    qnames = list(candidates.keys())
+    query = """
+        UNWIND $qnames AS qname
+        MATCH (n)
+        WHERE n.qualified_name = qname
+          AND n.description IS NOT NULL
+          AND n.description <> ''
+        RETURN n.qualified_name AS qname, n.description AS description
+    """
+    results, _ = db.cypher_query(query, {"qnames": qnames})
+
+    existing: dict[str, str] = {}
+    for row in results:
+        existing[row[0]] = row[1] or ""
+
+    # Merge existing non-placeholder descriptions into incoming nodes
+    preserved = 0
+    for qname, nodes in candidates.items():
+        rich_desc = existing.get(qname)
+        if rich_desc and not _is_placeholder_description(rich_desc):
+            for node in nodes:
+                node.description = rich_desc
+                preserved += 1
+
+    if preserved:
+        print(f"  Preserved {preserved} enriched descriptions")
 
 def write_result(result: ParseResult) -> None:
     """Write a ParseResult to Neo4j.
@@ -245,6 +317,17 @@ def write_result(result: ParseResult) -> None:
     # Persist nodes, replacing result lists in-place with saved instances
     # so element_id is set for subsequent .connect() calls.
     # create_or_update() returns a list; we unwrap the first element.
+
+    # ── Preserve LLM-enriched descriptions ─────────────────────────
+    # The parser auto-generates placeholder descriptions for test nodes
+    # (e.g. "assert ==" for assertions).  If a prior enrichment run
+    # wrote richer descriptions, we must not overwrite them with the
+    # parser's placeholders during re-index.
+    _preserve_descriptions(
+        result.tests, result.assertions,
+        result.test_steps, result.test_fixtures,
+    )
+
     for i, node_list in enumerate(batch_refs):
         if node_list:
             saved = []

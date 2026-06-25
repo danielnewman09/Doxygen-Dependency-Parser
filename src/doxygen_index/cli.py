@@ -61,6 +61,25 @@ def _add_db_args(parser: argparse.ArgumentParser) -> None:
                         help="Neo4j password")
 
 
+def _confirm_destructive(label: str, yes: bool) -> None:
+    """Prompt for confirmation before a destructive operation.
+
+    Args:
+        label: Human-readable description of what will be destroyed.
+        yes: If True, skip the prompt (--yes flag was passed).
+
+    Raises:
+        SystemExit: If the user declines.
+    """
+    if yes:
+        return
+    print(f"\n  ⚠  This will DELETE ALL existing graph data for '{label}'.")
+    response = input("  Proceed? [y/N]: ").strip().lower()
+    if response not in ("y", "yes"):
+        print("  Aborted.")
+        sys.exit(1)
+
+
 def _parse_only(only_str: str | None) -> set[str] | None:
     if only_str is None:
         return None
@@ -182,6 +201,7 @@ def cmd_project(args: argparse.Namespace) -> None:
         )
         ensure_schema()
         if args.clear:
+            _confirm_destructive(f"source '{source}'", args.yes)
             clear_source(source)
             neo4j_write(result)
         else:
@@ -459,6 +479,8 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
     print(f"Ingesting {len(xml_dirs)} dependencies: {', '.join(sorted(xml_dirs))}\n")
 
+    if args.clear:
+        _confirm_destructive("all dependency sources", args.yes)
     for dep_name, xml_dir in sorted(xml_dirs.items()):
         if args.neo4j:
             from doxygen_index.neo4j_backend import ingest as neo4j_ingest
@@ -500,6 +522,8 @@ def cmd_full(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     # Phase 3: Ingest
+    if args.clear:
+        _confirm_destructive("all dependency sources", args.yes)
     print(f"\n--- Ingesting {len(xml_dirs)} dependencies ---\n")
     for dep_name, xml_dir in sorted(xml_dirs.items()):
         if args.neo4j:
@@ -556,6 +580,7 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
 
         ensure_schema()
         if args.clear:
+            _confirm_destructive(f"source '{source}'", args.yes)
             clear_source(source)
             neo4j_write(result)
         else:
@@ -616,6 +641,8 @@ def main() -> None:
                     help="Clear existing data for this source before a full re-write. "
                          "By default, incremental update is used (adds new, updates "
                          "changed, deletes stale nodes without wiping).")
+    sp.add_argument("--yes", "-y", action="store_true",
+                    help="Skip confirmation prompts (e.g. when using --clear).")
     # LLM enrichment options
     sp.add_argument("--enrich", action="store_true",
                     help="Enrich test node descriptions using an LLM "
@@ -664,6 +691,8 @@ def main() -> None:
     sp.add_argument("--clear", action="store_true",
                     help="Full re-write: clear existing data for each source first. "
                          "By default, incremental update is used.")
+    sp.add_argument("--yes", "-y", action="store_true",
+                    help="Skip confirmation prompts (e.g. when using --clear).")
     sp.set_defaults(func=cmd_ingest)
 
     # full
@@ -674,6 +703,8 @@ def main() -> None:
     sp.add_argument("--clear", action="store_true",
                     help="Full re-write: clear existing data for each source first. "
                          "By default, incremental update is used.")
+    sp.add_argument("--yes", "-y", action="store_true",
+                    help="Skip confirmation prompts (e.g. when using --clear).")
     sp.set_defaults(func=cmd_full)
 
     # cppreference
@@ -689,6 +720,8 @@ def main() -> None:
     sp.add_argument("--clear", action="store_true",
                     help="Full re-write: clear existing cppreference data first. "
                          "By default, incremental update is used.")
+    sp.add_argument("--yes", "-y", action="store_true",
+                    help="Skip confirmation prompts (e.g. when using --clear).")
     sp.set_defaults(func=cmd_cppreference)
 
     args = parser.parse_args()

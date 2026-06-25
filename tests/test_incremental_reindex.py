@@ -1094,6 +1094,91 @@ class TestRelationshipIntegrity:
         assert _rel_qnames(test_after, "assertions") == _rel_qnames(test_before, "assertions")
         assert _rel_qnames(test_after, "steps") == _rel_qnames(test_before, "steps")
 
+    def test_enriched_descriptions_preserved_on_reindex(self, initial_index):
+        """Enriched descriptions on test children survive a re-index.
+
+        The parser auto-generates placeholder descriptions (e.g.
+        ``"assert =="`` for assertions).  If an LLM enrichment run
+        wrote richer descriptions, re-indexing must not overwrite them
+        with the parser's placeholders.
+        """
+        from doxygen_index.neo4j_backend import update_result
+        from codegraph.models.test import TestNode
+
+        test_qname = "samplepkg.test_calculator.test_evaluator_step"
+        enriched_desc = "LLM-enriched: evaluates step with confidence"
+
+        # Write a rich description directly on a test child node
+        from neomodel import db
+        child_qname = f"{test_qname}::evaluator"
+        db.cypher_query(
+            "MATCH (n {qualified_name: $qname}) SET n.description = $desc",
+            {"qname": child_qname, "desc": enriched_desc},
+        )
+
+        # Re-index without changes
+        result = parse_python_dir(initial_index, source=TEST_SOURCE, progress_interval=0)
+        update_result(result, source=TEST_SOURCE)
+
+        # Description must be preserved — not overwritten with placeholder
+        results, _ = db.cypher_query(
+            "MATCH (n {qualified_name: $qname}) RETURN n.description",
+            {"qname": child_qname},
+        )
+        assert results and results[0][0] == enriched_desc, (
+            f"Enriched description was overwritten! "
+            f"Expected '{enriched_desc}', got '{results[0][0] if results else 'N/A'}'"
+        )
+
+    def test_enriched_assertion_descriptions_preserved(self, initial_index):
+        """Enriched descriptions on assertion nodes survive a re-index.
+
+        Assertion descriptions are auto-generated as ``"assert <operator>"``
+        (a placeholder).  Enriched values must survive.
+        """
+        from doxygen_index.neo4j_backend import update_result, _is_placeholder_description
+        from codegraph.models.test import TestNode
+
+        test_qname = "samplepkg.test_calculator.test_evaluator_step"
+
+        # Find an assertion child
+        test_node = _get_node(TestNode, test_qname)
+        assertions = _rel_qnames(test_node, "assertions")
+        assert assertions, "Test has no assertion children"
+        assertion_qname = sorted(assertions)[0]
+
+        # Verify the current description IS a placeholder
+        from neomodel import db
+        results, _ = db.cypher_query(
+            "MATCH (n {qualified_name: $qname}) RETURN n.description",
+            {"qname": assertion_qname},
+        )
+        current_desc = results[0][0] if results else ""
+        assert _is_placeholder_description(current_desc), (
+            f"Expected placeholder, got: {current_desc!r}"
+        )
+
+        # Write a rich description
+        enriched = "LLM: Verifies that the step produces the expected result"
+        db.cypher_query(
+            "MATCH (n {qualified_name: $qname}) SET n.description = $desc",
+            {"qname": assertion_qname, "desc": enriched},
+        )
+
+        # Re-index
+        result = parse_python_dir(initial_index, source=TEST_SOURCE, progress_interval=0)
+        update_result(result, source=TEST_SOURCE)
+
+        # Must be preserved
+        results, _ = db.cypher_query(
+            "MATCH (n {qualified_name: $qname}) RETURN n.description",
+            {"qname": assertion_qname},
+        )
+        assert results and results[0][0] == enriched, (
+            f"Enriched assertion overwritten! "
+            f"Expected '{enriched}', got '{results[0][0] if results else 'N/A'}'"
+        )
+
     def test_inherits_from_edge_preserved_after_update(self, initial_index):
         """INHERITS_FROM edges are preserved when a derived class is updated."""
         from doxygen_index.neo4j_backend import update_result
