@@ -172,7 +172,8 @@ def cmd_project(args: argparse.Namespace) -> None:
 
     if args.format == "neo4j":
         from doxygen_index.neo4j_backend import (
-            connect_neo4j, ensure_schema, clear_source, write_result as neo4j_write,
+            connect_neo4j, ensure_schema, clear_source,
+            write_result as neo4j_write, update_result as neo4j_update,
         )
         print(f"\n--- {config.name} → Neo4j ---")
         connect_neo4j(
@@ -182,7 +183,10 @@ def cmd_project(args: argparse.Namespace) -> None:
         ensure_schema()
         if args.clear:
             clear_source(source)
-        neo4j_write(result)
+            neo4j_write(result)
+        else:
+            # Incremental is the default — add new, update changed, delete stale
+            neo4j_update(result, source=source)
     else:
         json_write(result, json_path, source=source)
         print(f"Output: {json_path}")
@@ -463,6 +467,7 @@ def cmd_ingest(args: argparse.Namespace) -> None:
                 xml_dir, source=dep_name,
                 uri=args.neo4j_uri, user=args.neo4j_user,
                 password=args.neo4j_password,
+                incremental=not args.clear,
             )
             print()
 
@@ -504,6 +509,7 @@ def cmd_full(args: argparse.Namespace) -> None:
                 xml_dir, source=dep_name,
                 uri=args.neo4j_uri, user=args.neo4j_user,
                 password=args.neo4j_password,
+                incremental=not args.clear,
             )
             print()
 
@@ -539,6 +545,7 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
             ensure_schema,
             clear_source,
             write_result as neo4j_write,
+            update_result as neo4j_update,
         )
         print(f"\n--- cppreference → Neo4j ({args.neo4j_uri}) ---")
 
@@ -550,7 +557,9 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
         ensure_schema()
         if args.clear:
             clear_source(source)
-        neo4j_write(result)
+            neo4j_write(result)
+        else:
+            neo4j_update(result, source=source)
 
         results, _meta = db.cypher_query("""
             MATCH (n) WHERE n.source CONTAINS 'cppreference'
@@ -604,7 +613,9 @@ def main() -> None:
                          "Overrides test_paths in .doxygen-index.toml.")
     _add_db_args(sp)
     sp.add_argument("--clear", action="store_true",
-                    help="Clear existing data for this source before ingesting")
+                    help="Clear existing data for this source before a full re-write. "
+                         "By default, incremental update is used (adds new, updates "
+                         "changed, deletes stale nodes without wiping).")
     # LLM enrichment options
     sp.add_argument("--enrich", action="store_true",
                     help="Enrich test node descriptions using an LLM "
@@ -650,6 +661,9 @@ def main() -> None:
     _add_common_args(sp)
     _add_output_args(sp)
     _add_db_args(sp)
+    sp.add_argument("--clear", action="store_true",
+                    help="Full re-write: clear existing data for each source first. "
+                         "By default, incremental update is used.")
     sp.set_defaults(func=cmd_ingest)
 
     # full
@@ -657,6 +671,9 @@ def main() -> None:
     _add_common_args(sp)
     _add_output_args(sp)
     _add_db_args(sp)
+    sp.add_argument("--clear", action="store_true",
+                    help="Full re-write: clear existing data for each source first. "
+                         "By default, incremental update is used.")
     sp.set_defaults(func=cmd_full)
 
     # cppreference
@@ -670,7 +687,8 @@ def main() -> None:
     sp.add_argument("--force", action="store_true",
                     help="Re-download even if cached")
     sp.add_argument("--clear", action="store_true",
-                    help="Clear existing cppreference data before ingesting")
+                    help="Full re-write: clear existing cppreference data first. "
+                         "By default, incremental update is used.")
     sp.set_defaults(func=cmd_cppreference)
 
     args = parser.parse_args()

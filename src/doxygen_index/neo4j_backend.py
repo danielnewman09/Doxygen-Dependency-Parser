@@ -1,11 +1,29 @@
 """
 Neo4j backend — ingests ParseResult into a Neo4j graph database.
 
-Uses neomodel for node persistence (replaces raw Cypher MERGE with .save()).
+Provides two modes for writing parsed source code into Neo4j:
+
+* **Incremental update** (:func:`update_result`, the default):
+  Re-indexes a source without destroying the existing graph.  New nodes
+  are created, changed nodes are updated in place (via MERGE on
+  deterministic uid + source), and stale nodes (removed or renamed in
+  the source) are deleted.  Other sources are left untouched.
+
+* **Full rewrite** (:func:`write_result` + :func:`clear_source`):
+  Wipes all nodes for a source label, then re-creates everything from
+  scratch.  Use ``--clear`` on the CLI or ``incremental=False`` in the
+  Python API when a full reset is desired.
+
+The :func:`ingest` function defaults to incremental mode
+(``incremental=True``); pass ``clear=True`` for a full re-write.
+The CLI uses incremental by default; ``--clear`` opts into full re-write.
+
+Uses neomodel for node persistence and Cypher for relationship creation.
 """
 
 from __future__ import annotations
 
+import hashlib
 import os
 import sys
 from dataclasses import asdict
@@ -164,6 +182,43 @@ def clear_all() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Deterministic uid & merge helpers
+# ---------------------------------------------------------------------------
+
+def _ensure_deterministic_uid(node) -> None:
+    """Set a source-aware deterministic ``uid`` on *node* in place.
+
+    By default neomodel assigns a random UUID to ``uid``.  When re-indexing
+    the same source, this causes ``create_or_update`` to CREATE duplicates
+    instead of MERGE-updating existing nodes.
+
+    The deterministic uid is ``SHA1(SHA1(identity_fields), source)`` which:
+    - is stable across re-indexes (same source + same identity → same uid)
+    - is unique per source (same qualified_name in two sources → different uid)
+    """
+    identity_fields = list(getattr(node, "_identity_fields", ()) or ())
+    identity_values = []
+    for field in identity_fields:
+        val = getattr(node, field, "")
+        identity_values.append(str(val) if val is not None else "")
+    identity_hash = hashlib.sha1("|".join(identity_values).encode()).hexdigest()
+    source = getattr(node, "source", "")
+    final_hash = hashlib.sha1((identity_hash + str(source)).encode()).hexdigest()
+    node.uid = final_hash
+
+
+def _merge_by_keys(node) -> dict:
+    """Return ``merge_by`` dict for ``create_or_update``.
+
+    Tells neomodel to MERGE on the node's identity fields **plus** source,
+    so updates only match within the same source label.
+    """
+    identity_fields = list(getattr(node, "_identity_fields", ()) or ())
+    keys = identity_fields + ["source"]
+    return {"keys": keys}
+
+
+# ---------------------------------------------------------------------------
 # Node writer — uses neomodel .save()
 # ---------------------------------------------------------------------------
 
@@ -194,7 +249,11 @@ def write_result(result: ParseResult) -> None:
         if node_list:
             saved = []
             for node in node_list:
-                result_nodes = node.__class__.create_or_update(node.__properties__)
+                _ensure_deterministic_uid(node)
+                merge_by = _merge_by_keys(node)
+                result_nodes = node.__class__.create_or_update(
+                    node.__properties__, merge_by=merge_by,
+                )
                 saved.append(result_nodes[0])
             # Replace in-place: update the actual result attribute
             batch_refs[i][:] = saved
@@ -220,6 +279,184 @@ def write_result(result: ParseResult) -> None:
     _write_of_type_relationships(result)
     _write_checked_by_relationships(result)
     _write_defined_in_relationships(result)
+
+
+# ---------------------------------------------------------------------------
+# Incremental update — write + delete stale nodes
+# ---------------------------------------------------------------------------
+
+def _collect_live_refids(result: ParseResult) -> set[str]:
+    """Collect all qualified_name values from a ParseResult.
+
+    Used to identify stale compound/member nodes that should be deleted
+    during an incremental update.
+    """
+    live: set[str] = set()
+    for lst in (result.classes, result.enums, result.unions, result.interfaces,
+                result.concepts, result.methods, result.attributes,
+                result.enum_values, result.defines, result.functions,
+                result.namespaces, result.tests, result.assertions,
+                result.test_steps, result.test_fixtures, result.literals,
+                result.implementations):
+        for node in lst:
+            qn = getattr(node, "qualified_name", None)
+            if qn:
+                live.add(qn)
+    return live
+
+
+def _collect_live_file_paths(result: ParseResult) -> set[str]:
+    """Collect all FileNode paths from a ParseResult."""
+    return {f.path for f in result.files if f.path}
+
+
+def _collect_live_member_refids(result: ParseResult) -> set[str]:
+    """Collect all member refids from a ParseResult.
+
+    Used to identify stale ParameterNodes (whose ``member_refid`` references
+    a member that may have been deleted).
+    """
+    live: set[str] = set()
+    for member_list in (result.methods, result.attributes, result.functions,
+                        result.defines):
+        for node in member_list:
+            refid = getattr(node, "refid", None)
+            if refid:
+                live.add(refid)
+    return live
+
+
+def delete_stale_nodes(
+    source: str,
+    live_qualified_names: set[str],
+    live_file_paths: set[str],
+    live_member_refids: set[str],
+) -> dict[str, int]:
+    """Delete nodes for *source* whose identity is NOT in the live set.
+
+    Called after :func:`write_result` to remove nodes that existed in the
+    previous index but were removed or renamed in the source code.
+
+    Args:
+        source: Source label to scope deletion.
+        live_qualified_names: Set of qualified_name values present in the
+            latest parse (for compounds, members, namespaces).
+        live_file_paths: Set of file paths present in the latest parse.
+        live_member_refids: Set of member refids present in the latest parse
+            (used to identify stale ParameterNodes).
+
+    Returns:
+        Dict mapping node label → count of deleted nodes.
+    """
+    deleted_counts: dict[str, int] = {}
+
+    def _delete_stale(label: str, identity_prop: str, live_set: set[str]) -> int:
+        """Delete nodes of *label* for *source* where identity_prop NOT IN live_set."""
+        if not live_set:
+            # All nodes of this type are stale
+            query = (
+                f"MATCH (n:{label} {{source: $src}}) "
+                f"DETACH DELETE n "
+                f"RETURN count(n) AS cnt"
+            )
+            result, _ = db.cypher_query(query, {"src": source})
+        else:
+            query = (
+                f"MATCH (n:{label} {{source: $src}}) "
+                f"WHERE NOT n.{identity_prop} IN $live "
+                f"DETACH DELETE n "
+                f"RETURN count(n) AS cnt"
+            )
+            result, _ = db.cypher_query(query, {"src": source, "live": list(live_set)})
+        cnt = result[0][0] if result else 0
+        if cnt:
+            deleted_counts[label] = cnt
+        return cnt
+
+    def _delete_stale_parameter_nodes() -> int:
+        """Delete ParameterNodes whose member_refid is NOT in the live set."""
+        if not live_member_refids:
+            query = (
+                "MATCH (p:ParameterNode) "
+                "MATCH (m:MemberNode {source: $src}) WHERE p.member_refid = m.refid "
+                "DETACH DELETE p "
+                "RETURN count(p) AS cnt"
+            )
+            result, _ = db.cypher_query(query, {"src": source})
+        else:
+            query = (
+                "MATCH (p:ParameterNode) "
+                "MATCH (m:MemberNode {source: $src}) "
+                "WHERE p.member_refid = m.refid AND NOT p.member_refid IN $live "
+                "DETACH DELETE p "
+                "RETURN count(p) AS cnt"
+            )
+            result, _ = db.cypher_query(
+                query, {"src": source, "live": list(live_member_refids)}
+            )
+        cnt = result[0][0] if result else 0
+        if cnt:
+            deleted_counts["ParameterNode"] = cnt
+        return cnt
+
+    # Delete stale compound nodes (by qualified_name)
+    # Includes type_parameter ClassNodes — they have qualified_name set
+    _delete_stale("CompoundNode", "qualified_name", live_qualified_names)
+
+    # Delete stale member nodes (by qualified_name)
+    _delete_stale("MemberNode", "qualified_name", live_qualified_names)
+
+    # Delete stale namespaces (by qualified_name)
+    _delete_stale("NamespaceNode", "qualified_name", live_qualified_names)
+
+    # Delete stale files (by path)
+    _delete_stale("FileNode", "path", live_file_paths)
+
+    # Delete stale test-related nodes
+    _delete_stale("TestNode", "qualified_name", live_qualified_names)
+    _delete_stale("AssertionNode", "qualified_name", live_qualified_names)
+    _delete_stale("TestStepNode", "qualified_name", live_qualified_names)
+    _delete_stale("TestFixtureNode", "qualified_name", live_qualified_names)
+    _delete_stale("LiteralNode", "qualified_name", live_qualified_names)
+
+    # Delete stale ImplementationNodes (by qualified_name)
+    _delete_stale("ImplementationNode", "qualified_name", live_qualified_names)
+
+    # Delete stale ParameterNodes (by member_refid)
+    _delete_stale_parameter_nodes()
+
+    if deleted_counts:
+        parts = [f"{label}: {cnt}" for label, cnt in deleted_counts.items()]
+        print(f"  Deleted stale nodes ({', '.join(parts)})")
+
+    return deleted_counts
+
+
+def update_result(result: ParseResult, source: str) -> dict[str, int]:
+    """Incrementally update the graph for *source*.
+
+    1. Collects live node identities from *result*.
+    2. Calls :func:`write_result` to create/update nodes (MERGE on
+       deterministic uid + source).
+    3. Calls :func:`delete_stale_nodes` to remove nodes that are no longer
+       present in the source.
+
+    Other sources are left untouched.
+
+    Args:
+        result: The latest ParseResult from parsing the source code.
+        source: Source label to scope the update.
+
+    Returns:
+        Dict mapping node label → count of deleted stale nodes.
+    """
+    live_qnames = _collect_live_refids(result)
+    live_file_paths = _collect_live_file_paths(result)
+    live_member_refids = _collect_live_member_refids(result)
+
+    write_result(result)
+
+    return delete_stale_nodes(source, live_qnames, live_file_paths, live_member_refids)
 
 
 # ---------------------------------------------------------------------------
@@ -854,8 +1091,14 @@ def ingest(
     database: str = "neo4j",
     clear: bool = False,
     layer: str = "dependency",
+    incremental: bool = True,
 ) -> None:
     """Parse Doxygen XML and ingest into Neo4j.
+
+    By default, performs an **incremental update**: new nodes are created,
+    changed nodes are updated in place, and stale nodes (no longer in the
+    source) are deleted — without wiping the existing source first.
+    Pass ``clear=True`` (or ``incremental=False``) for a full re-write.
 
     Args:
         xml_dir: Directory containing Doxygen XML output.
@@ -864,8 +1107,11 @@ def ingest(
         user: Neo4j username (default: ``$NEO4J_USER`` or ``neo4j``).
         password: Neo4j password (default: ``$NEO4J_PASSWORD`` or ``msd-local-dev``).
         database: Neo4j database name.
-        clear: If True, clear existing data for this source before ingesting.
+        clear: If True, clear existing data for this source before a
+            full re-write.  Ignored when ``incremental`` is True (the default).
         layer: Layer label ("codebase" for project code, "dependency" for deps).
+        incremental: If True (the default), incrementally update instead of
+            full re-write.  Set to False to force a full re-write.
     """
     connect_neo4j(uri=uri, user=user, password=password, database=database)
 
@@ -873,14 +1119,19 @@ def ingest(
 
     ensure_schema()
 
-    if clear:
-        clear_source(source)
+    if incremental:
+        print(f"Parsing {xml_dir}... (layer={layer}, incremental update)")
+        result = parse_xml_dir(xml_dir, source=source, layer=layer)
+        update_result(result, source=source)
+    else:
+        if clear:
+            clear_source(source)
 
-    print(f"Parsing {xml_dir}... (layer={layer})")
-    result = parse_xml_dir(xml_dir, source=source, layer=layer)
+        print(f"Parsing {xml_dir}... (layer={layer})")
+        result = parse_xml_dir(xml_dir, source=source, layer=layer)
 
-    print("Writing to Neo4j...")
-    write_result(result)
+        print("Writing to Neo4j...")
+        write_result(result)
 
     # Summary
     results, _meta = db.cypher_query("""

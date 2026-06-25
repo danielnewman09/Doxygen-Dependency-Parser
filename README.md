@@ -190,8 +190,12 @@ doxygen-index project /path/to/project # explicit path
 # Parse with custom output
 doxygen-index project --output-dir custom/docs
 
-# Parse and ingest into Neo4j
+# Parse and ingest into Neo4j (incremental by default)
+# Adds new nodes, updates changed ones, deletes stale ones
 doxygen-index project --format neo4j
+
+# Full re-index (clears existing data for this source first)
+doxygen-index project --format neo4j --clear
 
 # Just generate Doxygen XML (don't parse) — C++ only
 doxygen-index project --generate-only
@@ -218,10 +222,13 @@ doxygen-index generate --output-dir build/docs/deps
 # Generate for specific deps only
 doxygen-index generate --output-dir build/docs/deps --only eigen,sdl
 
-# Ingest into Neo4j
+# Ingest into Neo4j (incremental by default)
 doxygen-index ingest --output-dir build/docs/deps --neo4j
 
-# All-in-one: discover + generate + ingest
+# Full re-index of existing dependencies (clears first)
+doxygen-index ingest --output-dir build/docs/deps --neo4j --clear
+
+# All-in-one: discover + generate + ingest (incremental by default)
 doxygen-index full --output-dir build/docs/deps --neo4j
 ```
 
@@ -234,11 +241,11 @@ Index the entire C++ standard library documentation from cppreference.com.
 # First run downloads the HTML archive (~30 MB) and caches it
 # Parsing ~18,000 pages takes 5-10 minutes
 
-# Fresh ingest (clears existing cppreference data first)
-doxygen-index cppreference --neo4j --clear
-
-# Subsequent runs (appends, skip download if cached)
+# Ingest into Neo4j (incremental by default)
 doxygen-index cppreference --neo4j
+
+# Full re-index (clears existing cppreference data first)
+doxygen-index cppreference --neo4j --clear
 
 # Custom cache location
 doxygen-index cppreference --neo4j --cache-dir /path/to/cache
@@ -249,16 +256,15 @@ doxygen-index cppreference --neo4j --force
 
 ```python
 from doxygen_index.cppreference import download, parse
-from doxygen_index.neo4j_backend import write_result, ensure_schema, clear_source
+from doxygen_index.neo4j_backend import update_result, ensure_schema
 
 # Download and parse
 archive_root = download("~/.cache/doxygen-index/cppreference")
 result = parse(archive_root)
 
-# Ingest into Neo4j
+# Incrementally ingest into Neo4j (default)
 ensure_schema()
-clear_source("cppreference")
-write_result(result)
+update_result(result, source="cppreference")
 ```
 
 ## Python API
@@ -273,10 +279,52 @@ packages = discover_packages(build_type="Debug")
 # Generate Doxygen XML
 xml_dirs = generate_xml(packages, output_dir="build/docs/deps")
 
-# Ingest into Neo4j
+# Ingest into Neo4j (incremental by default — no wipe)
 for name, xml_dir in xml_dirs.items():
     ingest_neo4j(xml_dir, source=name, uri="bolt://localhost:7687")
+
+# Full re-write (clears source first)
+for name, xml_dir in xml_dirs.items():
+    ingest_neo4j(xml_dir, source=name, uri="bolt://localhost:7687", clear=True)
 ```
+
+### Incremental Re-indexing
+
+Incremental update is the **default** behavior.  The :func:`update_result`
+function re-indexes a source without destroying the existing graph.  It:
+
+1. **Creates** new nodes that appeared in the source since the last index.
+2. **Updates** existing nodes in place (via MERGE on deterministic uid +
+   source) when their properties changed.
+3. **Deletes** stale nodes — those that were removed or renamed in the
+   source — and their edges.
+
+Other sources are left untouched.
+
+```python
+from doxygen_index.parser import parse_python_dir
+from doxygen_index.neo4j_backend import (
+    connect_neo4j, ensure_schema, update_result,
+)
+
+connect_neo4j()
+ensure_schema()
+
+result = parse_python_dir("src/myproject", source="myproject")
+deleted = update_result(result, source="myproject")
+# deleted is a dict like {"ClassNode": 2, "FunctionNode": 1}
+# showing how many stale nodes were removed.
+```
+
+The CLI simply does an incremental update by default;
+pass ``--clear`` for a full re-write::
+
+    doxygen-index project --format neo4j         # incremental (default)
+    doxygen-index project --format neo4j --clear # full re-write
+    doxygen-index ingest --output-dir build/docs/deps --neo4j          # incremental
+    doxygen-index ingest --output-dir build/docs/deps --neo4j --clear  # full re-write
+    doxygen-index full --output-dir build/docs/deps --neo4j            # incremental
+    doxygen-index full --output-dir build/docs/deps --neo4j --clear    # full re-write
 
 ### Neo4j
 
