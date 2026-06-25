@@ -57,7 +57,7 @@ from doxygen_index.parser.cpp_parser import (
 )
 
 # Re-export Python parser
-from doxygen_index.parser.python_parser import PythonParser
+from doxygen_index.parser.python import PythonParser
 
 
 # ---------------------------------------------------------------------------
@@ -115,7 +115,7 @@ def parse_python_dir(
         language_parser: Python parser instance. Defaults to a new
             :class:`PythonParser`.
         exclude_dirs: Directory names to skip (e.g. ``[".venv", "build"]``).
-            Defaults to :data:`~doxygen_index.parser.python_parser.DEFAULT_EXCLUDE_DIRS`.
+            Defaults to :data:`~doxygen_index.parser.python.DEFAULT_EXCLUDE_DIRS`.
 
     Returns:
         ParseResult with all parsed data.

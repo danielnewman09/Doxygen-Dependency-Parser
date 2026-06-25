@@ -15,7 +15,7 @@ The contract has two methods:
 
 C++-specific implementation lives in :class:`~doxygen_index.parser.cpp_parser.CppParser`,
 which internally delegates to XML-parsing helpers.  Python support lives
-in :class:`~doxygen_index.parser.python_parser.PythonParser`.
+in :class:`~doxygen_index.parser.python.PythonParser`.
 """
 
 from __future__ import annotations
