@@ -1,0 +1,29 @@
+# Ephemeral Neo4j instance for the pytest session.
+# The conftest starts this container before any tests run and tears it
+# down when the session ends, so every test run gets a clean database.
+#
+# Ports 7689 (Bolt) / 7476 (HTTP) are offset from:
+#   - dev container:    7687 / 7474
+#   - codegraph tests:  7688 / 7475
+
+name: doxygen-index-tests
+
+services:
+  neo4j:
+    image: neo4j:5-community
+    container_name: neo4j-doxygen-index-test
+    ports:
+      - "7689:7687"    # Bolt
+      - "7476:7474"    # HTTP / Browser
+    environment:
+      - NEO4J_AUTH=neo4j/doxygen-index-test
+      - NEO4J_PLUGINS=[]
+    tmpfs:
+      - /data
+      - /logs
+    healthcheck:
+      test: ["CMD-SHELL", "echo 'RETURN 1;' | cypher-shell -u neo4j -p doxygen-index-test 2>/dev/null || exit 1"]
+      interval: 2s
+      timeout: 10s
+      retries: 20
+      start_period: 10s

@@ -22,6 +22,7 @@ from doxygen_index.parser.model import (
     CompositionEntry,
     InheritsEntry,
     DependsOnEntry,
+    InvokeEntry,
     IncludeEntry,
     ImplementationRef,
 )
@@ -358,6 +359,167 @@ def derive_type_dependencies(result: ParseResult) -> None:
         seen.add(pair)
         result.depends_on.append(DependsOnEntry(
             from_refid=refid, to_refid=to_refid, to_type=to_type,
+        ))
+
+
+# ---------------------------------------------------------------------------
+# Invoke (call-graph) derivation
+# ---------------------------------------------------------------------------
+
+
+def derive_invokes(result: ParseResult) -> None:
+    """Record ``INVOKES`` edges from callers to callees.
+
+    Resolves callee expression text collected during AST walking against
+    known functions and methods, and emits :class:`InvokeEntry` entries on
+    ``result.invokes``.
+
+    Resolution strategy (mirrors ``derive_inheritance``):
+
+    1. Dotted call like ``mod.func`` — looks up the full dotted name as a
+       qualified name, then falls back to trailing-component short name.
+    2. Bare call like ``func`` — looks up by short name, preferring a match
+       in the same namespace as the caller.
+    3. ``self.method`` — resolved against the caller's parent class.
+
+    Skip non-resolvables: builtins (``len``, ``print``, ``isinstance``,
+    ``str``, …), ``super()``, standard library calls, and calls whose
+    target can't be matched to any known compound in the index.
+    """
+    # Index every callable (method + free function) for resolution.
+    by_name: dict[str, list[tuple[str, str, str]]] = {}
+    by_qname: dict[str, tuple[str, str]] = {}
+    # Map refid → (name, namespace, type) for caller context.
+    caller_info: dict[str, tuple[str, str, str]] = {}
+
+    for m in result.methods:
+        name = getattr(m, "name", None)
+        refid = getattr(m, "refid", None)
+        qname = getattr(m, "qualified_name", None)
+        if not name or not refid or not qname:
+            continue
+        ns = _parent_qualified_name(qname)
+        type_name = type(m).__name__
+        by_name.setdefault(name, []).append((refid, ns, type_name))
+        by_qname[qname] = (refid, type_name)
+        caller_info[refid] = (name, ns, type_name)
+
+    for f in result.functions:
+        name = getattr(f, "name", None)
+        refid = getattr(f, "refid", None)
+        qname = getattr(f, "qualified_name", None)
+        if not name or not refid or not qname:
+            continue
+        ns = _parent_qualified_name(qname)
+        type_name = type(f).__name__
+        by_name.setdefault(name, []).append((refid, ns, type_name))
+        by_qname[qname] = (refid, type_name)
+        caller_info[refid] = (name, ns, type_name)
+
+    # Python builtins that should never produce INVOKES edges.
+    _PYTHON_BUILTINS: frozenset[str] = frozenset({
+        # Built-in functions
+        "abs", "all", "any", "ascii", "bin", "bool", "breakpoint",
+        "bytearray", "bytes", "callable", "chr", "classmethod", "compile",
+        "complex", "copyright", "credits", "delattr", "dict", "dir",
+        "divmod", "enumerate", "eval", "exec", "exit", "filter", "float",
+        "format", "frozenset", "getattr", "globals", "hasattr", "hash",
+        "help", "hex", "id", "input", "int", "isinstance", "issubclass",
+        "iter", "len", "license", "list", "locals", "map", "max",
+        "memoryview", "min", "next", "object", "oct", "open", "ord",
+        "pow", "print", "property", "quit", "range", "repr", "reversed",
+        "round", "set", "setattr", "slice", "sorted", "staticmethod",
+        "str", "sum", "super", "tuple", "type", "vars", "zip",
+        "__import__",
+        # Common methods on builtins
+        "append", "extend", "insert", "remove", "pop", "clear", "index",
+        "count", "sort", "reverse", "copy", "keys", "values", "items",
+        "get", "update", "split", "join", "strip", "lower", "upper",
+        "startswith", "endswith", "replace", "find", "format", "encode",
+        "decode", "add", "discard", "difference", "intersection", "union",
+        "write", "read", "close", "seek", "truncate",
+        # Logging / IO
+        "debug", "info", "warning", "error", "critical", "exception", "log",
+        # Common library symbols
+        "Path",  # pathlib
+        "json", "dump", "dumps", "load", "loads",
+        "re", "match", "search", "sub", "findall", "compile",
+        "os", "sys", "time", "datetime", "timedelta",
+        "pd", "np",  # pandas, numpy short aliases
+    })
+
+    def _resolve(callee_text: str, caller_refid: str) -> tuple[str, str] | None:
+        """Resolve a callee expression to a (refid, type_name) pair."""
+        # Skip builtins.
+        if callee_text in _PYTHON_BUILTINS:
+            return None
+        caller_ns = ""
+        if caller_refid in caller_info:
+            caller_ns = caller_info[caller_refid][1]
+
+        # --- self.method calls ---
+        if callee_text.startswith("self."):
+            method_name = callee_text[5:]
+            # Resolve against the caller's own class methods.
+            candidates = by_name.get(method_name)
+            if candidates:
+                # Prefer methods in the same namespace as the caller.
+                same_ns = [c for c in candidates if c[1] == caller_ns]
+                target = same_ns[0] if same_ns else candidates[0] if len(candidates) == 1 else None
+                if target:
+                    return target[0], target[2]
+            return None
+
+        # --- cls.method calls ---
+        if callee_text.startswith("cls."):
+            return None  # classmethods on builtins — skip
+
+        # --- dotted calls like "module.func" or "pkg.mod.func" ---
+        if "." in callee_text:
+            # Try exact qualified-name match.
+            if callee_text in by_qname:
+                refid, type_name = by_qname[callee_text]
+                return refid, type_name
+            # Trailing-component fallback.
+            short = callee_text.rsplit(".", 1)[-1]
+            candidates = by_name.get(short)
+            if candidates:
+                same_ns = [c for c in candidates if c[1] == caller_ns]
+                if same_ns:
+                    return same_ns[0][0], same_ns[0][2]
+                if len(candidates) == 1:
+                    return candidates[0][0], candidates[0][2]
+            return None
+
+        # --- bare calls like "func" ---
+        candidates = by_name.get(callee_text)
+        if not candidates:
+            return None
+        # Prefer same-namespace match.
+        same_ns = [c for c in candidates if c[1] == caller_ns]
+        if same_ns:
+            return same_ns[0][0], same_ns[0][2]
+        if len(candidates) == 1:
+            return candidates[0][0], candidates[0][2]
+        return None
+
+    # Resolve all pending calls.
+    seen: set[tuple[str, str]] = set()
+    for caller_refid, callee_text, _lineno in result.pending_calls:
+        resolved = _resolve(callee_text, caller_refid)
+        if resolved is None:
+            continue
+        to_refid, to_type = resolved
+        if to_refid == caller_refid:
+            continue  # skip self-calls (recursion)
+        pair = (caller_refid, to_refid)
+        if pair in seen:
+            continue
+        seen.add(pair)
+        result.invokes.append(InvokeEntry(
+            from_refid=caller_refid,
+            to_refid=to_refid,
+            to_name=callee_text,
         ))
 
 

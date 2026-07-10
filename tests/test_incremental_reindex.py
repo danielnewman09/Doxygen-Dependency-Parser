@@ -17,13 +17,12 @@ objects from Neo4j and inspect their neomodel relationship managers
 * **Updated** nodes retain all their edges.
 * **Preservation**: nodes from *other* sources are untouched.
 
-Requires a running Neo4j instance.  Skipped automatically when Neo4j
-is not reachable.
+Requires a running Neo4j instance managed by the ``test_neo4j_container``
+and ``setup_neomodel`` session fixtures in ``tests/conftest.py``.
 """
 
 from __future__ import annotations
 
-import os
 import shutil
 import textwrap
 from pathlib import Path
@@ -49,31 +48,6 @@ OTHER_SOURCE = "reindex_other"
 # ---------------------------------------------------------------------------
 # Neo4j helpers — raw Cypher
 # ---------------------------------------------------------------------------
-
-def _neo4j_available() -> bool:
-    """Check if Neo4j is reachable and credentials are configured."""
-    try:
-        from dotenv import load_dotenv
-        load_dotenv(Path(__file__).parent.parent / "codegraph" / ".env", override=False)
-    except Exception:
-        pass
-    if not os.getenv("NEO4J_URI"):
-        try:
-            from dotenv import load_dotenv
-            load_dotenv(Path(__file__).parent.parent / ".env", override=False)
-        except Exception:
-            pass
-    if not os.getenv("NEO4J_URI"):
-        return False
-    try:
-        from neomodel import db
-        from doxygen_index.neo4j_backend import connect_neo4j
-        connect_neo4j()
-        db.cypher_query("RETURN 1")
-        return True
-    except Exception:
-        return False
-
 
 def _file_exists(refid: str, source: str = TEST_SOURCE) -> bool:
     from neomodel import db
@@ -215,23 +189,6 @@ def _rel_count(node, rel_manager_name: str) -> int:
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
-
-@pytest.fixture(scope="module", autouse=True)
-def _neo4j_setup():
-    if not _neo4j_available():
-        pytest.skip("Neo4j not reachable — skipping incremental re-index tests")
-
-    from doxygen_index.neo4j_backend import connect_neo4j, ensure_schema
-    from neomodel import db
-
-    connect_neo4j()
-    ensure_schema()
-    _clear_test_sources()
-
-    yield
-
-    _clear_test_sources()
-
 
 @pytest.fixture
 def fixture_copy(tmp_path) -> Path:

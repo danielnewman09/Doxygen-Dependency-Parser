@@ -256,6 +256,15 @@ class ParseResult:
     fixture_of_types: list[FixtureOfTypeEntry] = field(default_factory=list)
     fixture_checked_by: list[FixtureCheckedByEntry] = field(default_factory=list)
     fixture_defined_in: list[FixtureDefinedInEntry] = field(default_factory=list)
+    pending_calls: list[tuple[str, str, int]] = field(default_factory=list)
+    """Raw call data collected during AST walk: ``(caller_refid, callee_text, lineno)``.
+
+    Populated by :func:`~doxygen_index.parser.python.functions.visit_function`
+    for every ``ast.Call`` found in a function/method body.  Consumed by
+    :func:`~doxygen_index.parser.python.postprocess.derive_invokes` which
+    resolves *callee_text* to known function/method refids and emits
+    :class:`InvokeEntry` entries.
+    """
 
     @property
     def compounds(self) -> list:

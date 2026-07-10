@@ -132,6 +132,35 @@ def compare_op_to_str(op: ast.cmpop) -> str:
     return op_map.get(type(op), "unknown")
 
 
+class _CallCollector(ast.NodeVisitor):
+    """Walk an AST body and collect call expressions.
+
+    Yields ``(callee_text, lineno)`` for every ``ast.Call`` found.
+    The callee text is the dotted expression as a string, e.g.
+    ``"_sanitize_alias"``, ``"self._emit_entry"``, ``"mod.func"``.
+    """
+
+    def __init__(self):
+        self.calls: list[tuple[str, int]] = []
+
+    def visit_Call(self, node: ast.Call) -> None:
+        callee = annotation_to_str(node.func)
+        if callee:
+            self.calls.append((callee, node.lineno))
+        self.generic_visit(node)
+
+
+def collect_calls(node: ast.AST) -> list[tuple[str, int]]:
+    """Collect all ``ast.Call`` expressions within *node*.
+
+    Returns a list of ``(callee_text, lineno)`` tuples for every call
+    found in the AST subtree rooted at *node*.
+    """
+    collector = _CallCollector()
+    collector.visit(node)
+    return collector.calls
+
+
 def is_inside_assert(node: ast.AST, func_node: ast.AST) -> bool:
     """Check if *node* is a Call that appears inside an assert test.
 

@@ -294,6 +294,79 @@ def _preserve_descriptions(*node_lists: list) -> None:
     if preserved:
         print(f"  Preserved {preserved} enriched descriptions")
 
+
+def fetch_node_descriptions(
+    qualified_names: list[str],
+    *,
+    include_placeholder: bool = False,
+) -> dict[str, str]:
+    """Fetch ``description`` values held in the graph by qualified name.
+
+    Queries Neo4j for every node whose ``qualified_name`` is in
+    *qualified_names* and returns a ``{qualified_name: description}`` map.
+    By default only **non-placeholder** descriptions are returned (parser
+    placeholders like ``"Setup block"`` or ``"assert …"`` are filtered out),
+    so the result is suitable for feeding straight into
+    :func:`~doxygen_index.parser.python.test_comments.write_test_comments`
+    as the ``descriptions`` override — i.e. materialising already-enriched
+    graph values into source-file comment blocks without re-running the LLM.
+
+    A Neo4j connection must already be configured (call
+    :func:`connect_neo4j` first).  Query errors are reported on stderr and
+    yield an empty dict rather than raising, so callers can fall back to
+    scaffold/placeholder behaviour when the graph is unreachable.
+
+    Args:
+        qualified_names: Qualified names to look up.
+        include_placeholder: If True, return placeholder descriptions too
+            (still skipping empty/missing values).
+
+    Returns:
+        ``{qualified_name: description}`` for the found nodes.
+    """
+    if not qualified_names:
+        return {}
+    from neomodel import db
+
+    query = """
+        UNWIND $qnames AS qname
+        MATCH (n)
+        WHERE n.qualified_name = qname
+          AND n.description IS NOT NULL
+          AND n.description <> ''
+        RETURN n.qualified_name AS qname, n.description AS description
+    """
+    try:
+        results, _ = db.cypher_query(query, {"qnames": list(qualified_names)})
+    except Exception as exc:  # connection / query failure
+        print(f"Warning: could not fetch descriptions from Neo4j: {exc}",
+              file=sys.stderr)
+        return {}
+
+    out: dict[str, str] = {}
+    for row in results:
+        qn = row[0]
+        desc = row[1] or ""
+        if not desc:
+            continue
+        if not include_placeholder and _is_placeholder_description(desc):
+            continue
+        out.setdefault(qn, desc)
+    return out
+
+
+def _collect_test_qualified_names(result: ParseResult) -> list[str]:
+    """Return the qualified names of all test-related nodes in *result*."""
+    qns: list[str] = []
+    for lst in (result.tests, result.test_steps,
+                result.test_fixtures, result.assertions):
+        for node in lst:
+            qn = getattr(node, "qualified_name", "") or ""
+            if qn:
+                qns.append(qn)
+    return qns
+
+
 def write_result(result: ParseResult) -> None:
     """Write a ParseResult to Neo4j.
 

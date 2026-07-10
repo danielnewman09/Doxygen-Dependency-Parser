@@ -178,6 +178,102 @@ The enrichment:
 The ``--dry-run-enrich`` flag is useful for previewing prompts and verifying
 that the enrichment will target the right nodes before incurring API costs.
 
+### Reflecting enriched descriptions into test source files
+
+Enriched descriptions normally live only in the graph (JSON or Neo4j), so a
+fresh re-parse regenerates the parser's placeholders (``"Setup block"``,
+``"assert …"``) and overwrites them unless you carry the enriched output
+forward.  ``--write-test-comments`` closes that loop by writing each enriched
+description back into the test ``.py`` file as a tagged comment block:
+
+```python
+# codegraph:test-desc samplepkg.test_calculator.test_evaluator_step
+# Verifies that the Evaluator accumulates a result across multiple steps.
+def test_evaluator_step():
+    """Evaluator accumulates results across multiple steps."""
+    # codegraph:test-desc samplepkg.test_calculator.test_evaluator_step::evaluator
+    # The Evaluator instance under test, initialised to zero.
+    # codegraph:test-desc samplepkg.test_calculator.test_evaluator_step::step_0
+    # Constructs the evaluator and applies two operations.
+    evaluator = Evaluator(0.0)
+    evaluator.step(Operator.ADD, 5)
+    evaluator.step(Operator.MULTIPLY, 3)
+    # codegraph:test-desc samplepkg.test_calculator.test_evaluator_step::post_0
+    # Checks that the accumulated value equals 15.0.
+    assert evaluator.current == 15.0
+```
+
+The **qualified name in the tag is the bidirectional mapping key**: on the
+next parse, the parser reads these blocks and restores each description onto
+the matching node's ``description`` field (TestNode / TestStepNode /
+TestFixtureNode / AssertionNode), overriding the placeholder.  Because the
+mapping is by qualified name rather than line number, the comments survive
+edits that shift lines above them.
+
+```bash
+# Enrich, then write the descriptions back into the .py files
+# (idempotent: re-running replaces blocks in place)
+doxygen-index project . --enrich --write-test-comments
+
+# Materialise descriptions held in the graph without re-running the LLM:
+# pass a JSON file of {qualified_name: description} read from Neo4j
+doxygen-index project . --write-test-comments --descriptions-from enriched.json
+
+# Or read them straight from the Neo4j nodes via the one-off script:
+python scripts/write_test_descriptions_from_graph.py            # writes
+python scripts/write_test_descriptions_from_graph.py --dry-run   # preview
+python scripts/write_test_descriptions_from_graph.py --width 100  # custom width
+
+# Preview the edits without writing
+doxygen-index project . --write-test-comments --dry-run-test-comments
+```
+
+The writer anchors each block above its element (the ``def``, the first line
+of a step block, a fixture assignment, or an ``assert``), skips parser
+placeholders, and skips a test-level description that merely duplicates the
+function's existing docstring.  Description continuation lines are **wrapped
+to 88 characters** (Black's default; configurable via the ``width`` argument
+to ``write_test_comments`` / the ``--width`` flag of the one-off script).
+The tag line itself is never wrapped — it's a structural identifier the
+parser must match on one line — but the ``# …`` description lines reflow:
+consecutive non-blank ``#`` lines are one paragraph (joined with a space on
+read) and a bare ``#`` line is a paragraph break, so wrapping round-trips
+losslessly and re-running is idempotent.  See
+``doxygen_index.parser.python.test_comments`` for the programmatic API
+(``read_test_comments`` / ``write_test_comments``).
+
+#### Authoring descriptions by hand (scaffold mode)
+
+You can add comment slots **without enriching first** — useful when you want
+to write the descriptions yourself rather than via the LLM:
+
+```bash
+# Insert an empty '# codegraph:test-desc <qn>' tag line above every test
+# element (test, step, fixture, assertion) that does not yet have a real
+# description.
+doxygen-index project . --write-test-comments --scaffold-test-comments
+```
+
+This writes a bare tag line for each element:
+
+```python
+# codegraph:test-desc samplepkg.test_calculator.test_evaluator_step::step_0
+evaluator = Evaluator(0.0)
+```
+
+Fill a slot in by adding ``# …`` description lines directly beneath the tag:
+
+```python
+# codegraph:test-desc samplepkg.test_calculator.test_evaluator_step::step_0
+# Constructs the evaluator and applies two operations.
+evaluator = Evaluator(0.0)
+```
+
+The next parse reads the filled-in lines onto the matching node's
+``description`` field.  Empty (unfilled) slots are ignored, so the parser's
+placeholder is preserved until you write something.  Scaffold mode is
+idempotent and preserves any element that already has a real description.
+
 ## CLI Usage
 
 ```bash

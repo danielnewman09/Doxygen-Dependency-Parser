@@ -46,6 +46,7 @@ from doxygen_index.parser.python.postprocess import (
     derive_namespace_compositions,
     derive_inheritance,
     derive_type_dependencies,
+    derive_invokes,
     derive_namespace_imports,
     derive_test_compositions,
     extract_implementations,
@@ -132,6 +133,7 @@ class PythonParser(LanguageParser):
         derive_namespace_compositions(result)
         derive_inheritance(result)
         derive_type_dependencies(result)
+        derive_invokes(result)
         derive_namespace_imports(result)
         derive_test_compositions(result)
         extract_implementations(result)
@@ -244,6 +246,11 @@ class PythonParser(LanguageParser):
                             is_local=node.level > 0,
                         ))
 
+        # Read any tagged ``# codegraph:test-desc <qn>`` comment blocks
+        # from this file so the test handlers can restore enriched
+        # descriptions that were written back into the source.
+        from doxygen_index.parser.python.test_comments import read_test_comments
+
         # Visit top-level definitions
         ctx = ParseContext(
             module_name=module_name,
@@ -251,6 +258,7 @@ class PythonParser(LanguageParser):
             source=source,
             layer=layer,
             result=result,
+            test_comments=read_test_comments(file_path),
         )
         visitor = _PythonVisitor(ctx)
         visitor.visit(tree)

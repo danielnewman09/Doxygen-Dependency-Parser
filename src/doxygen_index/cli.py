@@ -20,6 +20,7 @@ exists in the current directory, ``project`` is assumed.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import sys
 from pathlib import Path
@@ -181,6 +182,46 @@ def cmd_project(args: argparse.Namespace) -> None:
                     encoding="utf-8",
                 )
                 print(f"  Summary:  {summary_path}")
+
+    # ------------------------------------------------------------------
+    # Reflect enriched descriptions back into test source files
+    # ------------------------------------------------------------------
+    # Writes the (now possibly enriched) test-node descriptions as
+    # ``# codegraph:test-desc <qualified_name>`` comment blocks into
+    # the parsed ``.py`` files.  Idempotent: re-running replaces blocks
+    # in place.  Works with or without --enrich (e.g. to materialise
+    # descriptions read back from Neo4j via --descriptions-from).
+    if args.write_test_comments:
+        from doxygen_index.parser.python.test_comments import write_test_comments
+
+        override = None
+        if args.descriptions_from:
+            from pathlib import Path as _P
+            try:
+                override = json.loads(_P(args.descriptions_from).read_text())
+            except Exception as exc:
+                print(f"Warning: could not load descriptions file: {exc}",
+                      file=sys.stderr)
+        print("\n--- Writing test description comments ---")
+        report = write_test_comments(
+            result,
+            dry_run=args.dry_run_test_comments,
+            descriptions=override,
+            scaffold=getattr(args, "scaffold_test_comments", False),
+        )
+        print(f"  Files changed:    {len(report.files_changed)}")
+        print(f"  Files unchanged:  {len(report.files_unchanged)}")
+        print(f"  Nodes written:    {report.nodes_written}")
+        if report.nodes_scaffolded:
+            print(f"  Slots scaffolded: {report.nodes_scaffolded}")
+        print(f"  Skipped (placeholder): {report.nodes_skipped_placeholder}")
+        print(f"  Skipped (docstring):   {report.nodes_skipped_docstring}")
+        if report.errors:
+            print(f"  Errors: {len(report.errors)}")
+            for e in report.errors:
+                print(f"    - {e}")
+        if args.dry_run_test_comments:
+            print("  (dry-run — no files written)")
 
     # ------------------------------------------------------------------
     # Output
@@ -657,6 +698,26 @@ def main() -> None:
                     help="With --enrich: write enrichment summary JSON to output dir")
     sp.add_argument("--enrich-batch-size", type=int, default=10, metavar="N",
                     help="With --enrich: nodes per LLM batch call (default: 10)")
+    # Reflect enriched descriptions back into test source files as comments
+    sp.add_argument("--write-test-comments", action="store_true",
+                    help="Write enriched test-node descriptions back into the "
+                         "parsed .py files as '# codegraph:test-desc <qn>' "
+                         "comment blocks. Idempotent. Use after --enrich, or "
+                         "with --descriptions-from to materialise graph values.")
+    sp.add_argument("--descriptions-from", default=None, metavar="JSON",
+                    help="With --write-test-comments: path to a JSON file "
+                         "mapping qualified_name -> description. Overrides the "
+                         "parsed nodes' own descriptions (e.g. values read "
+                         "from Neo4j).")
+    sp.add_argument("--dry-run-test-comments", action="store_true",
+                    help="With --write-test-comments: compute edits but do not "
+                         "write to disk.")
+    sp.add_argument("--scaffold-test-comments", action="store_true",
+                    help="With --write-test-comments: insert an empty comment "
+                         "slot (# codegraph:test-desc <qn>) for every test "
+                         "element that does not yet have a real description, so "
+                         "you can author descriptions by hand without enriching. "
+                         "Fill the slot by adding '# ...' lines beneath the tag.")
     sp.set_defaults(func=cmd_project)
 
     # html — generate HTML graph from existing parse output

@@ -45,6 +45,7 @@ class ProjectConfig:
     exclude_patterns: str = ""          # Doxygen EXCLUDE_PATTERNS / Python glob excludes
     predefined: str = ""                # Doxygen PREDEFINED macros
     test_paths: list[Path] = None        # directories containing test files (Python only)
+    requirements_dir: Path | None = None  # where to read/write serialised requirements Markdown
 
 
 def load_config(project_dir: Path | str) -> tuple[ProjectConfig, Path]:
@@ -102,6 +103,15 @@ def load_config(project_dir: Path | str) -> tuple[ProjectConfig, Path]:
         if not p.exists():
             print(f"Warning: test path does not exist: {p}", file=sys.stderr)
 
+    # Resolve requirements_dir (relative to config file directory)
+    requirements_dir_raw = proj.get("requirements_dir")
+    resolved_requirements_dir = (
+        (base / requirements_dir_raw).resolve() if requirements_dir_raw else None
+    )
+    if resolved_requirements_dir and not resolved_requirements_dir.exists():
+        print(f"Warning: requirements_dir does not exist: {resolved_requirements_dir}",
+              file=sys.stderr)
+
     # Parse optional [codegraph-html] section
     html_config = None
     if "codegraph-html" in data:
@@ -123,6 +133,7 @@ def load_config(project_dir: Path | str) -> tuple[ProjectConfig, Path]:
         exclude_patterns=proj.get("exclude_patterns", ""),
         predefined=proj.get("predefined", ""),
         test_paths=resolved_test_paths,
+        requirements_dir=resolved_requirements_dir,
     ), project_dir
 
 
@@ -139,6 +150,7 @@ input_paths = ["include", "src"]
 # exclude_patterns = "*/test/* */build/*"
 # predefined = "SOME_MACRO=1"
 # test_paths = ["tests"]       # Python: also parse test dirs for TestNode extraction
+# requirements_dir = "codegraph/requirements/"  # where to read/write serialised requirements Markdown
 
 # [codegraph-html]        # uncomment to enable HTML graph visualization
 # output_dir = "codegraph"  # where to write JSON + HTML (default: codegraph)

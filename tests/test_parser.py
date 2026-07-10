@@ -903,6 +903,38 @@ class TestProjectConfig:
         with pytest.raises(SystemExit):
             load_config(tmp_path)
 
+    def test_requirements_dir_resolved(self, tmp_path):
+        """requirements_dir should be resolved relative to the config file."""
+        from doxygen_index.project import load_config
+
+        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
+            [project]
+            name = "myapp"
+            language = "python"
+            input_paths = ["src"]
+            requirements_dir = "codegraph/requirements/"
+        """))
+        (tmp_path / "src").mkdir()
+        (tmp_path / "codegraph" / "requirements").mkdir(parents=True)
+
+        config, _ = load_config(tmp_path)
+        assert config.requirements_dir == (tmp_path / "codegraph" / "requirements").resolve()
+
+    def test_requirements_dir_none_by_default(self, tmp_path):
+        """requirements_dir should be None when not specified."""
+        from doxygen_index.project import load_config
+
+        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
+            [project]
+            name = "myapp"
+            language = "python"
+            input_paths = ["src"]
+        """))
+        (tmp_path / "src").mkdir()
+
+        config, _ = load_config(tmp_path)
+        assert config.requirements_dir is None
+
 
 class TestPythonParsing:
     """Tests for Python source parsing via the CLI project command."""

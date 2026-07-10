@@ -16,6 +16,7 @@ from doxygen_index.parser.python._ast_utils import (
     decorator_names,
     annotation_to_str,
     is_private,
+    collect_calls,
 )
 from doxygen_index.parser.python._context import ParseContext
 from doxygen_index.parser.python import tests as _tests
@@ -118,6 +119,10 @@ def visit_function(
                 type=ptype,
                 default_value=pdefault,
             ))
+
+        # Collect call expressions from the body for invoke derivation
+        for callee_text, lineno in collect_calls(node):
+            ctx.result.pending_calls.append((qname, callee_text, lineno))
     else:
         # Free function at module level
         qname = qualified_name(ctx.module_name, node.name)
@@ -153,6 +158,10 @@ def visit_function(
                 type=ptype,
                 default_value=pdefault,
             ))
+
+        # Collect call expressions from the body for invoke derivation
+        for callee_text, lineno in collect_calls(node):
+            ctx.result.pending_calls.append((qname, callee_text, lineno))
 
 
 def extract_args(node: ast.FunctionDef | ast.AsyncFunctionDef) -> dict:

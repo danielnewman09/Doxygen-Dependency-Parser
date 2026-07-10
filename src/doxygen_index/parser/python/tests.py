@@ -38,6 +38,32 @@ from doxygen_index.parser.python._context import ParseContext
 
 
 # ---------------------------------------------------------------------------
+# Bidirectional description sync
+# ---------------------------------------------------------------------------
+
+def _apply_comment(ctx: ParseContext, node) -> None:
+    """Restore an enriched description from a source-file comment block.
+
+    If the current file carries a ``# codegraph:test-desc <qualified_name>``
+    block for *node*'s qualified name, copy that description onto the
+    node, overriding the parser-generated placeholder (or the test
+    function's docstring brief).  This is the *source → graph* half of
+    the bidirectional sync; :func:`~doxygen_index.parser.python.test_comments.write_test_comments`
+    is the *graph → source* half.
+
+    Empty comment descriptions are ignored so that scaffold slots
+    (bare tag lines waiting to be filled in by hand) do not clobber the
+    parser's placeholder — only a real, filled-in description overrides.
+    """
+    qn = getattr(node, "qualified_name", "")
+    if not qn:
+        return
+    desc = ctx.test_comments.get(qn)
+    if desc and desc.strip():
+        node.description = desc
+
+
+# ---------------------------------------------------------------------------
 # Test function entry point
 # ---------------------------------------------------------------------------
 
@@ -89,6 +115,7 @@ def visit_test_function(
     )
     test_node.layer = ctx.layer
     ctx.result.tests.append(test_node)
+    _apply_comment(ctx, test_node)
 
     # --- Extract named test instances (test_fixture nodes) ---
     # Walk the body for assignments like ``evaluator = Evaluator(0.0)``
@@ -226,6 +253,7 @@ def _extract_test_instances(
             fixture.file_path = ctx.file_path
             fixture.line_number = stmt.lineno
             ctx.result.test_fixtures.append(fixture)
+            _apply_comment(ctx, fixture)
 
             ctx.result.fixture_of_types.append(FixtureOfTypeEntry(
                 from_refid=fixture_qname,
@@ -380,7 +408,9 @@ def _process_assert(
     )
     assertion.layer = ctx.layer
     assertion.file_path = ctx.file_path
+    assertion.line_number = stmt.lineno
     ctx.result.assertions.append(assertion)
+    _apply_comment(ctx, assertion)
 
     ctx.result.test_compositions.append(TestCompositionEntry(
         parent_refid=test_refid,
@@ -625,6 +655,7 @@ def _process_step_block(
     step.layer = ctx.layer
     step.file_path = ctx.file_path
     ctx.result.test_steps.append(step)
+    _apply_comment(ctx, step)
 
     ctx.result.test_compositions.append(TestCompositionEntry(
         parent_refid=test_refid,
