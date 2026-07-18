@@ -166,6 +166,7 @@ def parse_class_page(
         definition="",
         module=derive_module(qualified_name),
         layer="dependency",
+        tags=["dependency"],
     )
 
     # Extract member stubs from t-dsc tables
@@ -207,6 +208,7 @@ def parse_class_page(
             is_explicit=False,
             source=SOURCE,
             layer="dependency",
+            tags=["dependency"],
         ))
 
     return compound, stubs
@@ -305,6 +307,7 @@ def parse_member_page(
                 name=pname,
                 type=ptype,
                 default_value=pdefault or "",
+                source=SOURCE,
             ))
         # If no sig params but docs exist, create entries from docs alone
         if not params and param_docs:
@@ -315,6 +318,7 @@ def parse_member_page(
                     name=p.name,
                     type="",
                     default_value="",
+                    source=SOURCE,
                 ))
 
         results.append((member, params))
@@ -372,6 +376,7 @@ def _make_method(
         is_explicit=False,
         source=SOURCE,
         layer="dependency",
+        tags=["dependency"],
     )
 
 
@@ -410,6 +415,7 @@ def parse_free_function_page(
             detailed_description=member.detailed_description,
             source=SOURCE,
             layer="dependency",
+            tags=["dependency"],
         )
         # Update parameter refids to point to the FunctionNode
         for p in params:

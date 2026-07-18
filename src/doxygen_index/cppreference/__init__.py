@@ -245,6 +245,12 @@ def _synthesize_namespaces(entries, _unused) -> list[NamespaceNode]:
     ns_set: set[str] = set()
     for entry in entries:
         qn = entry.qualified_name
+        # Strip argsstring — qualified names for functions may include
+        # "(param_types)" which can contain "::" and produce garbage
+        # namespace prefixes when split.
+        paren_idx = qn.find("(")
+        if paren_idx != -1:
+            qn = qn[:paren_idx]
         parts = qn.split("::")
         # Build all namespace prefixes (e.g. std, std::ranges)
         for i in range(1, len(parts)):
@@ -259,6 +265,7 @@ def _synthesize_namespaces(entries, _unused) -> list[NamespaceNode]:
             qualified_name=qn,
             source=SOURCE,
             layer="dependency",
+            tags=["dependency"],
         )
         for qn in sorted(ns_set)
     ]

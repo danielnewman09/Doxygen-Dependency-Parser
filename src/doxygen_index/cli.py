@@ -592,8 +592,8 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
     """Download, parse, and ingest cppreference into databases."""
     from doxygen_index.cppreference import download, parse
 
-    if not args.neo4j:
-        print("Error: specify --neo4j", file=sys.stderr)
+    if not args.neo4j and not args.csv:
+        print("Error: specify --neo4j or --csv", file=sys.stderr)
         sys.exit(1)
 
     cache_dir = Path(args.cache_dir).expanduser()
@@ -604,6 +604,13 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
 
     source = "cppreference"
 
+    # ── CSV export ───────────────────────────────────────────
+    if args.csv:
+        from doxygen_index.csv_export import export_csv
+        csv_dir = Path(args.csv_dir).expanduser() if args.csv_dir else Path("cppreference_csv")
+        export_csv(result, source=source, output_dir=csv_dir)
+
+    # ── Neo4j ingest ─────────────────────────────────────────
     if args.neo4j:
         from doxygen_index.neo4j_backend import (
             connect_neo4j,
@@ -783,6 +790,10 @@ def main() -> None:
                          "By default, incremental update is used.")
     sp.add_argument("--yes", "-y", action="store_true",
                     help="Skip confirmation prompts (e.g. when using --clear).")
+    sp.add_argument("--csv", action="store_true",
+                    help="Export to CSV files for neo4j-admin import")
+    sp.add_argument("--csv-dir", default=None,
+                    help="Output directory for CSV files (default: cppreference_csv)")
     sp.set_defaults(func=cmd_cppreference)
 
     args = parser.parse_args()

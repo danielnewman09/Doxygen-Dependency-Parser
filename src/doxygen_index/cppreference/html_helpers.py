@@ -219,17 +219,33 @@ def extract_page_description(soup) -> tuple[str, str]:
 # ---------------------------------------------------------------------------
 
 def extract_base_classes(soup) -> list[str]:
-    """Extract base class names from an inheritance section."""
+    """Extract base class names from an inheritance section.
+
+    cppreference shows base classes in an inheritance diagram — an SVG
+    image with an HTML ``<map>`` containing ``<area>`` elements whose
+    ``title`` attribute gives the base class refid path (e.g.
+    ``cpp/error/exception``). We extract the last path segment as the
+    base class name.
+    """
     bases: list[str] = []
-    # cppreference sometimes lists inheritance in the declaration itself
-    # or in a dedicated section.  Look for "Inherits from" or similar text.
-    for row in soup.find_all("tr", class_="t-dsc"):
-        text = strip_html_to_text(row)
-        # Look for rows that mention base class relationships
-        if "inherits from" in text.lower() or "derived from" in text.lower():
-            link = row.find("a")
-            if link:
-                bases.append(strip_html_to_text(link))
+    # Primary source: <area> tags inside the inheritance diagram
+    diagram_div = soup.find("div", class_="t-inheritance-diagram")
+    if diagram_div:
+        for area in diagram_div.find_all("area"):
+            title = area.get("title", "")
+            if title:
+                # title is like "cpp/error/exception" — take last segment
+                base_name = title.rsplit("/", 1)[-1]
+                if base_name:
+                    bases.append(base_name)
+    # Fallback: t-dsc rows with "inherits from" / "derived from" text
+    if not bases:
+        for row in soup.find_all("tr", class_="t-dsc"):
+            text = strip_html_to_text(row)
+            if "inherits from" in text.lower() or "derived from" in text.lower():
+                link = row.find("a")
+                if link:
+                    bases.append(strip_html_to_text(link))
     return bases
 
 
