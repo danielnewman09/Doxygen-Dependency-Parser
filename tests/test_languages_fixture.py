@@ -30,7 +30,7 @@ from pathlib import Path
 import pytest
 
 from codegraph.graph import LayerGraph
-from codegraph.viz.transform import layer_graph_to_cytoscape
+from codegraph.export.viz.transform import layer_graph_to_cytoscape
 from doxygen_index.graph_json import result_to_graph_json
 from doxygen_index.parser import parse_python_dir
 

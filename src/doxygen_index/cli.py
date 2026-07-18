@@ -385,7 +385,7 @@ def _generate_html(
     to the ``[codegraph-html]`` output directory.
     """
     from doxygen_index.graph_json import write_graph_json
-    from codegraph.viz import export_html_from_json
+    from codegraph.export.viz import export_html_from_json
 
     html_cfg = config.html_config
     html_cfg.output_dir.mkdir(parents=True, exist_ok=True)
@@ -414,7 +414,7 @@ def cmd_html(args: argparse.Namespace) -> None:
     self-contained HTML file using codegraph's visualization engine.
     """
     from doxygen_index.project import load_config
-    from codegraph.viz import export_html_from_json
+    from codegraph.export.viz import export_html_from_json
 
     project_dir = Path(args.project_dir).resolve()
     config, _ = load_config(project_dir)

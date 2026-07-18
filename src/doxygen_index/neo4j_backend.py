@@ -23,7 +23,6 @@ Uses neomodel for node persistence and Cypher for relationship creation.
 
 from __future__ import annotations
 
-import hashlib
 import os
 import re
 import sys
@@ -187,36 +186,41 @@ def clear_all() -> None:
 # ---------------------------------------------------------------------------
 
 def _ensure_deterministic_uid(node) -> None:
-    """Set a source-aware deterministic ``uid`` on *node* in place.
+    """Set a deterministic ``uid`` on *node* in place via the codegraph
+    canonical ``compute_uid`` function.
 
-    By default neomodel assigns a random UUID to ``uid``.  When re-indexing
-    the same source, this causes ``create_or_update`` to CREATE duplicates
-    instead of MERGE-updating existing nodes.
+    Computes ``compute_uid(source, *identity_values)`` where ``source``
+    is the project label and ``identity_values`` are the node's
+    ``_identity_fields`` values (with ``argsstring`` normalised via
+    :func:`codegraph.uid.normalize_argsstring`).
 
-    The deterministic uid is ``SHA1(SHA1(identity_fields), source)`` which:
-    - is stable across re-indexes (same source + same identity → same uid)
-    - is unique per source (same qualified_name in two sources → different uid)
+    The uid is:
+    - deterministic: same source + same identity → same uid every time
+    - source-scoped: same qualified_name in two sources → different uid
+    - consistent with ``codegraph.uid.compute_uid(source, *fields)``
     """
+    from codegraph.uid import compute_uid, normalize_argsstring
+
     identity_fields = list(getattr(node, "_identity_fields", ()) or ())
     identity_values = []
     for field in identity_fields:
         val = getattr(node, field, "")
-        identity_values.append(str(val) if val is not None else "")
-    identity_hash = hashlib.sha1("|".join(identity_values).encode()).hexdigest()
+        val_str = str(val) if val is not None else ""
+        if field == "argsstring":
+            val_str = normalize_argsstring(val_str)
+        identity_values.append(val_str)
     source = getattr(node, "source", "")
-    final_hash = hashlib.sha1((identity_hash + str(source)).encode()).hexdigest()
-    node.uid = final_hash
+    node.uid = compute_uid(str(source) if source else "", *identity_values)
 
 
 def _merge_by_keys(node) -> dict:
     """Return ``merge_by`` dict for ``create_or_update``.
 
-    Tells neomodel to MERGE on the node's identity fields **plus** source,
-    so updates only match within the same source label.
+    MERGE on ``uid`` — the deterministic hash of source + identity fields
+    computed by ``_ensure_deterministic_uid``.  Same uid as
+    ``CodeGraphNode._compute_uid`` produces.
     """
-    identity_fields = list(getattr(node, "_identity_fields", ()) or ())
-    keys = identity_fields + ["source"]
-    return {"keys": keys}
+    return {"keys": ["uid"]}
 
 
 # ---------------------------------------------------------------------------

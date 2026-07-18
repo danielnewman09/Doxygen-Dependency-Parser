@@ -1,0 +1,281 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "codegraph: neo4j start",
+      "detail": "Create and/or start the project-local Neo4j Docker container.",
+      "type": "shell",
+      "command": "codegraph-db",
+      "args": ["start"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "group": { "kind": "build", "isDefault": false },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: neo4j stop",
+      "detail": "Stop the Neo4j Docker container (data preserved on disk).",
+      "type": "shell",
+      "command": "codegraph-db",
+      "args": ["stop"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: neo4j status",
+      "detail": "Show container status and connection info.",
+      "type": "shell",
+      "command": "codegraph-db",
+      "args": ["status"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "presentation": { "reveal": "always" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: neo4j browser",
+      "detail": "Open Neo4j Browser in the default browser.",
+      "type": "shell",
+      "command": "codegraph-db",
+      "args": ["browser"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "presentation": { "reveal": "silent" },
+      "problemMatcher": []
+    },
+
+    {
+      "label": "codegraph: index",
+      "detail": "Index the project source into the Neo4j knowledge graph (as-built).",
+      "type": "shell",
+      "command": "doxygen-index",
+      "args": ["project", ".", "--format", "neo4j", "--source", "as-built"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "group": { "kind": "build", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: reindex",
+      "detail": "Clear existing as-built graph data and re-index from scratch.",
+      "type": "shell",
+      "command": "doxygen-index",
+      "args": ["project", ".", "--format", "neo4j", "--source", "as-built", "--clear", "--yes"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: index (json only)",
+      "detail": "Index the project to JSON (no Neo4j required).",
+      "type": "shell",
+      "command": "doxygen-index",
+      "args": ["project", ".", "--format", "json", "--source", "as-built"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+
+    {
+      "label": "codegraph: start neo4j + index",
+      "detail": "Start Neo4j, then index the project.",
+      "dependsOn": ["codegraph: neo4j start", "codegraph: index"],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: start neo4j + reindex",
+      "detail": "Start Neo4j, then clear and re-index the project.",
+      "dependsOn": ["codegraph: neo4j start", "codegraph: reindex"],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+
+    {
+      "label": "codegraph: create html graph",
+      "detail": "Generate an interactive HTML graph visualization from the JSON index.",
+      "type": "shell",
+      "command": "doxygen-index",
+      "args": ["html", "."],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: view html graph",
+      "detail": "Open the codegraph HTML visualization in the default browser.",
+      "type": "shell",
+      "command": "open",
+      "args": ["${workspaceFolder}/codegraph/codegraph.html"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "silent" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: index + html",
+      "detail": "Index to JSON, then generate the interactive HTML graph.",
+      "dependsOn": ["codegraph: index (json only)", "codegraph: create html graph"],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: index + html + view",
+      "detail": "Index to JSON, generate HTML, then open it in the browser.",
+      "dependsOn": ["codegraph: index + html", "codegraph: view html graph"],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+
+    {
+      "label": "codegraph: test",
+      "detail": "Run all tests.",
+      "type": "shell",
+      "command": "pytest",
+      "args": ["-v"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "group": { "kind": "test", "isDefault": true },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: coverage",
+      "detail": "Run tests with code coverage (term + html reports) and open the HTML report.",
+      "type": "shell",
+      "command": "pytest --cov=src/codegraph --cov-report=term-missing --cov-report=html:htmlcov; open htmlcov/index.html",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "group": { "kind": "test" },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: coverage (fail under 75)",
+      "detail": "Run tests with coverage; fail if under 75% line coverage. Opens HTML report.",
+      "type": "shell",
+      "command": "pytest --cov=src/codegraph --cov-report=term-missing --cov-report=html:htmlcov --cov-fail-under=75; open htmlcov/index.html",
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "group": { "kind": "test" },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+
+    {
+      "label": "codegraph: ticketing dashboard start",
+      "detail": "Launch the Ticketing System requirements dashboard (port 8082).",
+      "type": "shell",
+      "command": "ticketing-dashboard",
+      "args": ["--project-dir", "."],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "isBackground": true,
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": [
+        {
+          "pattern": {
+            "regexp": "^(Uvicorn running on|Dashboard running on)\\s+(.*)\\s*$",
+            "file": 1,
+            "message": 2
+          },
+          "background": {
+            "activeOnStart": true,
+            "beginsPattern": "^.*(Uvicorn running|Dashboard running).*$",
+            "endsPattern": "^.*(Uvicorn running|Dashboard running).*$"
+          }
+        }
+      ]
+    },
+    {
+      "label": "codegraph: ticketing dashboard stop",
+      "detail": "Stop a running ticketing dashboard instance.",
+      "type": "shell",
+      "command": "ticketing-dashboard",
+      "args": ["--project-dir", ".", "--stop"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "presentation": { "reveal": "always" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: ticketing dashboard open",
+      "detail": "Open the ticketing dashboard in the default browser (http://127.0.0.1:8082).",
+      "type": "shell",
+      "command": "open",
+      "args": ["http://127.0.0.1:8082"],
+      "options": { "cwd": "${workspaceFolder}" },
+      "presentation": { "reveal": "silent" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: enrich",
+      "detail": "Enrich test descriptions for all as-built tests using the configured LLM (with full trace logs).",
+      "type": "shell",
+      "command": "codegraph-enrich",
+      "args": ["--all", "--tag", "as-built", "--log-dir", "${workspaceFolder}/codegraph/logs"],
+      "options": {
+        "cwd": "${workspaceFolder}",
+        "env": { "PATH": "${env:HOME}/dev/.venv/bin:${env:PATH}" }
+      },
+      "group": { "kind": "build" },
+      "presentation": { "reveal": "always", "panel": "dedicated" },
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: full rebuild (with enrich)",
+      "detail": "Start Neo4j, reindex from scratch, enrich test descriptions, then run tests + coverage.",
+      "dependsOn": [
+        "codegraph: neo4j start",
+        "codegraph: reindex",
+        "codegraph: enrich",
+        "codegraph: coverage"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    },
+    {
+      "label": "codegraph: full rebuild",
+      "detail": "Start Neo4j, reindex from scratch, then run tests + coverage.",
+      "dependsOn": [
+        "codegraph: neo4j start",
+        "codegraph: reindex",
+        "codegraph: coverage"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
+    }
+  ]
+}
