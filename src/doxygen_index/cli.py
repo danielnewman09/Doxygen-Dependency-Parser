@@ -48,7 +48,7 @@ def _add_output_args(parser: argparse.ArgumentParser) -> None:
 
 
 def _add_db_args(parser: argparse.ArgumentParser) -> None:
-    """Add database target arguments."""
+    """Add database and CSV target arguments."""
     parser.add_argument("--neo4j", action="store_true",
                         help="Ingest into Neo4j graph database")
     parser.add_argument("--neo4j-uri",
@@ -60,6 +60,10 @@ def _add_db_args(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--neo4j-password",
                         default=os.environ.get("NEO4J_PASSWORD", "msd-local-dev"),
                         help="Neo4j password")
+    parser.add_argument("--csv", action="store_true",
+                        help="Export to CSV files for neo4j-admin import")
+    parser.add_argument("--csv-dir", default=None,
+                        help="Output directory for CSV files (default: <output-dir>/csv)")
 
 
 def _confirm_destructive(label: str, yes: bool) -> None:
@@ -446,13 +450,19 @@ def cmd_html(args: argparse.Namespace) -> None:
 
 
 def cmd_list_deps(args: argparse.Namespace) -> None:
-    """List all known dependency configurations."""
-    from doxygen_index.deps_config import list_known_deps
-    configs = list_known_deps()
-    print("Known dependency configurations:")
-    for name, config in sorted(configs.items()):
-        subdir = config.subdir or "(root)"
-        print(f"  {name:20s}  patterns={config.file_patterns:15s}  subdir={subdir}")
+    """List all dependencies discovered by Conan."""
+    from doxygen_index.conan import discover_packages
+    packages = discover_packages(
+        project_dir=args.project_dir,
+        build_type=args.build_type,
+        only=_parse_only(args.only),
+    )
+    if not packages:
+        print("\nNo packages found. Run 'conan install . --build=missing' first.")
+        return
+    print(f"\nDiscovered {len(packages)} dependencies:")
+    for name, path in sorted(packages.items()):
+        print(f"  {name}: {path}")
 
 
 def cmd_discover(args: argparse.Namespace) -> None:
@@ -493,11 +503,11 @@ def cmd_generate(args: argparse.Namespace) -> None:
 
 
 def cmd_ingest(args: argparse.Namespace) -> None:
-    """Ingest existing Doxygen XML into databases."""
+    """Ingest existing Doxygen XML into databases or export to CSV."""
     output_dir = Path(args.output_dir)
 
-    if not args.neo4j:
-        print("Error: specify --neo4j", file=sys.stderr)
+    if not args.neo4j and not args.csv:
+        print("Error: specify --neo4j or --csv", file=sys.stderr)
         sys.exit(1)
 
     # Find existing XML dirs
@@ -518,12 +528,23 @@ def cmd_ingest(args: argparse.Namespace) -> None:
               file=sys.stderr)
         sys.exit(1)
 
-    print(f"Ingesting {len(xml_dirs)} dependencies: {', '.join(sorted(xml_dirs))}\n")
+    print(f"Processing {len(xml_dirs)} dependencies: {', '.join(sorted(xml_dirs))}\n")
 
-    if args.clear:
-        _confirm_destructive("all dependency sources", args.yes)
-    for dep_name, xml_dir in sorted(xml_dirs.items()):
-        if args.neo4j:
+    # ── CSV export ───────────────────────────────────────────
+    if args.csv:
+        from doxygen_index.csv_export import export_csv
+        from doxygen_index.parser import parse_xml_dir
+        csv_base = Path(args.csv_dir) if args.csv_dir else output_dir / "csv"
+        for dep_name, xml_dir in sorted(xml_dirs.items()):
+            print(f"--- {dep_name} → CSV ---")
+            result = parse_xml_dir(xml_dir, source=dep_name, layer="dependency")
+            export_csv(result, source=dep_name, output_dir=csv_base / dep_name)
+
+    # ── Neo4j ingest ─────────────────────────────────────────
+    if args.neo4j:
+        if args.clear:
+            _confirm_destructive("all dependency sources", args.yes)
+        for dep_name, xml_dir in sorted(xml_dirs.items()):
             from doxygen_index.neo4j_backend import ingest as neo4j_ingest
             print(f"--- {dep_name} → Neo4j ---")
             neo4j_ingest(
@@ -536,12 +557,12 @@ def cmd_ingest(args: argparse.Namespace) -> None:
 
 
 def cmd_full(args: argparse.Namespace) -> None:
-    """Discover, generate, and ingest — all in one."""
+    """Discover, generate, and ingest/export — all in one."""
     from doxygen_index.conan import discover_packages
     from doxygen_index.doxygen import generate_xml
 
-    if not args.neo4j:
-        print("Error: specify --neo4j", file=sys.stderr)
+    if not args.neo4j and not args.csv:
+        print("Error: specify --neo4j or --csv", file=sys.stderr)
         sys.exit(1)
 
     # Phase 1: Discover
@@ -562,12 +583,23 @@ def cmd_full(args: argparse.Namespace) -> None:
         print("No XML generated.", file=sys.stderr)
         sys.exit(1)
 
-    # Phase 3: Ingest
-    if args.clear:
-        _confirm_destructive("all dependency sources", args.yes)
-    print(f"\n--- Ingesting {len(xml_dirs)} dependencies ---\n")
-    for dep_name, xml_dir in sorted(xml_dirs.items()):
-        if args.neo4j:
+    # Phase 3: CSV export
+    if args.csv:
+        from doxygen_index.csv_export import export_csv
+        from doxygen_index.parser import parse_xml_dir
+        csv_base = Path(args.csv_dir) if args.csv_dir else Path(args.output_dir) / "csv"
+        print(f"\n--- Exporting CSV for {len(xml_dirs)} dependencies ---\n")
+        for dep_name, xml_dir in sorted(xml_dirs.items()):
+            print(f"--- {dep_name} → CSV ---")
+            result = parse_xml_dir(xml_dir, source=dep_name, layer="dependency")
+            export_csv(result, source=dep_name, output_dir=csv_base / dep_name)
+
+    # Phase 4: Neo4j ingest
+    if args.neo4j:
+        if args.clear:
+            _confirm_destructive("all dependency sources", args.yes)
+        print(f"\n--- Ingesting {len(xml_dirs)} dependencies ---\n")
+        for dep_name, xml_dir in sorted(xml_dirs.items()):
             from doxygen_index.neo4j_backend import ingest as neo4j_ingest
             print(f"--- {dep_name} → Neo4j ---")
             neo4j_ingest(
@@ -586,6 +618,194 @@ def cmd_full(args: argparse.Namespace) -> None:
         print(f"  {name}: {xml_count} XML files")
     if args.neo4j:
         print(f"Neo4j: {args.neo4j_uri}")
+    if args.csv:
+        csv_base = Path(args.csv_dir) if args.csv_dir else Path(args.output_dir) / "csv"
+        print(f"CSV: {csv_base}")
+
+
+def cmd_codegraph(args: argparse.Namespace) -> None:
+    """Full codegraph ingestion: unified Doxygen on project + deps → CSV.
+
+    Runs a single Doxygen parse covering the project source AND all
+    dependency include directories.  This naturally produces
+    cross-references (INVOKES edges) from project code to dependency
+    symbols, which become DEPENDS_ON in the graph.
+    """
+    from doxygen_index.conan import discover_packages
+    from doxygen_index.doxygen import run_unified_doxygen
+    from doxygen_index.parser import parse_xml_dir
+    from doxygen_index.csv_export import export_csv
+
+    project_dir = Path(args.project_dir).resolve()
+    csv_base = Path(args.csv_dir) if args.csv_dir else Path(args.output_dir) / "csv"
+    csv_base.mkdir(parents=True, exist_ok=True)
+
+    # ── Phase 1: Discover Conan deps ──────────────────────────
+    dep_include_dirs = discover_packages(
+        project_dir=project_dir,
+        build_type=args.build_type,
+        only=_parse_only(args.only),
+    )
+    if dep_include_dirs:
+        print(f"Discovered {len(dep_include_dirs)} dependencies.")
+    else:
+        print("No Conan dependencies found (continuing with project-only parse).")
+
+    # ── Phase 2: Find project source dirs ─────────────────────
+    project_sources = _find_project_source_dirs(project_dir)
+    print(f"Project source dirs: {[str(d) for d in project_sources]}")
+
+    # ── Phase 3: Unified Doxygen run ──────────────────────────
+    project_name = project_dir.name
+    print(f"\n--- Unified Doxygen: {project_name} + {len(dep_include_dirs)} deps ---")
+    xml_dir = run_unified_doxygen(
+        project_name=project_name,
+        project_source_dirs=project_sources,
+        dep_include_dirs=dep_include_dirs,
+        output_base=Path(args.output_dir),
+    )
+    if not xml_dir:
+        print("Doxygen failed.", file=sys.stderr)
+        sys.exit(1)
+
+    # ── Phase 4: Parse unified XML ────────────────────────────
+    print(f"\n--- Parsing unified XML ---")
+    result = parse_xml_dir(xml_dir, source=project_name, layer="dependency")
+
+    # ── Phase 5: Tag nodes by source ──────────────────────────
+    # Overwrite each node's source attribute based on file location.
+    # Project-owned nodes get source=project_name; dep-owned nodes
+    # get source=<dep_name>.  This way the single CSV contains all
+    # nodes and cross-source INVOKES edges naturally.
+    _tag_nodes_by_source(result, project_dir, dep_include_dirs, project_name)
+    by_source = _count_by_source(result)
+    for src, count in sorted(by_source.items()):
+        print(f"  {src}: {count} nodes")
+
+    # ── Phase 6: Export single CSV with everything ────────────
+    print(f"\n--- Exporting CSV ---")
+    export_csv(result, source=project_name, output_dir=csv_base / project_name)
+
+    # ── Phase 7: cppreference (optional) ──────────────────────
+    if args.cppreference:
+        from doxygen_index.cppreference import download, parse
+        print("\n=== cppreference ===")
+        cache_dir = Path(args.cppreference_cache_dir).expanduser()
+        archive_root = download(
+            cache_dir,
+            url=args.cppreference_archive_url,
+            force=args.cppreference_force,
+        )
+        cppref_result = parse(archive_root)
+        export_csv(cppref_result, source="cppreference",
+                   output_dir=csv_base / "cppreference")
+
+    # ── Summary ────────────────────────────────────────────────
+    print(f"\n{'='*60}")
+    print(f"Codegraph CSV export complete.")
+    print(f"Output directory: {csv_base}")
+    for subdir in sorted(csv_base.iterdir()):
+        if subdir.is_dir():
+            nodes = subdir / "nodes.csv"
+            rels = subdir / "relationships.csv"
+            n_rows = sum(1 for _ in open(nodes)) - 1 if nodes.exists() else 0
+            r_rows = sum(1 for _ in open(rels)) - 1 if rels.exists() else 0
+            print(f"  {subdir.name}/  nodes={n_rows}  rels={r_rows}")
+    print()
+    print("To load into Neo4j:")
+    for subdir in sorted(csv_base.iterdir()):
+        if subdir.is_dir():
+            nodes = subdir / "nodes.csv"
+            rels = subdir / "relationships.csv"
+            if nodes.exists():
+                print(f"  --nodes={nodes} \\")
+            if rels.exists():
+                print(f"  --relationships={rels} \\")
+
+
+def _tag_nodes_by_source(
+    result: "ParseResult",
+    project_dir: Path,
+    dep_include_dirs: dict[str, Path],
+    project_source: str,
+) -> None:
+    """Tag every node in *result* with the correct source label.
+
+    Nodes whose ``file_path`` falls under *project_dir* get
+    ``source=project_source``; those under a dep include dir get
+    ``source=<dep_name>``.
+    """
+    project_dir = project_dir.resolve()
+    dir_to_dep: dict[Path, str] = {}
+    for dep_name, inc_dir in dep_include_dirs.items():
+        dir_to_dep[inc_dir.resolve()] = dep_name
+
+    def _classify(file_path: str) -> str:
+        if not file_path:
+            return project_source
+        fp = Path(file_path)
+        if fp.is_absolute():
+            rp = fp.resolve()
+            try:
+                rp.relative_to(project_dir)
+                return project_source
+            except ValueError:
+                pass
+            for dep_dir, dep_name in dir_to_dep.items():
+                try:
+                    rp.relative_to(dep_dir)
+                    return dep_name
+                except ValueError:
+                    pass
+        return project_source
+
+    all_nodes = (
+        result.files + result.namespaces +
+        result.classes + result.enums + result.unions +
+        result.interfaces + result.concepts +
+        result.methods + result.attributes +
+        result.enum_values + result.defines +
+        result.functions + result.parameters +
+        result.implementations
+    )
+    for node in all_nodes:
+        fp = getattr(node, "file_path", "") or ""
+        if hasattr(node, "source"):
+            node.source = _classify(fp)
+
+
+def _count_by_source(result: "ParseResult") -> dict[str, int]:
+    counts: dict[str, int] = {}
+    all_nodes = (
+        result.files + result.namespaces +
+        result.classes + result.enums + result.unions +
+        result.interfaces + result.concepts +
+        result.methods + result.attributes +
+        result.enum_values + result.defines +
+        result.functions + result.parameters +
+        result.implementations
+    )
+    for node in all_nodes:
+        src = getattr(node, "source", "unknown") or "unknown"
+        counts[src] = counts.get(src, 0) + 1
+    return counts
+
+
+def _find_project_source_dirs(project_dir: Path) -> list[Path]:
+    """Heuristically find source/include directories in a C++ project."""
+    dirs = []
+    for candidate in ["include", "src", "source", "lib"]:
+        d = project_dir / candidate
+        if d.is_dir():
+            # Check it actually has C++ files
+            has_headers = any(d.rglob("*.h")) or any(d.rglob("*.hpp"))
+            has_source = any(d.rglob("*.cpp")) or any(d.rglob("*.cc"))
+            if has_headers or has_source:
+                dirs.append(d)
+    if not dirs:
+        # Fallback: use the project dir itself
+        dirs.append(project_dir)
+    return dirs
 
 
 def cmd_cppreference(args: argparse.Namespace) -> None:
@@ -737,7 +957,8 @@ def main() -> None:
     sp.set_defaults(func=cmd_html)
 
     # list-deps
-    sp = subparsers.add_parser("list-deps", help="List known dependency configurations")
+    sp = subparsers.add_parser("list-deps", help="List discovered Conan dependencies")
+    _add_common_args(sp)
     sp.set_defaults(func=cmd_list_deps)
 
     # discover
@@ -775,6 +996,27 @@ def main() -> None:
                     help="Skip confirmation prompts (e.g. when using --clear).")
     sp.set_defaults(func=cmd_full)
 
+    # codegraph — combined deps + cppreference → CSV export
+    sp = subparsers.add_parser(
+        "codegraph",
+        help="Full codegraph ingestion: discover deps, generate XML, parse, "
+             "and export CSV (optionally including cppreference)",
+    )
+    _add_common_args(sp)
+    _add_output_args(sp)
+    sp.add_argument("--csv-dir", default=None,
+                    help="Output directory for CSV files (default: <output-dir>/csv)")
+    sp.add_argument("--cppreference", action="store_true",
+                    help="Also download, parse, and export cppreference")
+    sp.add_argument("--cppreference-cache-dir",
+                    default="~/.cache/doxygen-index/cppreference",
+                    help="Directory to cache the cppreference archive")
+    sp.add_argument("--cppreference-archive-url", default=None,
+                    help="Override the cppreference archive URL")
+    sp.add_argument("--cppreference-force", action="store_true",
+                    help="Re-download cppreference even if cached")
+    sp.set_defaults(func=cmd_codegraph)
+
     # cppreference
     sp = subparsers.add_parser("cppreference",
                                help="Download and ingest cppreference C++ standard library docs")
@@ -790,10 +1032,6 @@ def main() -> None:
                          "By default, incremental update is used.")
     sp.add_argument("--yes", "-y", action="store_true",
                     help="Skip confirmation prompts (e.g. when using --clear).")
-    sp.add_argument("--csv", action="store_true",
-                    help="Export to CSV files for neo4j-admin import")
-    sp.add_argument("--csv-dir", default=None,
-                    help="Output directory for CSV files (default: cppreference_csv)")
     sp.set_defaults(func=cmd_cppreference)
 
     args = parser.parse_args()

@@ -10,13 +10,10 @@ import sys
 from pathlib import Path
 from typing import Optional
 
-from doxygen_index.deps_config import DepConfig, BUILTIN_CONFIGS, get_config
-
 
 def discover_packages(
     project_dir: Path | str = ".",
     build_type: str = "Debug",
-    dep_configs: Optional[dict[str, DepConfig]] = None,
     only: Optional[set[str]] = None,
 ) -> dict[str, Path]:
     """Discover Conan dependency include paths.
@@ -27,22 +24,12 @@ def discover_packages(
     Args:
         project_dir: Project root containing conanfile.py/txt.
         build_type: Conan build type to match installed packages.
-        dep_configs: Additional/override dependency configs. Merged with builtins.
         only: If provided, only discover these dependency names.
 
     Returns:
         Dict mapping dependency name to its include directory Path.
     """
     project_dir = Path(project_dir).resolve()
-
-    # Merge configs to determine which deps we care about
-    known = dict(BUILTIN_CONFIGS)
-    if dep_configs:
-        known.update(dep_configs)
-
-    target_names = set(known.keys())
-    if only:
-        target_names = only & target_names
 
     print(f"Discovering Conan dependency paths (build_type={build_type})...")
 
@@ -65,7 +52,12 @@ def discover_packages(
 
     for node in graph_nodes.values():
         name = node.get("name", "")
-        if name not in target_names:
+        # Skip the project itself (node id 0, or no ref)
+        if not name or node.get("id") == "0" or not node.get("ref"):
+            continue
+
+        # Filter by --only if specified
+        if only and name not in only:
             continue
 
         # Try package_folder first (set in local build contexts)

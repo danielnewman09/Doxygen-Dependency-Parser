@@ -168,27 +168,6 @@ class TestParseXmlDir:
         assert result.includes[0].is_local is True
 
 
-class TestDepsConfig:
-    def test_builtin_configs_exist(self):
-        from doxygen_index.deps_config import BUILTIN_CONFIGS, get_config
-        assert "eigen" in BUILTIN_CONFIGS
-        assert "sdl" in BUILTIN_CONFIGS
-
-        config = get_config("eigen")
-        assert config is not None
-        assert config.subdir == "eigen3/Eigen"
-
-    def test_override(self):
-        from doxygen_index.deps_config import DepConfig, get_config
-        overrides = {"eigen": DepConfig(subdir="custom/path")}
-        config = get_config("eigen", overrides)
-        assert config.subdir == "custom/path"
-
-    def test_unknown_returns_none(self):
-        from doxygen_index.deps_config import get_config
-        assert get_config("nonexistent") is None
-
-
 class TestNormalizeArgsstring:
     def test_empty(self):
         from doxygen_index.parser import normalize_argsstring
