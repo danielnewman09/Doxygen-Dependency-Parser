@@ -24,11 +24,12 @@ import xml.etree.ElementTree as ET
 from codegraph import (
     ClassNode, InterfaceNode, EnumNode, UnionNode, ConceptNode,
     MethodNode, AttributeNode, EnumValueNode, DefineNode,
-    ImplementationNode, ParameterNode,
+    ImplementationNode, ParameterNode, FunctionNode,
     FileNode, NamespaceNode,
 )
 
 from doxygen_index.parser.base import LanguageParser
+from doxygen_index.parser.model import InheritsEntry, DependsOnEntry
 from doxygen_index.parser.helpers import parse_index
 from doxygen_index.parser.helpers import (
     get_text,
@@ -156,6 +157,17 @@ def _extract_common_member_fields(
 
     name = memberdef.findtext("name", "")
     type_str = get_text(memberdef.find("type"))
+    # Extract Doxygen <ref> elements from the <type> tag — these
+    # are the ground-truth type references that become DEPENDS_ON
+    # edges to dependency nodes.
+    type_refs: list[dict] = []
+    type_el = memberdef.find("type")
+    if type_el is not None:
+        for ref_el in type_el.iter("ref"):
+            tr_refid = ref_el.get("refid", "")
+            tr_kindref = ref_el.get("kindref", "")
+            if tr_refid and tr_kindref:
+                type_refs.append({"refid": tr_refid, "kindref": tr_kindref})
     definition = memberdef.findtext("definition", "")
     argsstring = memberdef.findtext("argsstring", "")
 
@@ -173,6 +185,7 @@ def _extract_common_member_fields(
         "prot": prot,
         "name": name,
         "type_str": type_str,
+        "type_refs": type_refs,
         "definition": definition,
         "argsstring": argsstring,
         "file_path": file_path,
@@ -384,6 +397,25 @@ class CppParser(LanguageParser):
                         included_refid=inc.get("refid") or "",
                         is_local=inc.get("local") == "yes",
                     ))
+                # Parse file-level members: typedefs, functions, variables.
+                for sectiondef in compounddef.findall("sectiondef"):
+                    for memberdef in sectiondef.findall("memberdef"):
+                        fields = _extract_common_member_fields(memberdef)
+                        member_kind = memberdef.get("kind", "")
+                        if member_kind in ("typedef", "variable"):
+                            self._parse_variable_member(
+                                memberdef, fields, refid, "", source, result, layer)
+                        elif member_kind == "function":
+                            self._parse_file_function(
+                                memberdef, fields, refid, source, result, layer)
+                        elif member_kind == "define":
+                            pass
+                        for tr in fields.get("type_refs", []):
+                            result.depends_on.append(DependsOnEntry(
+                                from_refid=fields["refid"],
+                                to_refid=tr["refid"],
+                                to_type=tr["kindref"],
+                            ))
                 continue
 
             # --- Namespaces (language-agnostic) ---
@@ -483,10 +515,19 @@ class CppParser(LanguageParser):
         layer: str,
     ) -> None:
         """Handle class/struct compounds."""
-        base_classes = [
-            baseref.text or ""
-            for baseref in compounddef.findall("basecompoundref")
-        ]
+        base_classes = []
+        for baseref in compounddef.findall("basecompoundref"):
+            base_name = baseref.text or ""
+            base_classes.append(base_name)
+            # Record InheritsEntry for graph JSON edge emission
+            base_refid = baseref.get("refid", "")
+            if base_refid and base_name:
+                result.inherits.append(InheritsEntry(
+                    from_refid=fields["refid"],
+                    to_refid=base_refid,
+                    to_type="ClassNode",
+                ))
+
         is_final = compounddef.get("final") == "yes"
         is_abstract = compounddef.get("abstract") == "yes"
 
@@ -507,6 +548,7 @@ class CppParser(LanguageParser):
             source=source,
             source_type=fields["source_type"],
             layer=layer,
+            tags=[layer],
         ))
 
     @staticmethod
@@ -667,6 +709,16 @@ class CppParser(LanguageParser):
         handler = getattr(self, handler_name)
         handler(memberdef, fields, compound_refid, parent_qualified_name, source, result, layer)
 
+        # --- Type references (shared) ---
+        # Doxygen <ref> elements inside <type> give us ground-truth
+        # type dependencies (e.g. Database::db_ → sqlite3).
+        for tr in fields.get("type_refs", []):
+            result.depends_on.append(DependsOnEntry(
+                from_refid=fields["refid"],
+                to_refid=tr["refid"],
+                to_type=tr["kindref"],
+            ))
+
         # --- Parameters (shared, for all member kinds that produce nodes) ---
         _add_parameter_refs(memberdef, refid, result)
 
@@ -728,6 +780,7 @@ class CppParser(LanguageParser):
             source=source,
             source_type=fields["source_type"],
             layer=layer,
+            tags=[layer],
         ))
 
     @staticmethod
@@ -765,6 +818,39 @@ class CppParser(LanguageParser):
             is_const=is_const,
             source=source,
             layer=layer,
+        ))
+
+    @staticmethod
+    def _parse_file_function(
+        memberdef: ET.Element,
+        fields: dict,
+        compound_refid: str,
+        source: str,
+        result: ParseResult,
+        layer: str,
+    ) -> None:
+        """Handle a file-level function (not a class method)."""
+        name = fields["name"]
+        qname = name  # file-level, no enclosing class/namespace
+
+        result.functions.append(FunctionNode(
+            refid=fields["refid"],
+            kind=fields["kind"],
+            name=name,
+            qualified_name=qname,
+            type_signature=fields["type_str"],
+            definition=fields["definition"],
+            argsstring=fields["argsstring"],
+            file_path=fields["file_path"] or "",
+            line_number=fields["line_number"],
+            body_start=fields["body_start"] or 0,
+            body_end=fields["body_end"] or 0,
+            brief_description=fields["brief"],
+            detailed_description=fields["detailed"],
+            protection=fields["prot"],
+            source=source,
+            layer=layer,
+            tags=[layer],
         ))
 
     @staticmethod

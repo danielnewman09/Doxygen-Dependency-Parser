@@ -355,7 +355,9 @@ def _parse_cpp_project(
             name=config.name,
             input_paths=config.input_paths,
             output_base=output_dir,
-            config=config,
+            predefined=config.predefined,
+            file_patterns=config.file_patterns,
+            exclude_patterns=config.exclude_patterns,
             xml_subdir="xml",
         )
         if xml_dir is None:
@@ -639,6 +641,7 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
     project_dir = Path(args.project_dir).resolve()
     csv_base = Path(args.csv_dir) if args.csv_dir else Path(args.output_dir) / "csv"
     csv_base.mkdir(parents=True, exist_ok=True)
+    output_base = Path(args.output_dir)
 
     # ── Phase 1: Discover Conan deps ──────────────────────────
     dep_include_dirs = discover_packages(
@@ -654,51 +657,83 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
     # ── Phase 2: Find project source dirs ─────────────────────
     project_sources = _find_project_source_dirs(project_dir)
     print(f"Project source dirs: {[str(d) for d in project_sources]}")
-
-    # ── Phase 3: Unified Doxygen run ──────────────────────────
     project_name = project_dir.name
-    print(f"\n--- Unified Doxygen: {project_name} + {len(dep_include_dirs)} deps ---")
-    xml_dir = run_unified_doxygen(
-        project_name=project_name,
-        project_source_dirs=project_sources,
-        dep_include_dirs=dep_include_dirs,
-        output_base=Path(args.output_dir),
-    )
-    if not xml_dir:
-        print("Doxygen failed.", file=sys.stderr)
-        sys.exit(1)
 
-    # ── Phase 4: Parse unified XML ────────────────────────────
-    print(f"\n--- Parsing unified XML ---")
-    result = parse_xml_dir(xml_dir, source=project_name, layer="dependency")
+    # ── Phase 3: Unified Doxygen run (cached) ─────────────────
+    import pickle
+    doxy_cache = output_base / f"{project_name}_unified.pkl"
+    if doxy_cache.exists() and not args.force:
+        print(f"\n--- Loading cached parse: {doxy_cache} ---")
+        with open(doxy_cache, "rb") as f:
+            result = pickle.load(f)
+        print(f"  Loaded {_count_nodes(result)} nodes")
+    else:
+        print(f"\n--- Unified Doxygen: {project_name} + {len(dep_include_dirs)} deps ---")
+        xml_dir = run_unified_doxygen(
+            project_name=project_name,
+            project_source_dirs=project_sources,
+            dep_include_dirs=dep_include_dirs,
+            output_base=output_base,
+        )
+        if not xml_dir:
+            print("Doxygen failed.", file=sys.stderr)
+            sys.exit(1)
 
-    # ── Phase 5: Tag nodes by source ──────────────────────────
-    # Overwrite each node's source attribute based on file location.
-    # Project-owned nodes get source=project_name; dep-owned nodes
-    # get source=<dep_name>.  This way the single CSV contains all
-    # nodes and cross-source INVOKES edges naturally.
-    _tag_nodes_by_source(result, project_dir, dep_include_dirs, project_name)
-    by_source = _count_by_source(result)
-    for src, count in sorted(by_source.items()):
-        print(f"  {src}: {count} nodes")
+        # ── Phase 4: Parse unified XML ────────────────────────────
+        print(f"\n--- Parsing unified XML ---")
+        result = parse_xml_dir(xml_dir, source=project_name, layer="dependency")
 
-    # ── Phase 6: Export single CSV with everything ────────────
-    print(f"\n--- Exporting CSV ---")
-    export_csv(result, source=project_name, output_dir=csv_base / project_name)
+        # ── Phase 5: Tag nodes by source ──────────────────────────
+        from doxygen_index.doxygen import tag_nodes_by_source
+        tag_nodes_by_source(result, project_dir, dep_include_dirs, project_name)
+        by_source = _count_by_source(result)
+        for src, count in sorted(by_source.items()):
+            print(f"  {src}: {count} nodes")
 
-    # ── Phase 7: cppreference (optional) ──────────────────────
+        # Cache the tagged result so subsequent runs skip Doxygen.
+        doxy_cache.parent.mkdir(parents=True, exist_ok=True)
+        with open(doxy_cache, "wb") as f:
+            pickle.dump(result, f)
+        print(f"  Cached: {doxy_cache} ({doxy_cache.stat().st_size:,} bytes)")
+
+    # ── Phase 6: cppreference (optional, cached) ──────────────
     if args.cppreference:
-        from doxygen_index.cppreference import download, parse
+        from doxygen_index.cppreference import download, parse as parse_cppref
+        from doxygen_index.graph_json import merge_parse_results
         print("\n=== cppreference ===")
         cache_dir = Path(args.cppreference_cache_dir).expanduser()
-        archive_root = download(
-            cache_dir,
-            url=args.cppreference_archive_url,
-            force=args.cppreference_force,
-        )
-        cppref_result = parse(archive_root)
-        export_csv(cppref_result, source="cppreference",
-                   output_dir=csv_base / "cppreference")
+        cppref_pkl = cache_dir / "cppreference.pkl"
+
+        if cppref_pkl.exists() and not args.cppreference_force:
+            print(f"  Loading cached parse: {cppref_pkl}")
+            with open(cppref_pkl, "rb") as f:
+                cppref_result = pickle.load(f)
+        else:
+            archive_root = download(
+                cache_dir,
+                url=args.cppreference_archive_url,
+                force=args.cppreference_force,
+            )
+            cppref_result = parse_cppref(archive_root)
+            cache_dir.mkdir(parents=True, exist_ok=True)
+            with open(cppref_pkl, "wb") as f:
+                pickle.dump(cppref_result, f)
+            print(f"  Cached: {cppref_pkl} ({cppref_pkl.stat().st_size:,} bytes)")
+
+        print(f"  Parsed: {len(cppref_result.classes)} classes, "
+              f"{len(cppref_result.functions)} functions, "
+              f"{len(cppref_result.methods)} methods")
+        result = merge_parse_results(result, cppref_result)
+        print(f"  Merged: {_count_nodes(result)} nodes total")
+
+    # ── Phase 7: Resolve namespace-scoped type deps ───────────
+    from doxygen_index.doxygen import resolve_namespace_type_deps
+    print("\n--- Resolving namespace type dependencies ---")
+    resolve_namespace_type_deps(result)
+
+    # ── Phase 8: Export single CSV with everything ────────────
+    print(f"\n--- Exporting CSV ---")
+    export_csv(result, source=project_name, output_dir=csv_base / project_name)
 
     # ── Summary ────────────────────────────────────────────────
     print(f"\n{'='*60}")
@@ -789,6 +824,19 @@ def _count_by_source(result: "ParseResult") -> dict[str, int]:
         src = getattr(node, "source", "unknown") or "unknown"
         counts[src] = counts.get(src, 0) + 1
     return counts
+
+
+def _count_nodes(result: "ParseResult") -> int:
+    """Return the total number of nodes in a ParseResult."""
+    return sum(len(lst) for lst in [
+        result.files, result.namespaces,
+        result.classes, result.enums, result.unions,
+        result.interfaces, result.concepts,
+        result.methods, result.attributes,
+        result.enum_values, result.defines,
+        result.functions, result.parameters,
+        result.implementations,
+    ])
 
 
 def _find_project_source_dirs(project_dir: Path) -> list[Path]:
@@ -1004,6 +1052,8 @@ def main() -> None:
     )
     _add_common_args(sp)
     _add_output_args(sp)
+    sp.add_argument("--force", action="store_true",
+                    help="Ignore cached parse results and re-run Doxygen")
     sp.add_argument("--csv-dir", default=None,
                     help="Output directory for CSV files (default: <output-dir>/csv)")
     sp.add_argument("--cppreference", action="store_true",

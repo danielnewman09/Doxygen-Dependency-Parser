@@ -1,0 +1,3 @@
+[submodule "tests/fixtures/cpp-sqlite"]
+	path = tests/fixtures/cpp-sqlite
+	url = https://github.com/danielnewman09/cpp-sqlite.git

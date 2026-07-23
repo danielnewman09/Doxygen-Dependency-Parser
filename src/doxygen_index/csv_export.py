@@ -364,6 +364,14 @@ def _export_relationships(result: ParseResult, output_dir: Path) -> int:
 
     print(f"  INVOKES: {sum(1 for r in rel_rows if r[':TYPE'] == 'INVOKES')} edges")
 
+    # ── 7. DEPENDS_ON: caller → type ───────────────────────────
+    for dep in result.depends_on:
+        from_uid = refid_to_uid.get(dep.from_refid, "")
+        to_uid = refid_to_uid.get(dep.to_refid, "")
+        _add_rel(from_uid, to_uid, "DEPENDS_ON")
+
+    print(f"  DEPENDS_ON: {sum(1 for r in rel_rows if r[':TYPE'] == 'DEPENDS_ON')} edges")
+
     # ── Write CSV ───────────────────────────────────────────────
     if not rel_rows:
         print("  No relationships to export.")

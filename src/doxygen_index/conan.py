@@ -33,17 +33,22 @@ def discover_packages(
 
     print(f"Discovering Conan dependency paths (build_type={build_type})...")
 
+    # Resolve conan executable explicitly — pytest may run with a
+    # stripped PATH where ~/.local/bin isn't visible to subprocess.
+    import shutil
+    conan_exe = shutil.which("conan")
+    if not conan_exe:
+        print("Error: 'conan' not found on PATH.", file=sys.stderr)
+        return {}
+
     try:
         result = subprocess.run(
-            ["conan", "graph", "info", ".", "--format=json",
+            [conan_exe, "graph", "info", ".", "--format=json",
              "-s", f"build_type={build_type}"],
             capture_output=True, text=True, cwd=project_dir, check=True,
         )
     except subprocess.CalledProcessError as e:
         print(f"Error running 'conan graph info': {e.stderr}", file=sys.stderr)
-        return {}
-    except FileNotFoundError:
-        print("Error: 'conan' not found on PATH.", file=sys.stderr)
         return {}
 
     raw = json.loads(result.stdout)
@@ -70,7 +75,7 @@ def discover_packages(
             if ref and package_id:
                 try:
                     cache_result = subprocess.run(
-                        ["conan", "cache", "path", f"{ref}:{package_id}"],
+                        [conan_exe, "cache", "path", f"{ref}:{package_id}"],
                         capture_output=True, text=True, check=True,
                     )
                     pkg_folder = cache_result.stdout.strip()
