@@ -120,6 +120,91 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
                         qname_to_type[qn] = type(node).__name__
                 refid_to_type[refid] = type(node).__name__
 
+    # ==================================================================
+    # Pre-build from_refid → [entries] index maps so _build_node_edges
+    # can do O(1) lookups instead of O(n*m) full-table scans.
+    # ==================================================================
+    from collections import defaultdict
+
+    # compound_refid → [(member_refid, member_type)]
+    members_by_compound: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for member in result.members:
+        compound = _get_prop(member, "compound_refid")
+        mrefid = _get_prop(member, "refid")
+        if compound and mrefid:
+            members_by_compound[compound].append((mrefid, type(member).__name__))
+
+    # parent_refid → [(child_refid, child_type)] — namespace composes
+    composes_by_parent: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for comp in result.compositions:
+        composes_by_parent[comp.parent_refid].append((comp.child_refid, comp.child_type))
+
+    # file_refid → [(included_refid)] — file includes
+    includes_by_file: dict[str, list[str]] = defaultdict(list)
+    for inc in result.includes:
+        if inc.included_refid:
+            includes_by_file[inc.file_refid].append(inc.included_refid)
+
+    # file_refid → [(included_refid)] — namespace includes
+    ns_includes_by_file: dict[str, list[str]] = defaultdict(list)
+    for inc in result.namespace_includes:
+        if inc.included_refid:
+            ns_includes_by_file[inc.file_refid].append(inc.included_refid)
+
+    # from_refid → [(to_refid, to_name, to_type)] — invokes
+    invokes_by_from: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+    for inv in result.invokes:
+        if inv.to_refid:
+            invokes_by_from[inv.from_refid].append(
+                (inv.to_refid, inv.to_name or "",
+                 refid_to_type.get(inv.to_refid, "MethodNode")))
+
+    # from_refid → [(to_refid, to_name, to_type)] — inherits
+    inherits_by_from: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
+    for inh in result.inherits:
+        inherits_by_from[inh.from_refid].append(
+            (inh.to_refid, inh.to_type, inh.to_name or inh.to_refid or ""))
+
+    # from_refid → [(to_refid, to_type)] — depends_on
+    depends_on_by_from: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for dep in result.depends_on:
+        depends_on_by_from[dep.from_refid].append((dep.to_refid, dep.to_type))
+
+    # from_refid → [(to_refid, to_type)] — verifies
+    verifies_by_from: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for ver in result.verifies:
+        verifies_by_from[ver.from_refid].append((ver.to_refid, ver.to_type))
+
+    # from_refid → [(to_refid, side)] — operands
+    operands_by_from: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for op in result.operands:
+        operands_by_from[op.from_refid].append((op.to_refid, op.side))
+
+    # from_refid → [(to_refid, to_type)] — callees
+    callees_by_from: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for cal in result.callees:
+        callees_by_from[cal.from_refid].append((cal.to_refid, cal.to_type))
+
+    # parent_refid → [(child_refid, child_type)] — test compositions
+    test_comp_by_parent: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for tc in result.test_compositions:
+        test_comp_by_parent[tc.parent_refid].append((tc.child_refid, tc.child_type))
+
+    # from_refid → [(to_refid, to_type)] — fixture-of-types
+    fot_by_from: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for fo in result.fixture_of_types:
+        fot_by_from[fo.from_refid].append((fo.to_refid, fo.to_type))
+
+    # from_refid → [(to_refid)] — fixture-checked-by
+    fcb_by_from: dict[str, list[str]] = defaultdict(list)
+    for cb in result.fixture_checked_by:
+        fcb_by_from[cb.from_refid].append(cb.to_refid)
+
+    # from_refid → [(to_refid)] — fixture-defined-in
+    fdi_by_from: dict[str, list[str]] = defaultdict(list)
+    for di in result.fixture_defined_in:
+        fdi_by_from[di.from_refid].append(di.to_refid)
+
     # Serialize each node and attach edges
     serialized: list[dict] = []
 
@@ -152,9 +237,24 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
             if file_path:
                 entry["file_path"] = file_path
 
-            # Build edges for this node
-            edges = _build_node_edges(node, result, refid_to_uid,
-                                      refid_to_type, qname_to_uid)
+            # Build edges for this node (uses pre-built index maps)
+            edges = _build_node_edges(
+                node, refid_to_uid, refid_to_type, qname_to_uid,
+                members_by_compound,
+                composes_by_parent,
+                includes_by_file,
+                ns_includes_by_file,
+                invokes_by_from,
+                inherits_by_from,
+                depends_on_by_from,
+                verifies_by_from,
+                operands_by_from,
+                callees_by_from,
+                test_comp_by_parent,
+                fot_by_from,
+                fcb_by_from,
+                fdi_by_from,
+            )
             # Filter out self-references (edge target_uid == this node's uid).
             node_uid = entry.get("uid", "")
             edges = [e for e in edges if e.get("target_uid", "") != node_uid]
@@ -254,209 +354,179 @@ def _get_prop(node, name: str, *, is_list: bool = False) -> str | list | None:
 
 def _build_node_edges(
     node,
-    result: ParseResult,
     refid_to_uid: dict[str, str],
     refid_to_type: dict[str, str],
     qname_to_uid: dict[str, str],
+    # Pre-built index maps (from_refid → list of targets)
+    members_by_compound: dict[str, list[tuple[str, str]]],
+    composes_by_parent: dict[str, list[tuple[str, str]]],
+    includes_by_file: dict[str, list[str]],
+    ns_includes_by_file: dict[str, list[str]],
+    invokes_by_from: dict[str, list[tuple[str, str, str]]],
+    inherits_by_from: dict[str, list[tuple[str, str, str]]],  # (to_refid, to_name, to_type)
+    depends_on_by_from: dict[str, list[tuple[str, str]]],
+    verifies_by_from: dict[str, list[tuple[str, str]]],
+    operands_by_from: dict[str, list[tuple[str, str]]],
+    callees_by_from: dict[str, list[tuple[str, str]]],
+    test_comp_by_parent: dict[str, list[tuple[str, str]]],
+    fot_by_from: dict[str, list[tuple[str, str]]],
+    fcb_by_from: dict[str, list[str]],
+    fdi_by_from: dict[str, list[str]],
 ) -> list[dict]:
-    """Build the edge list for a single node.
+    """Build the edge list for a single node using pre-built index maps.
 
-    Edge types:
-    - COMPOSES: compound → member (via ``compound_refid`` on members)
-    - COMPOSES: namespace → child namespace / directly-defined top-level
-      compound or function (via ``result.compositions`` recorded by the
-      language parser)
-    - INHERITS_FROM: derived class → base compound (via
-      ``result.inherits`` recorded by the language parser)
-    - INCLUDES: file → file  (namespaces never include files)
-    - INVOKES: method/function → method/function
+    All indexes are ``from_refid → [target]`` so each edge type is a
+    single dict lookup instead of a full-table scan.
     """
     edges: list[dict] = []
     node_refid = _get_prop(node, "refid")
     node_type = type(node).__name__
 
-    # --- COMPOSES (outgoing: compound → member via compound_refid) ---
-    # Check all members to see if any have compound_refid == this node's refid
+    # --- COMPOSES (compound → member) ---
     if node_refid:
-        for member in result.members:
-            member_compound = _get_prop(member, "compound_refid")
-            if member_compound and member_compound == node_refid:
-                member_refid = _get_prop(member, "refid")
-                if member_refid and member_refid in refid_to_uid:
-                    edges.append({
-                        "relation_type": "COMPOSES",
-                        "target_uid": refid_to_uid[member_refid],
-                        "target_type": type(member).__name__,
-                    })
-
-    # --- COMPOSES (outgoing: namespace → child via parser compositions) ---
-    # The language parser records namespace composition on
-    # ``result.compositions``; emit a COMPOSES edge for each child whose
-    # parent is this node.  Only namespaces emit these — a Python module's
-    # FileNode shares the dotted module name as its refid with the
-    # NamespaceNode, so matching by refid alone would otherwise make the
-    # file wrongly compose the namespace's children too.  Only the
-    # parent node's edge list is consulted, matching the flat-format
-    # convention used above.
-    if node_type == "NamespaceNode" and node_refid:
-        for comp in result.compositions:
-            if comp.parent_refid == node_refid and comp.child_refid in refid_to_uid:
+        for mrefid, mtype in members_by_compound.get(node_refid, ()):
+            if mrefid in refid_to_uid:
                 edges.append({
                     "relation_type": "COMPOSES",
-                    "target_uid": refid_to_uid[comp.child_refid],
-                    "target_type": comp.child_type,
+                    "target_uid": refid_to_uid[mrefid],
+                    "target_type": mtype,
                 })
 
-    # --- INCLUDES (outgoing: this file includes other files) ---
-    # Only files include other files.  A Python module's FileNode and its
-    # NamespaceNode share the same refid (the dotted module name), so
-    # matching includes by refid alone would duplicate every import onto
-    # the namespace as a bogus INCLUDES edge.  Restricting this to FileNode
-    # prevents that duplication.
+    # --- COMPOSES (namespace → child) ---
+    if node_type == "NamespaceNode" and node_refid:
+        for child_refid, child_type in composes_by_parent.get(node_refid, ()):
+            if child_refid in refid_to_uid:
+                edges.append({
+                    "relation_type": "COMPOSES",
+                    "target_uid": refid_to_uid[child_refid],
+                    "target_type": child_type,
+                })
+
+    # --- INCLUDES (file → included file) ---
     if node_type == "FileNode" and node_refid:
-        for inc in result.includes:
-            if inc.file_refid == node_refid and inc.included_refid:
-                target_uid = refid_to_uid.get(inc.included_refid, inc.included_refid)
+        for inc_refid in includes_by_file.get(node_refid, ()):
+            target_uid = refid_to_uid.get(inc_refid, inc_refid)
+            edges.append({
+                "relation_type": "INCLUDES",
+                "target_uid": target_uid,
+                "target_type": "FileNode",
+            })
+
+    # --- INCLUDES (namespace → imported compound) ---
+    if node_type == "NamespaceNode" and node_refid:
+        for inc_refid in ns_includes_by_file.get(node_refid, ()):
+            if inc_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "INCLUDES",
-                    "target_uid": target_uid,
+                    "target_uid": refid_to_uid[inc_refid],
                     "target_type": "FileNode",
                 })
 
-    # --- INCLUDES (namespace imports — resolved by the parser) ---
-    # The language parser resolves import statements to known compound
-    # refids and records them on ``result.namespace_includes``; emit
-    # INCLUDES edges from the namespace to each imported compound.
-    # These are distinct from file-level includes above — they originate
-    # from namespaces (not files) and target compounds (not files).
-    if node_type == "NamespaceNode" and node_refid:
-        for inc in result.namespace_includes:
-            if inc.file_refid == node_refid and inc.included_refid in refid_to_uid:
-                edges.append({
-                    "relation_type": "INCLUDES",
-                    "target_uid": refid_to_uid[inc.included_refid],
-                    "target_type": "FileNode",  # reused; target_type is just a label
-                })
-
-    # --- INVOKES (outgoing: this method/function invokes others) ---
+    # --- INVOKES ---
     if node_refid:
-        for inv in result.invokes:
-            if inv.from_refid == node_refid and inv.to_refid:
-                target_type = refid_to_type.get(inv.to_refid, "MethodNode")
-                # Primary: resolve by refid (works within a single
-                # Doxygen parse).  Fallback: resolve by qualified_name
-                # (works across merged ParseResults where Doxygen
-                # generates different refids for the same symbol).
-                target_uid = refid_to_uid.get(inv.to_refid)
-                if target_uid is None and inv.to_name:
-                    target_uid = qname_to_uid.get(inv.to_name)
-                # Skip edges that can't resolve — a dangling target_uid
-                # (raw Doxygen refid) won't match any node uid.
-                if target_uid is None:
-                    continue
-                edges.append({
-                    "relation_type": "INVOKES",
-                    "target_uid": target_uid,
-                    "target_type": target_type,
-                })
+        for to_refid, to_name, target_type in invokes_by_from.get(node_refid, ()):
+            target_uid = refid_to_uid.get(to_refid)
+            if target_uid is None and to_name:
+                target_uid = qname_to_uid.get(to_name)
+            if target_uid is None:
+                continue
+            edges.append({
+                "relation_type": "INVOKES",
+                "target_uid": target_uid,
+                "target_type": target_type,
+            })
 
-    # --- INHERITS_FROM (outgoing: this compound derives from a base) ---
-    # The language parser resolves base-class names to known compound
-    # refids (recorded on ``result.inherits``); emit an INHERITS_FROM edge
-    # from the derived compound to its base.  Bases that didn't resolve
-    # (e.g. ``Exception``, ``ABC``) are absent from ``result.inherits`` and
-    # thus never produce edges here -- and the graph layer drops any edge
-    # whose target isn't a known node, so there are never dangling edges.
+    # --- INHERITS_FROM ---
     if node_refid:
-        for inh in result.inherits:
-            if inh.from_refid == node_refid and inh.to_refid in refid_to_uid:
+        for to_refid, to_type, to_name in inherits_by_from.get(node_refid, ()):
+            target_uid = refid_to_uid.get(to_refid)
+            if target_uid is None and to_name:
+                target_uid = qname_to_uid.get(to_name)
+            if target_uid is not None:
                 edges.append({
                     "relation_type": "INHERITS_FROM",
-                    "target_uid": refid_to_uid[inh.to_refid],
-                    "target_type": inh.to_type,
+                    "target_uid": target_uid,
+                    "target_type": to_type,
                 })
 
-    # --- DEPENDS_ON (outgoing: function/method depends on a type) ---
-    # The language parser resolves parameter and return types to known
-    # compound refids (recorded on ``result.depends_on``); emit a
-    # DEPENDS_ON edge from the callable to the type it uses.
+    # --- DEPENDS_ON ---
     if node_refid:
-        for dep in result.depends_on:
-            if dep.from_refid == node_refid and dep.to_refid in refid_to_uid:
+        for to_refid, to_type in depends_on_by_from.get(node_refid, ()):
+            if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "DEPENDS_ON",
-                    "target_uid": refid_to_uid[dep.to_refid],
-                    "target_type": dep.to_type,
+                    "target_uid": refid_to_uid[to_refid],
+                    "target_type": to_type,
                 })
 
-    # --- VERIFIES (outgoing: TestNode → tested code) ---
+    # --- VERIFIES ---
     if node_refid:
-        for ver in result.verifies:
-            if ver.from_refid == node_refid and ver.to_refid in refid_to_uid:
+        for to_refid, to_type in verifies_by_from.get(node_refid, ()):
+            if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "VERIFIES",
-                    "target_uid": refid_to_uid[ver.to_refid],
-                    "target_type": ver.to_type,
+                    "target_uid": refid_to_uid[to_refid],
+                    "target_type": to_type,
                 })
 
-    # --- LEFT_OPERAND / RIGHT_OPERAND (outgoing: AssertionNode → operand) ---
+    # --- LEFT_OPERAND / RIGHT_OPERAND ---
     if node_refid:
-        for op in result.operands:
-            if op.from_refid == node_refid and op.to_refid in refid_to_uid:
-                relation = "LEFT_OPERAND" if op.side == "left" else "RIGHT_OPERAND"
+        for to_refid, side in operands_by_from.get(node_refid, ()):
+            if to_refid in refid_to_uid:
+                relation = "LEFT_OPERAND" if side == "left" else "RIGHT_OPERAND"
                 edges.append({
                     "relation_type": relation,
-                    "target_uid": refid_to_uid[op.to_refid],
-                    "target_type": op.to_type,
+                    "target_uid": refid_to_uid[to_refid],
+                    "target_type": "MethodNode",
                 })
 
-    # --- CALLEE (outgoing: TestStepNode → called method/function) ---
+    # --- CALLEE ---
     if node_refid:
-        for cal in result.callees:
-            if cal.from_refid == node_refid and cal.to_refid in refid_to_uid:
+        for to_refid, to_type in callees_by_from.get(node_refid, ()):
+            if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "CALLEE",
-                    "target_uid": refid_to_uid[cal.to_refid],
-                    "target_type": cal.to_type,
+                    "target_uid": refid_to_uid[to_refid],
+                    "target_type": to_type,
                 })
 
-    # --- COMPOSES (outgoing: TestNode → AssertionNode/TestStepNode) ---
+    # --- COMPOSES (test → assertions/steps) ---
     if node_refid:
-        for tc in result.test_compositions:
-            if tc.parent_refid == node_refid and tc.child_refid in refid_to_uid:
+        for child_refid, child_type in test_comp_by_parent.get(node_refid, ()):
+            if child_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "COMPOSES",
-                    "target_uid": refid_to_uid[tc.child_refid],
-                    "target_type": tc.child_type,
+                    "target_uid": refid_to_uid[child_refid],
+                    "target_type": child_type,
                 })
 
-    # --- OF_TYPE (outgoing: TestFixtureNode → type definition) ---
+    # --- OF_TYPE ---
     if node_refid:
-        for fo in result.fixture_of_types:
-            if fo.from_refid == node_refid and fo.to_refid in refid_to_uid:
+        for to_refid, to_type in fot_by_from.get(node_refid, ()):
+            if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "OF_TYPE",
-                    "target_uid": refid_to_uid[fo.to_refid],
-                    "target_type": fo.to_type,
+                    "target_uid": refid_to_uid[to_refid],
+                    "target_type": to_type,
                 })
 
-    # --- CHECKED_BY (outgoing: TestFixtureNode → AssertionNode) ---
+    # --- CHECKED_BY ---
     if node_refid:
-        for cb in result.fixture_checked_by:
-            if cb.from_refid == node_refid and cb.to_refid in refid_to_uid:
+        for to_refid in fcb_by_from.get(node_refid, ()):
+            if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "CHECKED_BY",
-                    "target_uid": refid_to_uid[cb.to_refid],
+                    "target_uid": refid_to_uid[to_refid],
                     "target_type": "AssertionNode",
                 })
 
-    # --- DEFINED_IN (outgoing: TestFixtureNode → TestStepNode) ---
+    # --- DEFINED_IN ---
     if node_refid:
-        for di in result.fixture_defined_in:
-            if di.from_refid == node_refid and di.to_refid in refid_to_uid:
+        for to_refid in fdi_by_from.get(node_refid, ()):
+            if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "DEFINED_IN",
-                    "target_uid": refid_to_uid[di.to_refid],
+                    "target_uid": refid_to_uid[to_refid],
                     "target_type": "TestStepNode",
                 })
 

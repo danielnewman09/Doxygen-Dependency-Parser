@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import re
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -29,7 +30,7 @@ from codegraph import (
 )
 
 from doxygen_index.parser.base import LanguageParser
-from doxygen_index.parser.model import InheritsEntry, DependsOnEntry
+from doxygen_index.parser.model import InheritsEntry, DependsOnEntry, CompositionEntry
 from doxygen_index.parser.helpers import parse_index
 from doxygen_index.parser.helpers import (
     get_text,
@@ -339,14 +340,34 @@ class CppParser(LanguageParser):
             raise FileNotFoundError(f"index.xml not found in {source_dir}")
 
         compounds = parse_index(index_path)
+        total = len(compounds)
 
-        for i, (refid, kind) in enumerate(compounds):
-            xml_file = source_dir / f"{refid}.xml"
-            if xml_file.exists():
-                self.parse_compound_file(xml_file, source, result, layer)
+        # Collect XML files that exist
+        xml_files = [
+            source_dir / f"{refid}.xml"
+            for refid, _kind in compounds
+        ]
+        xml_files = [f for f in xml_files if f.exists()]
 
-            if progress_interval and (i + 1) % progress_interval == 0:
-                print(f"  Parsed {i + 1}/{len(compounds)} XML files...")
+        if not xml_files:
+            return
+
+        # Parse in parallel — each file is independent and list.append
+        # is GIL-atomic in CPython, so concurrent mutation of *result*
+        # is safe.
+        max_workers = min(32, (len(xml_files) // 10) + 1)
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {
+                ex.submit(self.parse_compound_file, f, source, result, layer): f
+                for f in xml_files
+            }
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                if progress_interval and completed % progress_interval == 0:
+                    print(f"  Parsed {completed}/{total} XML files...")
+                # Re-raise any exceptions from workers
+                future.result()
 
     # ------------------------------------------------------------------
     # Doxygen XML compound file parsing
@@ -519,12 +540,17 @@ class CppParser(LanguageParser):
         for baseref in compounddef.findall("basecompoundref"):
             base_name = baseref.text or ""
             base_classes.append(base_name)
-            # Record InheritsEntry for graph JSON edge emission
+            # Record InheritsEntry for graph JSON edge emission.
+            # to_refid: Doxygen's internal refid (primary resolution within
+            #   the same parse).
+            # to_name: qualified name (fallback for cross-parse resolution,
+            #   e.g. when ``std::runtime_error`` comes from cppreference).
             base_refid = baseref.get("refid", "")
-            if base_refid and base_name:
+            if base_name:
                 result.inherits.append(InheritsEntry(
                     from_refid=fields["refid"],
                     to_refid=base_refid,
+                    to_name=base_name,
                     to_type="ClassNode",
                 ))
 
@@ -919,12 +945,12 @@ class CppParser(LanguageParser):
     def post_process(self, result: ParseResult) -> None:
         """Resolve C++-specific cross-references after all compounds are parsed.
 
-        Currently resolves type_constraint text in template parameter refs
-        to concept qualified names.
+        Resolves type_constraint text in template parameter refs to concept
+        qualified names, derives namespace composition edges, and extracts
+        implementation source code.
         """
         _resolve_concept_constraints(result)
-
-        # Extract implementation source code from source files
+        _derive_namespace_compositions(result)
         extract_implementations(result)
 
 
@@ -964,6 +990,65 @@ def _resolve_concept_constraints(result: ParseResult) -> None:
         # Try short name match
         if constraint in concept_short_names:
             tp.concept_qualified_name = concept_short_names[constraint]
+
+
+def _derive_namespace_compositions(result: ParseResult) -> None:
+    """Record namespace ``COMPOSES`` relationships on ``result.compositions``.
+
+    A namespace composes its *immediate* direct children: child namespaces
+    and top-level classes / interfaces / enums / unions / structs / concepts /
+    functions defined directly within it (i.e. whose parent qualified name —
+    everything before the last ``::`` — equals the namespace's qualified name).
+
+    Matching is scoped by (qualified_name, source) so that, e.g., a
+    ``std`` namespace from one Doxygen parse run doesn't accidentally compose
+    classes from another source whose names happen to start with ``std::``.
+    """
+    # Map (qualified_name, source) → refid for all namespaces.
+    ns_refid_by_key: dict[tuple[str, str], str] = {}
+    for ns in result.namespaces:
+        qname = getattr(ns, "qualified_name", None)
+        src = getattr(ns, "source", "") or ""
+        refid = getattr(ns, "refid", None)
+        if qname and refid:
+            ns_refid_by_key[(qname, src)] = refid
+
+    if not ns_refid_by_key:
+        return
+
+    # Candidate children: sub-namespaces + top-level compounds + file-level
+    # functions.  Classes found via result.classes; structs are parsed as
+    # ClassNode (kind="struct") so they are included too.
+    child_sources = (
+        result.namespaces + result.classes + result.interfaces
+        + result.enums + result.unions + result.concepts + result.functions
+    )
+
+    for child in child_sources:
+        child_qname = getattr(child, "qualified_name", None)
+        child_refid = getattr(child, "refid", None)
+        child_source = getattr(child, "source", "") or ""
+        if not child_qname or not child_refid:
+            continue
+
+        # Derive parent: everything before the last "::".
+        parent_qname = derive_module(child_qname)
+        if not parent_qname:
+            continue
+
+        parent_refid = ns_refid_by_key.get((parent_qname, child_source))
+        if not parent_refid:
+            continue
+
+        # Skip self-composition.
+        if parent_refid == child_refid:
+            continue
+
+        result.compositions.append(CompositionEntry(
+            parent_refid=parent_refid,
+            child_refid=child_refid,
+            child_type=type(child).__name__,
+        ))
 
 
 def extract_implementations(

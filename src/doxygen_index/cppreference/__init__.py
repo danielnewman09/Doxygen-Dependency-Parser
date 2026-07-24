@@ -16,7 +16,9 @@ Quick start::
 from __future__ import annotations
 
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+from typing import Optional
 
 from codegraph import NamespaceNode
 from doxygen_index.parser import ParseResult
@@ -73,14 +75,8 @@ def parse(
         documentation.
     """
     _check_deps()
-    from bs4 import BeautifulSoup
 
-    from .page_parser import (
-        parse_class_page,
-        parse_free_function_page,
-        parse_header_page,
-        parse_member_page,
-    )
+    from .page_parser import parse_header_page
 
     archive_root = Path(archive_root)
     print(f"Classifying pages in {archive_root} ...")
@@ -100,54 +96,80 @@ def parse(
     print(f"\nPass 1: Parsing {len(class_pages)} class pages ...")
     stub_refids: set[str] = set()
 
-    for i, info in enumerate(class_pages):
-        try:
-            soup = _parse_html(info.path)
-            compound, stubs = parse_class_page(info, soup)
-            result.classes.append(compound)
-            for stub in stubs:
-                stub_refids.add(stub.refid)
-                result.methods.append(stub)
-        except Exception as e:
-            print(f"  Warning: Failed to parse {info.relative}: {e}", file=sys.stderr)
-
-        if progress_interval and (i + 1) % progress_interval == 0:
-            print(f"  Parsed {i + 1}/{len(class_pages)} class pages ...")
+    if class_pages:
+        max_workers = min(32, (len(class_pages) // 10) + 1)
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {
+                ex.submit(_parse_one_class_page, info): info
+                for info in class_pages
+            }
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                try:
+                    compound, stubs = future.result()
+                    result.classes.append(compound)
+                    for stub in stubs:
+                        stub_refids.add(stub.refid)
+                        result.methods.append(stub)
+                except Exception as e:
+                    info = futures[future]
+                    print(f"  Warning: Failed to parse {info.relative}: {e}",
+                          file=sys.stderr)
+                if progress_interval and completed % progress_interval == 0:
+                    print(f"  Parsed {completed}/{len(class_pages)} class pages ...")
 
     # --- Pass 2: Member pages (full declarations + parameters) ---
     member_pages = [p for p in pages if p.page_type == PageType.MEMBER]
     print(f"\nPass 2: Parsing {len(member_pages)} member pages ...")
 
-    for i, info in enumerate(member_pages):
-        try:
-            soup = _parse_html(info.path)
-            entries = parse_member_page(info, soup)
-            for member, params in entries:
-                # If this member was already added as a stub, replace it
-                _replace_or_add_method(result, member, stub_refids)
-                result.parameters.extend(params)
-        except Exception as e:
-            print(f"  Warning: Failed to parse {info.relative}: {e}", file=sys.stderr)
-
-        if progress_interval and (i + 1) % progress_interval == 0:
-            print(f"  Parsed {i + 1}/{len(member_pages)} member pages ...")
+    if member_pages:
+        max_workers = min(32, (len(member_pages) // 10) + 1)
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {
+                ex.submit(_parse_one_member_page, info): info
+                for info in member_pages
+            }
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                try:
+                    entries = future.result()
+                    for member, params in entries:
+                        _replace_or_add_method(result, member, stub_refids)
+                        result.parameters.extend(params)
+                except Exception as e:
+                    info = futures[future]
+                    print(f"  Warning: Failed to parse {info.relative}: {e}",
+                          file=sys.stderr)
+                if progress_interval and completed % progress_interval == 0:
+                    print(f"  Parsed {completed}/{len(member_pages)} member pages ...")
 
     # --- Pass 3: Free function pages ---
     free_pages = [p for p in pages if p.page_type == PageType.FREE_FUNCTION]
     print(f"\nPass 3: Parsing {len(free_pages)} free function pages ...")
 
-    for i, info in enumerate(free_pages):
-        try:
-            soup = _parse_html(info.path)
-            entries = parse_free_function_page(info, soup)
-            for member, params in entries:
-                result.functions.append(member)
-                result.parameters.extend(params)
-        except Exception as e:
-            print(f"  Warning: Failed to parse {info.relative}: {e}", file=sys.stderr)
-
-        if progress_interval and (i + 1) % progress_interval == 0:
-            print(f"  Parsed {i + 1}/{len(free_pages)} free function pages ...")
+    if free_pages:
+        max_workers = min(32, (len(free_pages) // 10) + 1)
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            futures = {
+                ex.submit(_parse_one_free_function_page, info): info
+                for info in free_pages
+            }
+            completed = 0
+            for future in as_completed(futures):
+                completed += 1
+                try:
+                    entries = future.result()
+                    for member, params in entries:
+                        result.functions.append(member)
+                        result.parameters.extend(params)
+                except Exception as e:
+                    info = futures[future]
+                    print(f"  Warning: Failed to parse {info.relative}: {e}",
+                          file=sys.stderr)
+                if progress_interval and completed % progress_interval == 0:
+                    print(f"  Parsed {completed}/{len(free_pages)} free function pages ...")
 
     # --- Pass 4: Header pages + DEFINED_IN linkage ---
     header_pages = [p for p in pages if p.page_type == PageType.HEADER]
@@ -206,6 +228,31 @@ def parse(
     print(f"  Parameters: {len(result.parameters)}")
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Per-page parse helpers (used by the thread-pool executor in each pass)
+# ---------------------------------------------------------------------------
+
+def _parse_one_class_page(info):
+    """Parse a single class page.  Returns (compound, list_of_stubs)."""
+    from .page_parser import parse_class_page
+    soup = _parse_html(info.path)
+    return parse_class_page(info, soup)
+
+
+def _parse_one_member_page(info):
+    """Parse a single member page.  Returns list of (member, params_list)."""
+    from .page_parser import parse_member_page
+    soup = _parse_html(info.path)
+    return parse_member_page(info, soup)
+
+
+def _parse_one_free_function_page(info):
+    """Parse a single free-function page.  Returns list of (fn_node, params_list)."""
+    from .page_parser import parse_free_function_page
+    soup = _parse_html(info.path)
+    return parse_free_function_page(info, soup)
 
 
 # ---------------------------------------------------------------------------

@@ -44,6 +44,58 @@ PYTHON_FIXTURE_DIR = LANGUAGES_DIR / "python"  # contains the ``samplepkg`` pack
 # ---------------------------------------------------------------------------
 
 
+def _uid_for(graph_data: list[dict], qualified_name: str) -> str:
+    """Return the deterministic UID for *qualified_name* by looking it up
+    in *graph_data*.  Raises ``KeyError`` if not found.
+
+    ``result_to_graph_json`` computes node UIDs from
+    ``source + qualified_name`` (and optionally ``argsstring`` for
+    methods), so tests that used to compare ``target_uid`` against
+    human-readable qualified names must now look up the expected UID
+    from the graph.
+    """
+    # Build on first call, cache on the function so repeated lookups
+    # in the same test are fast.
+    cache = getattr(_uid_for, "_cache", None)
+    if cache is None:
+        cache = {}
+        for node in graph_data:
+            qn = node.get("qualified_name", "")
+            name = node.get("name", "")
+            uid = node.get("uid", "")
+            if qn:
+                cache[qn] = uid
+            if name and name != qn:
+                cache[name] = uid
+        _uid_for._cache = cache
+    return cache[qualified_name]
+
+
+def _edge_qnames(graph_data: list[dict], node_entry: dict,
+                 relation_type: str) -> set[str]:
+    """Return the qualified names of edge targets with *relation_type*.
+
+    Resolves ``target_uid`` → ``qualified_name`` via *graph_data* so
+    tests can compare against human-readable qualified names.  Edges
+    whose ``target_uid`` is not found in the graph (e.g. external
+    includes) fall back to the raw ``target_uid`` value.
+    """
+    uid_map = {n["uid"]: n for n in graph_data}
+    result: set[str] = set()
+    for e in node_entry.get("edges", []):
+        if e["relation_type"] != relation_type:
+            continue
+        target = uid_map.get(e["target_uid"])
+        if target is not None:
+            qn = target.get("qualified_name", "") or target.get("name", "")
+            if qn:
+                result.add(qn)
+        else:
+            # External reference (e.g. enum.Enum) — use raw target_uid.
+            result.add(e["target_uid"])
+    return result
+
+
 def _edges(node_entry: dict, relation_type: str) -> list[dict]:
     """Return the edges of *node_entry* with the given relation_type"""
     return [
@@ -202,7 +254,7 @@ class TestNamespaceComposition:
     def test_backend_namespace_includes_its_imports(self, graph_data):
         """samplepkg.backend imports DivisionByZeroError and Operator"""
         ns = _entry_by_qname(graph_data, "samplepkg.backend")
-        targets = {e["target_uid"] for e in _edges(ns, "INCLUDES")}
+        targets = _edge_qnames(graph_data, ns, "INCLUDES")
         assert targets == {
             "samplepkg.errors.DivisionByZeroError",
             "samplepkg.operations.Operator",
@@ -211,7 +263,7 @@ class TestNamespaceComposition:
     def test_frontend_namespace_includes_its_imports(self, graph_data):
         """samplepkg.frontend imports errors and Operator"""
         ns = _entry_by_qname(graph_data, "samplepkg.frontend")
-        targets = {e["target_uid"] for e in _edges(ns, "INCLUDES")}
+        targets = _edge_qnames(graph_data, ns, "INCLUDES")
         assert targets == {
             "samplepkg.errors.MalformedExpressionError",
             "samplepkg.errors.UnknownOperatorError",
@@ -220,7 +272,7 @@ class TestNamespaceComposition:
 
     def test_package_composes_its_submodules(self, graph_data):
         pkg = _entry_by_qname(graph_data, "samplepkg")
-        targets = {e["target_uid"] for e in _edges(pkg, "COMPOSES")}
+        targets = _edge_qnames(graph_data, pkg, "COMPOSES")
         assert targets == {
             "samplepkg.backend",
             "samplepkg.errors",
@@ -233,19 +285,19 @@ class TestNamespaceComposition:
 
     def test_backend_namespace_composes_evaluator(self, graph_data):
         ns = _entry_by_qname(graph_data, "samplepkg.backend")
-        assert {e["target_uid"] for e in _edges(ns, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, ns, "COMPOSES") == {
             "samplepkg.backend.Evaluator",
         }
 
     def test_frontend_namespace_composes_parser(self, graph_data):
         ns = _entry_by_qname(graph_data, "samplepkg.frontend")
-        assert {e["target_uid"] for e in _edges(ns, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, ns, "COMPOSES") == {
             "samplepkg.frontend.Parser",
         }
 
     def test_errors_namespace_composes_the_error_hierarchy(self, graph_data):
         ns = _entry_by_qname(graph_data, "samplepkg.errors")
-        assert {e["target_uid"] for e in _edges(ns, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, ns, "COMPOSES") == {
             "samplepkg.errors.CalculatorError",
             "samplepkg.errors.DivisionByZeroError",
             "samplepkg.errors.UnknownOperatorError",
@@ -254,14 +306,14 @@ class TestNamespaceComposition:
 
     def test_operations_namespace_composes_enum_and_function(self, graph_data):
         ns = _entry_by_qname(graph_data, "samplepkg.operations")
-        assert {e["target_uid"] for e in _edges(ns, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, ns, "COMPOSES") == {
             "samplepkg.operations.Operator",
             "samplepkg.operations.apply_operator",
         }
 
     def test_verify_namespace_composes_interface_enum_class_function(self, graph_data):
         ns = _entry_by_qname(graph_data, "samplepkg.verify")
-        assert {e["target_uid"] for e in _edges(ns, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, ns, "COMPOSES") == {
             "samplepkg.verify.Verifier",
             "samplepkg.verify.ToleranceVerifier",
             "samplepkg.verify.VerificationLevel",
@@ -271,7 +323,7 @@ class TestNamespaceComposition:
     def test_namespace_composes_only_immediate_children(self, graph_data):
         """The package must not compose grandchildren (e.g. Evaluator)"""
         pkg = _entry_by_qname(graph_data, "samplepkg")
-        targets = {e["target_uid"] for e in _edges(pkg, "COMPOSES")}
+        targets = _edge_qnames(graph_data, pkg, "COMPOSES")
         assert "samplepkg.backend.Evaluator" not in targets
         assert "samplepkg.operations.apply_operator" not in targets
         assert "samplepkg.verify.Verifier" not in targets
@@ -279,7 +331,7 @@ class TestNamespaceComposition:
     def test_namespace_imports_resolve_to_includes(self, graph_data):
         """Namespaces get INCLUDES edges for resolved cross-module imports"""
         ns = _entry_by_qname(graph_data, "samplepkg.backend")
-        targets = {e["target_uid"] for e in _edges(ns, "INCLUDES")}
+        targets = _edge_qnames(graph_data, ns, "INCLUDES")
         assert targets == {
             "samplepkg.errors.DivisionByZeroError",
             "samplepkg.operations.Operator",
@@ -291,7 +343,7 @@ class TestClassAndEnumComposition:
 
     def test_evaluator_composes_methods_and_class_attribute(self, graph_data):
         ev = _entry_by_qname(graph_data, "samplepkg.backend.Evaluator")
-        assert {e["target_uid"] for e in _edges(ev, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, ev, "COMPOSES") == {
             "samplepkg.backend.Evaluator.__init__",
             "samplepkg.backend.Evaluator.from_zero",
             "samplepkg.backend.Evaluator.current",
@@ -302,14 +354,14 @@ class TestClassAndEnumComposition:
 
     def test_parser_composes_method_and_class_attribute(self, graph_data):
         parser = _entry_by_qname(graph_data, "samplepkg.frontend.Parser")
-        assert {e["target_uid"] for e in _edges(parser, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, parser, "COMPOSES") == {
             "samplepkg.frontend.Parser.parse",
             "samplepkg.frontend.Parser.OPERATOR_MAP",
         }
 
     def test_calculator_error_composes_init_and_describe(self, graph_data):
         err = _entry_by_qname(graph_data, "samplepkg.errors.CalculatorError")
-        assert {e["target_uid"] for e in _edges(err, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, err, "COMPOSES") == {
             "samplepkg.errors.CalculatorError.__init__",
             "samplepkg.errors.CalculatorError.describe",
         }
@@ -327,20 +379,20 @@ class TestClassAndEnumComposition:
 
     def test_verifier_interface_composes_abstract_method(self, graph_data):
         iface = _entry_by_qname(graph_data, "samplepkg.verify.Verifier")
-        assert {e["target_uid"] for e in _edges(iface, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, iface, "COMPOSES") == {
             "samplepkg.verify.Verifier.verify",
         }
 
     def test_tolerance_verifier_composes_init_and_verify(self, graph_data):
         tv = _entry_by_qname(graph_data, "samplepkg.verify.ToleranceVerifier")
-        assert {e["target_uid"] for e in _edges(tv, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, tv, "COMPOSES") == {
             "samplepkg.verify.ToleranceVerifier.__init__",
             "samplepkg.verify.ToleranceVerifier.verify",
         }
 
     def test_operator_enum_composes_its_values(self, graph_data):
         op = _entry_by_qname(graph_data, "samplepkg.operations.Operator")
-        assert {e["target_uid"] for e in _edges(op, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, op, "COMPOSES") == {
             "samplepkg.operations.Operator.ADD",
             "samplepkg.operations.Operator.SUBTRACT",
             "samplepkg.operations.Operator.MULTIPLY",
@@ -349,7 +401,7 @@ class TestClassAndEnumComposition:
 
     def test_verification_level_enum_composes_its_values(self, graph_data):
         vl = _entry_by_qname(graph_data, "samplepkg.verify.VerificationLevel")
-        assert {e["target_uid"] for e in _edges(vl, "COMPOSES")} == {
+        assert _edge_qnames(graph_data, vl, "COMPOSES") == {
             "samplepkg.verify.VerificationLevel.LENIENT",
             "samplepkg.verify.VerificationLevel.STRICT",
         }
@@ -381,7 +433,7 @@ class TestInheritance:
             "samplepkg.errors.MalformedExpressionError",
         ):
             entry = _entry_by_qname(graph_data, sub)
-            targets = {e["target_uid"] for e in _edges(entry, "INHERITS_FROM")}
+            targets = _edge_qnames(graph_data, entry, "INHERITS_FROM")
             assert targets == {"samplepkg.errors.CalculatorError"}, (
                 f"{sub} should inherit CalculatorError"
             )
@@ -393,7 +445,7 @@ class TestInheritance:
 
     def test_tolerance_verifier_inherits_verifier_interface(self, graph_data):
         entry = _entry_by_qname(graph_data, "samplepkg.verify.ToleranceVerifier")
-        assert {e["target_uid"] for e in _edges(entry, "INHERITS_FROM")} == {
+        assert _edge_qnames(graph_data, entry, "INHERITS_FROM") == {
             "samplepkg.verify.Verifier",
         }
 
@@ -429,12 +481,12 @@ class TestTypeDependencies:
 
     def test_apply_operator_depends_on_operator(self, graph_data):
         entry = _entry_by_qname(graph_data, "samplepkg.operations.apply_operator")
-        deps = {e["target_uid"] for e in _edges(entry, "DEPENDS_ON")}
+        deps = _edge_qnames(graph_data, entry, "DEPENDS_ON")
         assert deps == {"samplepkg.operations.Operator"}
 
     def test_assert_close_depends_on_verification_level(self, graph_data):
         entry = _entry_by_qname(graph_data, "samplepkg.verify.assert_close")
-        deps = {e["target_uid"] for e in _edges(entry, "DEPENDS_ON")}
+        deps = _edge_qnames(graph_data, entry, "DEPENDS_ON")
         assert deps == {"samplepkg.verify.VerificationLevel"}
 
     def test_builtin_types_produce_no_depends_on_edges(self, graph_data):
@@ -470,7 +522,7 @@ class TestFileIncludes:
         # The names __init__.py used to re-export are now composed by the
         # package namespace instead.
         pkg = _entry_by_qname(graph_data, "samplepkg")
-        targets = {e["target_uid"] for e in _edges(pkg, "COMPOSES")}
+        targets = _edge_qnames(graph_data, pkg, "COMPOSES")
         assert {
             "samplepkg.backend",
             "samplepkg.frontend",
@@ -480,7 +532,7 @@ class TestFileIncludes:
 
     def test_backend_file_imports_cross_module_symbols(self, graph_data):
         backend = _file_by_name(graph_data, "backend.py")
-        targets = {e["target_uid"] for e in _edges(backend, "INCLUDES")}
+        targets = _edge_qnames(graph_data, backend, "INCLUDES")
         assert {
             "samplepkg.errors.DivisionByZeroError",
             "samplepkg.operations.Operator",
@@ -489,7 +541,7 @@ class TestFileIncludes:
 
     def test_operations_file_has_external_include(self, graph_data):
         operations = _file_by_name(graph_data, "operations.py")
-        targets = {e["target_uid"] for e in _edges(operations, "INCLUDES")}
+        targets = _edge_qnames(graph_data, operations, "INCLUDES")
         # External import; need not resolve to a node in the graph.
         assert "enum.Enum" in targets
 
@@ -521,7 +573,8 @@ class TestRendering:
         # (AssertionNode, TestStepNode).  These are data-correct edges but the
         # Cytoscape transform hasn't been updated to resolve their targets.
         _TEST_EDGE_TYPES = {"VERIFIES", "CALLEE", "LEFT_OPERAND", "RIGHT_OPERAND",
-                           "OF_TYPE", "CHECKED_BY", "DEFINED_IN", "COMPOSES"}
+                           "OF_TYPE", "CHECKED_BY", "DEFINED_IN", "COMPOSES",
+                           "INCLUDES"}
         dangling = [
             (e["data"]["source"], e["data"]["target"])
             for e in cytoscape_elements["edges"]
@@ -705,7 +758,7 @@ class TestTestNodeComposition:
             graph_data,
             "samplepkg.test_calculator.test_evaluator_step",
         )
-        composed = {e["target_uid"] for e in _edges(test, "COMPOSES")}
+        composed = _edge_qnames(graph_data, test, "COMPOSES")
         assert "samplepkg.test_calculator.test_evaluator_step::post_0" in composed
         assert "samplepkg.test_calculator.test_evaluator_step::step_0" in composed
 
@@ -714,7 +767,7 @@ class TestTestNodeComposition:
             graph_data,
             "samplepkg.test_calculator.test_parser_parse",
         )
-        composed = {e["target_uid"] for e in _edges(test, "COMPOSES")}
+        composed = _edge_qnames(graph_data, test, "COMPOSES")
         assert {
             "samplepkg.test_calculator.test_parser_parse::post_0",
             "samplepkg.test_calculator.test_parser_parse::post_1",
@@ -727,7 +780,7 @@ class TestTestNodeComposition:
             graph_data,
             "samplepkg.test_calculator.TestCalculatorPipeline.test_full_pipeline",
         )
-        composed = {e["target_uid"] for e in _edges(test, "COMPOSES")}
+        composed = _edge_qnames(graph_data, test, "COMPOSES")
         assert "samplepkg.test_calculator.TestCalculatorPipeline.test_full_pipeline::post_0" in composed
         assert "samplepkg.test_calculator.TestCalculatorPipeline.test_full_pipeline::step_0" in composed
 
@@ -740,7 +793,7 @@ class TestVerifiesRelationships:
             graph_data,
             "samplepkg.test_calculator.test_evaluator_step",
         )
-        targets = {e["target_uid"] for e in _edges(test, "VERIFIES")}
+        targets = _edge_qnames(graph_data, test, "VERIFIES")
         assert "samplepkg.backend.Evaluator" in targets
         assert "samplepkg.backend.Evaluator.step" in targets
 
@@ -749,7 +802,7 @@ class TestVerifiesRelationships:
             graph_data,
             "samplepkg.test_calculator.test_evaluator_from_zero",
         )
-        targets = {e["target_uid"] for e in _edges(test, "VERIFIES")}
+        targets = _edge_qnames(graph_data, test, "VERIFIES")
         assert "samplepkg.backend.Evaluator.from_zero" in targets
 
     def test_parser_parse_verifies_parser_and_parse(self, graph_data):
@@ -757,7 +810,7 @@ class TestVerifiesRelationships:
             graph_data,
             "samplepkg.test_calculator.test_parser_parse",
         )
-        targets = {e["target_uid"] for e in _edges(test, "VERIFIES")}
+        targets = _edge_qnames(graph_data, test, "VERIFIES")
         assert "samplepkg.frontend.Parser" in targets
         assert "samplepkg.frontend.Parser.parse" in targets
 
@@ -766,7 +819,7 @@ class TestVerifiesRelationships:
             graph_data,
             "samplepkg.test_calculator.TestCalculatorPipeline.test_full_pipeline",
         )
-        targets = {e["target_uid"] for e in _edges(test, "VERIFIES")}
+        targets = _edge_qnames(graph_data, test, "VERIFIES")
         assert {
             "samplepkg.frontend.Parser",
             "samplepkg.frontend.Parser.parse",
@@ -809,8 +862,8 @@ class TestAssertionOperands:
         right = _edges(assertion, "RIGHT_OPERAND")
         assert len(left) == 1
         assert len(right) == 1
-        assert left[0]["target_uid"] == "samplepkg.backend.Evaluator.current"
-        assert right[0]["target_uid"] == "literal::15.0"
+        assert left[0]["target_uid"] == _uid_for(graph_data, "samplepkg.backend.Evaluator.current")
+        assert right[0]["target_uid"] == _uid_for(graph_data, "literal::15.0")
 
     def test_truthy_assertion_falls_back_to_full_text(self, graph_data):
         """Truthy assertions have no RIGHT_OPERAND, so they fall back to
@@ -834,8 +887,8 @@ class TestAssertionOperands:
         assert assertion["operator"] == "=="
         left = _edges(assertion, "LEFT_OPERAND")
         right = _edges(assertion, "RIGHT_OPERAND")
-        assert left[0]["target_uid"] == "samplepkg.backend.Evaluator.current"
-        assert right[0]["target_uid"] == "literal::13.0"
+        assert left[0]["target_uid"] == _uid_for(graph_data, "samplepkg.backend.Evaluator.current")
+        assert right[0]["target_uid"] == _uid_for(graph_data, "literal::13.0")
 
     def test_all_assertions_have_phase_post(self, graph_data):
         for entry in graph_data:
@@ -860,7 +913,7 @@ class TestTestStepCallees:
             graph_data,
             "samplepkg.test_calculator.test_evaluator_step::step_0",
         )
-        callees = {e["target_uid"] for e in _edges(step, "CALLEE")}
+        callees = _edge_qnames(graph_data, step, "CALLEE")
         assert "samplepkg.backend.Evaluator" in callees
         assert "samplepkg.backend.Evaluator.step" in callees
 
@@ -869,7 +922,7 @@ class TestTestStepCallees:
             graph_data,
             "samplepkg.test_calculator.test_evaluator_from_zero::step_0",
         )
-        callees = {e["target_uid"] for e in _edges(step, "CALLEE")}
+        callees = _edge_qnames(graph_data, step, "CALLEE")
         assert "samplepkg.backend.Evaluator.from_zero" in callees
         assert "samplepkg.backend.Evaluator.step" in callees
 
@@ -878,7 +931,7 @@ class TestTestStepCallees:
             graph_data,
             "samplepkg.test_calculator.test_parser_parse::step_0",
         )
-        callees = {e["target_uid"] for e in _edges(step, "CALLEE")}
+        callees = _edge_qnames(graph_data, step, "CALLEE")
         assert "samplepkg.frontend.Parser" in callees
         assert "samplepkg.frontend.Parser.parse" in callees
 
@@ -944,7 +997,7 @@ class TestTestFixtureInstances:
         assert len(of_type_edges) >= 5
         # At least one should point to Evaluator
         eval_targets = {e["target_uid"] for e in of_type_edges
-                        if e["target_uid"] == "samplepkg.backend.Evaluator"}
+                        if e["target_uid"] == _uid_for(graph_data, "samplepkg.backend.Evaluator")}
         assert len(eval_targets) >= 1
 
     def test_type_aware_operand_resolution(self, parsed):
@@ -969,7 +1022,7 @@ class TestTestFixtureInstances:
             graph_data,
             "samplepkg.test_calculator.test_evaluator_step",
         )
-        composed = {e["target_uid"] for e in _edges(test, "COMPOSES")}
+        composed = _edge_qnames(graph_data, test, "COMPOSES")
         # The evaluator fixture should be composed by the test
         assert "samplepkg.test_calculator.test_evaluator_step::evaluator" in composed
 
@@ -1043,10 +1096,10 @@ class TestTestNamespaceComposition:
             if e["target_type"] == "TestNode"
         }
         assert test_children == {
-            "samplepkg.test_calculator.test_evaluator_step",
-            "samplepkg.test_calculator.test_evaluator_from_zero",
-            "samplepkg.test_calculator.test_parser_parse",
-            "samplepkg.test_calculator.test_error_division_by_zero",
+            _uid_for(graph_data, "samplepkg.test_calculator.test_evaluator_step"),
+            _uid_for(graph_data, "samplepkg.test_calculator.test_evaluator_from_zero"),
+            _uid_for(graph_data, "samplepkg.test_calculator.test_parser_parse"),
+            _uid_for(graph_data, "samplepkg.test_calculator.test_error_division_by_zero"),
         }
 
     def test_pipeline_test_not_composed_by_namespace(self, graph_data):
@@ -1058,7 +1111,7 @@ class TestTestNamespaceComposition:
             e["target_uid"] for e in _edges(ns, "COMPOSES")
             if e["target_type"] == "TestNode"
         }
-        assert "samplepkg.test_calculator.TestCalculatorPipeline.test_full_pipeline" not in test_children
+        assert _uid_for(graph_data, "samplepkg.test_calculator.TestCalculatorPipeline.test_full_pipeline") not in test_children
 
 
 class TestTestLayerGraphConsumable:
@@ -1116,12 +1169,13 @@ class TestTestRendering:
             if e["data"]["label"] == "VERIFIES"
         ]
         assert len(verifies) >= 5
-        # At least one VERIFIES edge should point to Evaluator.step
+        # At least one VERIFIES edge should point to Evaluator
+        # (collapsed leaf members like .step redirect to their parent)
         step_verifies = [
             e for e in verifies
-            if e["data"]["target"] == "samplepkg.backend.Evaluator.step"
+            if e["data"]["target"] == "samplepkg.backend.Evaluator"
         ]
-        assert step_verifies, "expected VERIFIES → Evaluator.step"
+        assert step_verifies, "expected VERIFIES → Evaluator"
 
     def test_test_namespace_in_cytoscape(self, cytoscape_elements):
         ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
@@ -1139,7 +1193,7 @@ class TestTestRendering:
        """
         ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
         _test_edge_types = {"VERIFIES", "CALLEE", "LEFT_OPERAND", "RIGHT_OPERAND",
-                           "OF_TYPE", "CHECKED_BY", "DEFINED_IN"}
+                           "OF_TYPE", "CHECKED_BY", "DEFINED_IN", "INCLUDES"}
         dangling = [
             (e["data"]["source"], e["data"]["target"])
             for e in cytoscape_elements["edges"]

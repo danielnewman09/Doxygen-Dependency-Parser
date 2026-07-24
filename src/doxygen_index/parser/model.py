@@ -60,7 +60,8 @@ class InheritsEntry:
     """
     from_refid: str
     to_refid: str
-    to_type: str
+    to_name: str = ""
+    to_type: str = "ClassNode"
 
 
 @dataclass

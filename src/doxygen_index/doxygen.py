@@ -504,6 +504,8 @@ def run_unified_doxygen(
     output_base: Path,
     *,
     predefined: str = "",
+    file_patterns: str | None = None,
+    exclude_patterns: str | None = None,
 ) -> Path | None:
     """Run a single Doxygen parse covering both project source AND all
     dependency include directories.
@@ -544,8 +546,8 @@ def run_unified_doxygen(
         all_inputs,
         output_base,
         predefined=predefined,
-        file_patterns=_DEFAULT_FILE_PATTERNS,
-        exclude_patterns=_DEFAULT_EXCLUDE_PATTERNS,
+        file_patterns=file_patterns or _DEFAULT_FILE_PATTERNS,
+        exclude_patterns=exclude_patterns or _DEFAULT_EXCLUDE_PATTERNS,
         xml_subdir=f"{project_name}_unified/xml",
     )
 

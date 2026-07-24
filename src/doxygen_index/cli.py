@@ -654,10 +654,42 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
     else:
         print("No Conan dependencies found (continuing with project-only parse).")
 
-    # ── Phase 2: Find project source dirs ─────────────────────
-    project_sources = _find_project_source_dirs(project_dir)
-    print(f"Project source dirs: {[str(d) for d in project_sources]}")
     project_name = project_dir.name
+
+    # ── Phase 2: Read .doxygen-index.toml for config ─────────
+    file_patterns = None
+    exclude_patterns = None
+    predefined = None
+    toml_input_paths: list[str] | None = None
+    config_path = project_dir / ".doxygen-index.toml"
+    if config_path.exists():
+        try:
+            import tomllib
+        except ImportError:
+            import tomli as tomllib
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        proj = config.get("project", {})
+        file_patterns = proj.get("file_patterns") or None
+        exclude_patterns = proj.get("exclude_patterns") or None
+        predefined = proj.get("predefined") or None
+        raw_paths = proj.get("input_paths")
+        if raw_paths:
+            toml_input_paths = raw_paths
+
+    # ── Phase 2b: Resolve project source dirs ─────────────────
+    if toml_input_paths:
+        project_sources = [project_dir / p for p in toml_input_paths]
+        # Only keep dirs that exist and contain C++ files
+        project_sources = [
+            d for d in project_sources
+            if d.is_dir() and (
+                any(d.rglob("*.h")) or any(d.rglob("*.hpp"))
+                or any(d.rglob("*.cpp")) or any(d.rglob("*.cc"))
+            )
+        ]
+    else:
+        project_sources = _find_project_source_dirs(project_dir)
+    print(f"Project source dirs: {[str(d) for d in project_sources]}")
 
     # ── Phase 3: Unified Doxygen run (cached) ─────────────────
     import pickle
@@ -674,6 +706,9 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
             project_source_dirs=project_sources,
             dep_include_dirs=dep_include_dirs,
             output_base=output_base,
+            file_patterns=file_patterns,
+            exclude_patterns=exclude_patterns,
+            predefined=predefined,
         )
         if not xml_dir:
             print("Doxygen failed.", file=sys.stderr)
@@ -689,12 +724,6 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         by_source = _count_by_source(result)
         for src, count in sorted(by_source.items()):
             print(f"  {src}: {count} nodes")
-
-        # Cache the tagged result so subsequent runs skip Doxygen.
-        doxy_cache.parent.mkdir(parents=True, exist_ok=True)
-        with open(doxy_cache, "wb") as f:
-            pickle.dump(result, f)
-        print(f"  Cached: {doxy_cache} ({doxy_cache.stat().st_size:,} bytes)")
 
     # ── Phase 6: cppreference (optional, cached) ──────────────
     if args.cppreference:
@@ -731,31 +760,62 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
     print("\n--- Resolving namespace type dependencies ---")
     resolve_namespace_type_deps(result)
 
-    # ── Phase 8: Export single CSV with everything ────────────
-    print(f"\n--- Exporting CSV ---")
-    export_csv(result, source=project_name, output_dir=csv_base / project_name)
+    # ── Phase 7b: Derive namespace COMPOSES (after all nodes
+    #    including cppreference are merged) ────────────────────
+    from doxygen_index.parser.cpp_parser import _derive_namespace_compositions
+    result.compositions.clear()
+    _derive_namespace_compositions(result)
+    print(f"  Namespace compositions: {len(result.compositions)} entries")
+
+    # ── Cache the fully-processed result for subsequent runs ──
+    doxy_cache.parent.mkdir(parents=True, exist_ok=True)
+    with open(doxy_cache, "wb") as f:
+        pickle.dump(result, f)
+    print(f"  Cached: {doxy_cache} ({doxy_cache.stat().st_size:,} bytes)")
+
+    # ── Phase 8: Export (CSV and/or Neo4j) ───────────────────
+    export_csv_flag = args.csv or not args.neo4j
+    export_neo4j = args.neo4j
+
+    if export_csv_flag:
+        print(f"\n--- Exporting CSV ---")
+        export_csv(result, source=project_name, output_dir=csv_base / project_name)
+        print(f"  CSV output: {csv_base / project_name}")
+
+    if export_neo4j:
+        from doxygen_index.neo4j_backend import (
+            connect_neo4j, ensure_schema, clear_source,
+            write_result as neo4j_write,
+            update_result as neo4j_update,
+        )
+        print(f"\n--- {project_name} → Neo4j ({args.neo4j_uri}) ---")
+        connect_neo4j(
+            uri=args.neo4j_uri, user=args.neo4j_user,
+            password=args.neo4j_password,
+        )
+        ensure_schema()
+        if args.clear:
+            _confirm_destructive(f"source '{project_name}'", args.yes)
+            clear_source(project_name)
+            neo4j_write(result)
+        else:
+            neo4j_update(result, source=project_name)
+        print(f"  Neo4j ingest complete")
 
     # ── Summary ────────────────────────────────────────────────
-    print(f"\n{'='*60}")
-    print(f"Codegraph CSV export complete.")
-    print(f"Output directory: {csv_base}")
-    for subdir in sorted(csv_base.iterdir()):
-        if subdir.is_dir():
-            nodes = subdir / "nodes.csv"
-            rels = subdir / "relationships.csv"
-            n_rows = sum(1 for _ in open(nodes)) - 1 if nodes.exists() else 0
-            r_rows = sum(1 for _ in open(rels)) - 1 if rels.exists() else 0
-            print(f"  {subdir.name}/  nodes={n_rows}  rels={r_rows}")
-    print()
-    print("To load into Neo4j:")
-    for subdir in sorted(csv_base.iterdir()):
-        if subdir.is_dir():
-            nodes = subdir / "nodes.csv"
-            rels = subdir / "relationships.csv"
-            if nodes.exists():
-                print(f"  --nodes={nodes} \\")
-            if rels.exists():
-                print(f"  --relationships={rels} \\")
+    if export_csv_flag:
+        print(f"\n{'='*60}")
+        print(f"Codegraph CSV export complete.")
+        print(f"Output directory: {csv_base}")
+        for subdir in sorted(csv_base.iterdir()):
+            if subdir.is_dir():
+                nodes = subdir / "nodes.csv"
+                rels = subdir / "relationships.csv"
+                n_rows = sum(1 for _ in open(nodes)) - 1 if nodes.exists() else 0
+                r_rows = sum(1 for _ in open(rels)) - 1 if rels.exists() else 0
+                print(f"  {subdir.name}/  nodes={n_rows}  rels={r_rows}")
+    if export_neo4j:
+        print(f"\nNeo4j ingest complete.")
 
 
 def _tag_nodes_by_source(
@@ -840,8 +900,31 @@ def _count_nodes(result: "ParseResult") -> int:
 
 
 def _find_project_source_dirs(project_dir: Path) -> list[Path]:
-    """Heuristically find source/include directories in a C++ project."""
-    dirs = []
+    """Find source/include directories in a C++ project.
+
+    Reads ``input_paths`` from ``.doxygen-index.toml`` if present,
+    falling back to heuristic directory scanning.
+    """
+    # Prefer config-specified paths
+    config_path = project_dir / ".doxygen-index.toml"
+    if config_path.exists():
+        try:
+            import tomllib
+        except ImportError:
+            import tomli as tomllib
+        config = tomllib.loads(config_path.read_text(encoding="utf-8"))
+        input_paths = config.get("project", {}).get("input_paths", [])
+        if input_paths:
+            resolved: list[Path] = []
+            for p in input_paths:
+                d = (project_dir / p).resolve()
+                if d.is_dir():
+                    resolved.append(d)
+            if resolved:
+                return resolved
+
+    # Heuristic fallback: standard directories
+    dirs: list[Path] = []
     for candidate in ["include", "src", "source", "lib"]:
         d = project_dir / candidate
         if d.is_dir():
@@ -850,6 +933,16 @@ def _find_project_source_dirs(project_dir: Path) -> list[Path]:
             has_source = any(d.rglob("*.cpp")) or any(d.rglob("*.cc"))
             if has_headers or has_source:
                 dirs.append(d)
+
+    # Also try <project_name>/src (e.g., cpp-sqlite/cpp_sqlite/src/)
+    # This covers the case where include/ is a CMake install target
+    # with only public headers, while the full source tree is elsewhere.
+    pkg_src = project_dir / project_dir.name / "src"
+    if pkg_src.is_dir() and pkg_src not in dirs:
+        has_headers = any(pkg_src.rglob("*.h")) or any(pkg_src.rglob("*.hpp"))
+        if has_headers:
+            dirs.append(pkg_src)
+
     if not dirs:
         # Fallback: use the project dir itself
         dirs.append(project_dir)
@@ -1044,18 +1137,17 @@ def main() -> None:
                     help="Skip confirmation prompts (e.g. when using --clear).")
     sp.set_defaults(func=cmd_full)
 
-    # codegraph — combined deps + cppreference → CSV export
+    # codegraph — combined deps + cppreference → CSV / Neo4j export
     sp = subparsers.add_parser(
         "codegraph",
         help="Full codegraph ingestion: discover deps, generate XML, parse, "
-             "and export CSV (optionally including cppreference)",
+             "and export CSV and/or Neo4j (optionally including cppreference)",
     )
     _add_common_args(sp)
     _add_output_args(sp)
+    _add_db_args(sp)
     sp.add_argument("--force", action="store_true",
                     help="Ignore cached parse results and re-run Doxygen")
-    sp.add_argument("--csv-dir", default=None,
-                    help="Output directory for CSV files (default: <output-dir>/csv)")
     sp.add_argument("--cppreference", action="store_true",
                     help="Also download, parse, and export cppreference")
     sp.add_argument("--cppreference-cache-dir",
@@ -1065,6 +1157,10 @@ def main() -> None:
                     help="Override the cppreference archive URL")
     sp.add_argument("--cppreference-force", action="store_true",
                     help="Re-download cppreference even if cached")
+    sp.add_argument("--clear", action="store_true",
+                    help="Clear existing data for this source before a full re-write. "
+                         "By default, incremental update is used (adds new, updates "
+                         "changed, deletes stale nodes without wiping).")
     sp.set_defaults(func=cmd_codegraph)
 
     # cppreference
