@@ -372,10 +372,11 @@ def _collect_test_qualified_names(result: ParseResult) -> list[str]:
 
 
 def write_result(result: ParseResult) -> None:
-    """Write a ParseResult to Neo4j.
+    """Write a ParseResult to Neo4j using batched Cypher queries.
 
-    Nodes are saved via neomodel .save() (MERGE on unique identifier).
-    Relationships use .connect() where models declare them, Cypher otherwise.
+    Nodes are inserted via UNWIND + MERGE in batches of 1000.
+    Relationships use UNWIND + MATCH + MERGE.  This is orders of
+    magnitude faster than per-node neomodel ``.save()`` calls.
     """
     batch_refs: list[list] = [
         result.files, result.namespaces, result.classes,
@@ -385,52 +386,79 @@ def write_result(result: ParseResult) -> None:
         result.tests, result.assertions, result.test_steps,
         result.test_fixtures, result.literals,
     ]
-    batch_labels = [
-        "Files", "Namespaces", "Classes", "Enums", "Unions",
-        "Interfaces", "Concepts", "Methods", "Attributes", "EnumValues",
-        "Defines", "Functions", "Implementations",
-        "Tests", "Assertions", "TestSteps", "TestFixtures", "Literals",
+    batch_labels: list[str] = [
+        "FileNode", "NamespaceNode", "ClassNode",
+        "EnumNode", "UnionNode", "InterfaceNode", "ConceptNode",
+        "MethodNode", "AttributeNode", "EnumValueNode",
+        "DefineNode", "FunctionNode", "ImplementationNode",
+        "TestNode", "AssertionNode", "TestStepNode",
+        "TestFixtureNode", "LiteralNode",
     ]
-    # Persist nodes, replacing result lists in-place with saved instances
-    # so element_id is set for subsequent .connect() calls.
-    # create_or_update() returns a list; we unwrap the first element.
 
-    # ── Preserve LLM-enriched descriptions ─────────────────────────
-    # The parser auto-generates placeholder descriptions for test nodes
-    # (e.g. "assert ==" for assertions).  If a prior enrichment run
-    # wrote richer descriptions, we must not overwrite them with the
-    # parser's placeholders during re-index.
     _preserve_descriptions(
         result.tests, result.assertions,
         result.test_steps, result.test_fixtures,
     )
 
+    # ── Batch-insert nodes ──────────────────────────────────────
+    total_nodes = sum(len(nl) for nl in batch_refs)
+    print(f"  Computing UIDs for {total_nodes} nodes ...", end=" ", flush=True)
+    uid_count = 0
     for i, node_list in enumerate(batch_refs):
-        if node_list:
-            saved = []
-            for node in node_list:
-                _ensure_deterministic_uid(node)
-                merge_by = _merge_by_keys(node)
-                result_nodes = node.__class__.create_or_update(
-                    node.__properties__, merge_by=merge_by,
-                )
-                saved.append(result_nodes[0])
-            # Replace in-place: update the actual result attribute
-            batch_refs[i][:] = saved
-            print(f"  {batch_labels[i]}: {len(node_list)}")
+        for node in node_list:
+            _ensure_deterministic_uid(node)
+            uid_count += 1
+            if uid_count % 5000 == 0:
+                print(f"\n    ... {uid_count}/{total_nodes}", end=" ", flush=True)
+    print(f"\n  Writing {total_nodes} nodes to Neo4j ...", flush=True)
+    _BATCH = 1000
+    for i, node_list in enumerate(batch_refs):
+        if not node_list:
+            continue
+        label = batch_labels[i]
+        # Build full neomodel label hierarchy (e.g. MethodNode:MemberNode)
+        full_labels = ":".join(node_list[0].inherited_labels()) + ":CodeGraphNode"
+        props_list = [
+            {k: v for k, v in n.__properties__.items() if v is not None}
+            for n in node_list
+        ]
+        for j in range(0, len(props_list), _BATCH):
+            batch = props_list[j:j + _BATCH]
+            db.cypher_query(f"""
+                UNWIND $batch AS props
+                MERGE (n:{full_labels} {{uid: props.uid}})
+                SET n = props
+            """, {"batch": batch})
+            if len(props_list) > _BATCH:
+                print(f"  {label}: {min(j + _BATCH, len(props_list))}/{len(props_list)}", flush=True)
+        print(f"  {label}: {len(node_list)}", flush=True)
 
-    # Parameters use Cypher MERGE — no UniqueIdProperty on ParameterNode
+    # Ensure uid index (non-unique — tolerates ParseResult dupes)
+    db.cypher_query(
+        "MATCH (n) WHERE n.uid IS NOT NULL AND NOT n:CodeGraphNode SET n:CodeGraphNode"
+    )
+    try:
+        db.cypher_query(
+            "CREATE INDEX codegraph_uid_idx IF NOT EXISTS "
+            "FOR (n:CodeGraphNode) ON (n.uid)"
+        )
+        print("  Index: CodeGraphNode.uid index ready", flush=True)
+    except Exception as e:
+        print(f"  Note: index skipped ({e})", flush=True)
+
+    # Parameters
+    print(f"  Parameters phase: {len(result.parameters)} params", flush=True)
     _write_parameters(result)
 
-    # Relationships
+    # ── Batch-insert relationships ─────────────────────────────
     _write_compound_member_connect(result)
     _write_namespace_composition(result)
-    _write_file_relationships()
+    _write_file_relationships(result)
     _write_include_relationships(result)
-    _write_inheritance_relationships()
+    _write_inheritance_relationships(result)
+    _write_invoke_relationships(result)
     _write_specialization_relationships(result)
     _write_template_param_relationships(result)
-    _write_invoke_relationships(result)
     _write_implementation_relationships(result)
     _write_test_composition_relationships(result)
     _write_verifies_relationships(result)
@@ -626,13 +654,23 @@ def update_result(result: ParseResult, source: str) -> dict[str, int]:
 def _write_parameters(result: ParseResult) -> None:
     if not result.parameters:
         return
+    # Build member_refid → uid map for indexed lookup
+    refid_to_uid: dict[str, str] = {}
+    for m in result.methods:
+        if hasattr(m, 'uid') and m.uid and hasattr(m, 'refid') and m.refid:
+            refid_to_uid[m.refid] = m.uid
+
     batch_size = 1000
     batch_dicts = [p.__properties__ for p in result.parameters]
     for i in range(0, len(batch_dicts), batch_size):
         batch = batch_dicts[i:i + batch_size]
+        # Convert member_refid → member_uid for indexed MATCH
+        for row in batch:
+            row["_member_uid"] = refid_to_uid.get(row.get("member_refid", ""), "")
         db.cypher_query("""
             UNWIND $batch AS row
-            MATCH (m:MemberNode {refid: row.member_refid})
+            WITH row WHERE row._member_uid <> ''
+            MATCH (m:CodeGraphNode {uid: row._member_uid})
             MERGE (m)-[:HAS_PARAMETER]->(p:ParameterNode {
                 position: row.position,
                 name: row.name,
@@ -641,89 +679,122 @@ def _write_parameters(result: ParseResult) -> None:
             ON CREATE SET p.default_value = row.default_value,
                           p.member_refid = row.member_refid
         """, {"batch": batch})
+        print(f"  Parameters: {min(i + batch_size, len(batch_dicts))}/{len(batch_dicts)}", flush=True)
     print(f"  Parameters: {len(batch_dicts)}")
 
 
-def _write_compound_member_connect(result: ParseResult) -> None:
-    """Create COMPOSES relationships using neomodel .connect().
+def _rel_batch(batch_data: list[dict], rel_type: str,
+               from_key: str, to_key: str, label: str = "") -> int:
+    """Batch-insert relationships via UNWIND + CREATE.
 
-    Builds lookup dicts by refid, then connects:
-      - ClassNode/InterfaceNode → MethodNode via .methods.connect()
-      - ClassNode → AttributeNode via .attributes.connect()
-      - EnumNode → EnumValueNode via .values.connect()
-
-    Failures are counted and reported.
+    Uses the ``CodeGraphNode`` label (inherited by all node types)
+    so that the uid constraint index is leveraged for fast lookups.
+    Uses CREATE (not MERGE) — caller must ensure fresh data
+    (e.g. ``--clear`` before indexing).
+    Prints progress every 1000 edges.
     """
-    compound_by_refid: dict[str, object] = {}
-    for c in result.classes + result.enums + result.unions + result.interfaces:
-        compound_by_refid[c.refid] = c
-
-    success, skipped, failed = 0, 0, 0
-
-    for m in result.methods:
-        parent = compound_by_refid.get(m.compound_refid)
-        if parent is None or not hasattr(parent, 'methods'):
-            skipped += 1
-            continue
-        try:
-            parent.methods.connect(m)
-            success += 1
-        except Exception as e:
-            print(f"Warning: Could not connect MethodNode {m.qualified_name} "
-                  f"to parent {m.compound_refid}: {e}", file=sys.stderr)
-            failed += 1
-
-    for a in result.attributes:
-        parent = compound_by_refid.get(a.compound_refid)
-        if parent is None or not hasattr(parent, 'attributes'):
-            skipped += 1
-            continue
-        try:
-            parent.attributes.connect(a)
-            success += 1
-        except Exception as e:
-            print(f"Warning: Could not connect AttributeNode {a.qualified_name} "
-                  f"to parent {a.compound_refid}: {e}", file=sys.stderr)
-            failed += 1
-
-    for v in result.enum_values:
-        parent = compound_by_refid.get(v.compound_refid)
-        if parent is None or not hasattr(parent, 'values'):
-            skipped += 1
-            continue
-        try:
-            parent.values.connect(v)
-            success += 1
-        except Exception as e:
-            print(f"Warning: Could not connect EnumValueNode {v.qualified_name} "
-                  f"to parent {v.compound_refid}: {e}", file=sys.stderr)
-            failed += 1
-
-    print(f"  Relationships via .connect(): {success} connected, "
-          f"{skipped} skipped, {failed} failed")
+    if not batch_data:
+        return 0
+    total = 0
+    for i in range(0, len(batch_data), 1000):
+        batch = batch_data[i:i + 1000]
+        results, _ = db.cypher_query(f"""
+            UNWIND $batch AS row
+            MATCH (a:CodeGraphNode {{{from_key}: row.from}})
+            MATCH (b:CodeGraphNode {{{to_key}: row.to}})
+            CREATE (a)-[:{rel_type}]->(b)
+            RETURN count(*) AS cnt
+        """, {"batch": batch})
+        if results:
+            total += results[0][0]
+        if label:
+            print(f"  {label}: {min(i + 1000, len(batch_data))}/{len(batch_data)}")
+    return total
 
 
-def _write_file_relationships() -> None:
-    db.cypher_query("""
-        MATCH (c:CompoundNode) WHERE c.file_path <> ''
-        MATCH (f:FileNode {path: c.file_path})
-        MERGE (c)-[:DEFINED_IN]->(f)
-    """)
-    db.cypher_query("""
-        MATCH (m:MemberNode) WHERE m.file_path <> ''
-        MATCH (f:FileNode {path: m.file_path})
-        MERGE (m)-[:DEFINED_IN]->(f)
-    """)
-    db.cypher_query("""
-        MATCH (n:NamespaceNode) WHERE n.refid <> ''
-        MATCH (f:FileNode {refid: n.refid})
-        MERGE (n)-[:DEFINED_IN]->(f)
-    """)
-    print("  Relationships: DEFINED_IN")
+def _write_compound_member_connect(result: ParseResult) -> None:
+    """Create COMPOSES edges (compound → member) via batched Cypher."""
+    # MethodNode.compound_refid → ClassNode/InterfaceNode.refid
+    # Build refid→uid map so we can MATCH on indexed uid
+    refid_to_uid: dict[str, str] = {}
+    for lst in (result.classes, result.enums, result.unions, result.interfaces):
+        for c in lst:
+            if hasattr(c, 'uid') and c.uid and hasattr(c, 'refid') and c.refid:
+                refid_to_uid[c.refid] = c.uid
+
+    edges = [{"from": refid_to_uid[m.compound_refid], "to": m.uid}
+             for m in result.methods
+             if hasattr(m, 'uid') and m.uid
+             and m.compound_refid in refid_to_uid]
+    print(f"  COMPOSES methods: {len(edges)} edges → batching...")
+    _rel_batch(edges, "COMPOSES", "uid", "uid", label="COMPOSES methods")
+
+    attr_edges = [{"from": refid_to_uid[a.compound_refid], "to": a.uid}
+                  for a in result.attributes
+                  if hasattr(a, 'uid') and a.uid
+                  and a.compound_refid in refid_to_uid]
+    _rel_batch(attr_edges, "COMPOSES", "uid", "uid", label="COMPOSES attributes")
+
+    enum_edges = [{"from": refid_to_uid[v.compound_refid], "to": v.uid}
+                  for v in result.enum_values
+                  if hasattr(v, 'uid') and v.uid
+                  and v.compound_refid in refid_to_uid]
+    _rel_batch(enum_edges, "COMPOSES", "uid", "uid", label="COMPOSES enum_values")
+
+    total = len(edges) + len(attr_edges) + len(enum_edges)
+    print(f"  Relationships: COMPOSES (compound→member) ({total} edges)")
+
+
+def _write_file_relationships(result: ParseResult) -> None:
+    """Create DEFINED_IN edges via batched Cypher.
+
+    Uses the in-memory ParseResult to build (uid, file_path) pairs
+    instead of unindexed cross-product MATCH in Neo4j.
+    """
+    total = 0
+    # Compounds → FileNode (by path)
+    print("  DEFINED_IN (compounds) ...", end=" ", flush=True)
+    compounds = (result.classes + result.enums + result.unions +
+                 result.interfaces + result.concepts)
+    edges = _filepath_edges(compounds, result.files)
+    if edges:
+        total += _rel_batch(edges, "DEFINED_IN", "uid", "uid", label="DEFINED_IN compounds")
+    # Members → FileNode (by path)
+    print("  DEFINED_IN (members) ...", end=" ", flush=True)
+    members = (result.methods + result.attributes + result.functions +
+               result.tests + result.test_steps + result.defines)
+    edges = _filepath_edges(members, result.files)
+    if edges:
+        total += _rel_batch(edges, "DEFINED_IN", "uid", "uid", label="DEFINED_IN members")
+    # Namespaces → FileNode (by refid)
+    ns_edges = []
+    ns_by_refid = {f.refid: f for f in result.files if getattr(f, 'refid', '')}
+    for ns in result.namespaces:
+        if hasattr(ns, 'uid') and ns.uid and ns.refid in ns_by_refid:
+            ns_edges.append({"from": ns.uid, "to": ns_by_refid[ns.refid].uid})
+    if ns_edges:
+        total += _rel_batch(ns_edges, "DEFINED_IN", "uid", "uid", label="DEFINED_IN namespaces")
+    print(f"  DEFINED_IN: {total} edges", flush=True)
+
+
+def _filepath_edges(source_nodes: list, files: list) -> list[dict]:
+    """Build (from_uid, to_uid) edges for DEFINED_IN by matching file_path → FileNode.path."""
+    file_by_path: dict[str, str] = {}
+    for f in files:
+        fp = getattr(f, 'path', '') or getattr(f, 'file_path', '')
+        if fp and hasattr(f, 'uid') and f.uid:
+            file_by_path[fp] = f.uid
+    edges = []
+    for node in source_nodes:
+        fp = getattr(node, 'file_path', '')
+        if fp and hasattr(node, 'uid') and node.uid and fp in file_by_path:
+            edges.append({"from": node.uid, "to": file_by_path[fp]})
+    return edges
 
 
 def _write_include_relationships(result: ParseResult) -> None:
     resolved = [asdict(i) for i in result.includes if i.included_refid]
+    print(f"  INCLUDES: {len(resolved)} edges ...", end=" ", flush=True)
     if resolved:
         batch_size = 1000
         for i in range(0, len(resolved), batch_size):
@@ -767,120 +838,101 @@ def _write_namespace_composition(result: ParseResult) -> None:
     For Python: the ``module`` field on compounds and the module portion
     of ``qualified_name`` on functions identify their containing namespace.
     """
-    # Build namespace lookup by qualified_name (which equals refid)
-    ns_by_qname: dict[str, object] = {ns.qualified_name: ns for ns in result.namespaces}
+    # Build namespace lookup by qualified_name → uid
+    ns_by_qname: dict[str, str] = {
+        ns.qualified_name: ns.uid for ns in result.namespaces
+        if hasattr(ns, 'uid') and ns.uid
+    }
 
-    success, skipped, failed = 0, 0, 0
-
-    # --- Namespace → ClassNode ---
-    for cls in result.classes:
-        ns_qname = _namespace_for(cls.qualified_name, getattr(cls, 'module', ''))
-        parent_ns = ns_by_qname.get(ns_qname)
-        if parent_ns is None or not hasattr(parent_ns, 'classes'):
-            skipped += 1
-            continue
-        try:
-            parent_ns.classes.connect(cls)
-            success += 1
-        except Exception:
-            failed += 1
-
-    # --- Namespace → InterfaceNode ---
-    for iface in result.interfaces:
-        ns_qname = _namespace_for(iface.qualified_name, getattr(iface, 'module', ''))
-        parent_ns = ns_by_qname.get(ns_qname)
-        if parent_ns is None or not hasattr(parent_ns, 'interfaces'):
-            skipped += 1
-            continue
-        try:
-            parent_ns.interfaces.connect(iface)
-            success += 1
-        except Exception:
-            failed += 1
-
-    # --- Namespace → EnumNode ---
-    for enum in result.enums:
-        ns_qname = _namespace_for(enum.qualified_name, getattr(enum, 'module', ''))
-        parent_ns = ns_by_qname.get(ns_qname)
-        if parent_ns is None or not hasattr(parent_ns, 'enums'):
-            skipped += 1
-            continue
-        try:
-            parent_ns.enums.connect(enum)
-            success += 1
-        except Exception:
-            failed += 1
-
-    # --- Namespace → FunctionNode ---
-    for func in result.functions:
-        ns_qname = _namespace_for(func.qualified_name)
-        parent_ns = ns_by_qname.get(ns_qname)
-        if parent_ns is None or not hasattr(parent_ns, 'functions'):
-            skipped += 1
-            continue
-        try:
-            parent_ns.functions.connect(func)
-            success += 1
-        except Exception:
-            failed += 1
-
-    # --- Namespace → child NamespaceNode (COMPOSES) ---
+    edges: list[dict] = []
+    def _add_nodes(nodes, ns_attr: str = 'qualified_name'):
+        for node in nodes:
+            if not hasattr(node, 'uid') or not node.uid:
+                continue
+            qn = getattr(node, ns_attr, '')
+            ns_qname = _namespace_for(qn, getattr(node, 'module', ''))
+            parent_uid = ns_by_qname.get(ns_qname)
+            if parent_uid:
+                edges.append({"from": parent_uid, "to": node.uid})
+    _add_nodes(result.classes)
+    _add_nodes(result.interfaces)
+    _add_nodes(result.enums)
+    _add_nodes(result.functions)
     for ns in result.namespaces:
-        if '.' not in ns.qualified_name and '::' not in ns.qualified_name:
-            continue  # top-level namespace has no parent
-        parent_qname = _namespace_for(ns.qualified_name)
-        parent_ns = ns_by_qname.get(parent_qname)
-        if parent_ns is None or not hasattr(parent_ns, 'namespaces'):
-            skipped += 1
-            continue
-        try:
-            parent_ns.namespaces.connect(ns)
-            success += 1
-        except Exception:
-            failed += 1
+        if hasattr(ns, 'uid') and ns.uid and ('::' in ns.qualified_name or '.' in ns.qualified_name):
+            parent_qname = _namespace_for(ns.qualified_name)
+            parent_uid = ns_by_qname.get(parent_qname)
+            if parent_uid:
+                edges.append({"from": parent_uid, "to": ns.uid})
 
-    print(f"  Relationships: NS_COMPOSES ({success} connected, {skipped} skipped, {failed} failed)")
+    count = _rel_batch(edges, "COMPOSES", "uid", "uid", label="NS_COMPOSES")
+    print(f"  Relationships: NS_COMPOSES ({count} edges)")
 
 
-def _write_inheritance_relationships() -> None:
-    db.cypher_query("""
-        MATCH (derived:CompoundNode)
-        WHERE size(derived.base_classes) > 0
-        UNWIND derived.base_classes AS base_name
-        MATCH (base:CompoundNode)
-        WHERE base.name = base_name OR base.qualified_name = base_name
-        MERGE (derived)-[:INHERITS_FROM]->(base)
-    """)
-    print("  Relationships: INHERITS_FROM")
+def _write_inheritance_relationships(result: ParseResult) -> None:
+    """Create INHERITS_FROM edges using InheritsEntry.
+
+    Resolves base classes via refid first (for same-source matches),
+    then falls back to qualified_name (for cross-source matches, e.g.
+    cpp-sqlite inheriting from cppreference's std::runtime_error).
+    """
+    if not result.inherits:
+        print("  Relationships: INHERITS_FROM (0 edges)")
+        return
+
+    # Build uid lookups
+    refid_to_uid: dict[str, str] = {}
+    qname_to_uid: dict[str, str] = {}
+    for cls in result.classes:
+        if hasattr(cls, 'uid') and cls.uid:
+            refid_to_uid[cls.refid] = cls.uid
+            qname_to_uid[cls.qualified_name] = cls.uid
+    for iface in result.interfaces:
+        if hasattr(iface, 'uid') and iface.uid:
+            refid_to_uid[iface.refid] = iface.uid
+            qname_to_uid[iface.qualified_name] = iface.uid
+
+    edges, skipped = [], 0
+    for inh in result.inherits:
+        derived_uid = refid_to_uid.get(inh.from_refid)
+        if derived_uid is None:
+            skipped += 1; continue
+        base_uid = refid_to_uid.get(inh.to_refid)
+        if base_uid is None and inh.to_name:
+            base_uid = qname_to_uid.get(inh.to_name)
+        if base_uid is None:
+            skipped += 1; continue
+        edges.append({"from": derived_uid, "to": base_uid})
+
+    if not edges:
+        print(f"  Relationships: INHERITS_FROM (0 edges, {skipped} unresolved)")
+        return
+
+    count = _rel_batch(edges, "INHERITS_FROM", "uid", "uid", label="INHERITS_FROM")
+    print(f"  Relationships: INHERITS_FROM ({count} edges, {skipped} unresolved)")
 
 
 def _write_specialization_relationships(result: ParseResult) -> None:
-    """Create SPECIALIZES edges using specialization refs from ParseResult."""
+    """Create SPECIALIZES edges via batched Cypher."""
     if not result.specializes_refs:
         print("  Relationships: SPECIALIZES (0 edges)")
         return
 
-    # Build lookup: qualified_name → compound node (must have element_id from save)
-    compounds_by_qn: dict[str, object] = {}
-    for node_list in [result.classes, result.enums, result.unions, result.interfaces, result.concepts]:
-        for node in node_list:
-            compounds_by_qn[node.qualified_name] = node
+    qname_to_uid: dict[str, str] = {}
+    for lst in [result.classes, result.enums, result.unions, result.interfaces, result.concepts]:
+        for node in lst:
+            if hasattr(node, 'uid') and node.uid:
+                qname_to_uid[node.qualified_name] = node.uid
 
-    count = 0
-    for spec_ref in result.specializes_refs:
-        primary = compounds_by_qn.get(spec_ref.primary_template_qualified_name)
-        spec = compounds_by_qn.get(spec_ref.from_qualified_name)
-        if primary and spec and hasattr(spec, 'specializes'):
-            try:
-                spec.specializes.connect(primary)
-                count += 1
-            except Exception as e:
-                print(f"Warning: could not connect SPECIALIZES "
-                      f"{spec_ref.from_qualified_name} → "
-                      f"{spec_ref.primary_template_qualified_name}: {e}",
-                      file=sys.stderr)
+    edges = []
+    for sr in result.specializes_refs:
+        primary_uid = qname_to_uid.get(sr.primary_template_qualified_name)
+        spec_uid = qname_to_uid.get(sr.from_qualified_name)
+        if primary_uid and spec_uid:
+            edges.append({"from": spec_uid, "to": primary_uid})
 
-    print(f"  Relationships: SPECIALIZES ({count} edges)")
+    count = _rel_batch(edges, "SPECIALIZES", "uid", "uid", label="SPECIALIZES")
+    print(f"  Relationships: SPECIALIZES ({count} edges)", flush=True)
 
 
 def _write_template_param_relationships(result: ParseResult) -> None:
@@ -1005,55 +1057,45 @@ def _write_implementation_relationships(result: ParseResult) -> None:
         print("  Relationships: HAS_IMPLEMENTATION (0 edges)")
         return
 
-    # Build refid → saved member lookup
-    member_by_refid: dict[str, object] = {}
+    # Build uid lookups (not saved instances)
+    member_uid_by_refid: dict[str, str] = {}
     for node_list in [result.methods, result.attributes, result.enum_values,
                       result.defines, result.functions, result.test_steps]:
         for node in node_list:
-            member_by_refid[node.refid] = node
+            if hasattr(node, 'uid') and node.uid:
+                member_uid_by_refid[node.refid] = node.uid
 
-    # Build qualified_name → saved implementation lookup
-    impl_by_qname: dict[str, object] = {}
+    impl_qname_to_uid: dict[str, str] = {}
     for impl in result.implementations:
-        impl_by_qname[impl.qualified_name] = impl
+        if hasattr(impl, 'uid') and impl.uid:
+            impl_qname_to_uid[impl.qualified_name] = impl.uid
 
-    success, failed = 0, 0
+    edges = []
     for ref in result.implementation_refs:
-        member = member_by_refid.get(ref.member_refid)
-        impl = impl_by_qname.get(ref.implementation.qualified_name)
-        if member is None or impl is None:
-            failed += 1
-            continue
-        try:
-            member.implementation_ref.connect(impl)
-            success += 1
-        except Exception as e:
-            print(f"Warning: Could not connect HAS_IMPLEMENTATION for "
-                  f"{ref.member_refid}: {e}", file=sys.stderr)
-            failed += 1
+        member_uid = member_uid_by_refid.get(ref.member_refid)
+        impl_uid = impl_qname_to_uid.get(ref.implementation.qualified_name)
+        if member_uid and impl_uid:
+            edges.append({"from": member_uid, "to": impl_uid})
 
-    print(f"  Relationships: HAS_IMPLEMENTATION ({success} edges, {failed} failed)")
+    count = _rel_batch(edges, "HAS_IMPLEMENTATION", "uid", "uid", label="HAS_IMPLEMENTATION")
+    print(f"  Relationships: HAS_IMPLEMENTATION ({count} edges)", flush=True)
 
 
 def _write_invoke_relationships(result: ParseResult) -> None:
     if not result.invokes:
         print("  Invokes: 0")
         return
-    batch_size = 1000
-    batch_dicts = [asdict(c) for c in result.invokes]
-    created = 0
-    for i in range(0, len(batch_dicts), batch_size):
-        batch = batch_dicts[i:i + batch_size]
-        results, _meta = db.cypher_query("""
-            UNWIND $batch AS row
-            MATCH (invoker:MethodNode|FunctionNode {refid: row.from_refid})
-            MATCH (invokee:MethodNode|FunctionNode {refid: row.to_refid})
-            MERGE (invoker)-[:INVOKES]->(invokee)
-            RETURN count(*) AS cnt
-        """, {"batch": batch})
-        if results:
-            created += results[0][0]
-    print(f"  Invokes: {created} (of {len(batch_dicts)} references)")
+    # Build refid→uid map for indexed uid-based matching
+    refid_to_uid: dict[str, str] = {}
+    for lst in (result.methods, result.functions, result.defines):
+        for n in lst:
+            if hasattr(n, 'uid') and n.uid and hasattr(n, 'refid') and n.refid:
+                refid_to_uid[n.refid] = n.uid
+    edges = [{"from": refid_to_uid[c.from_refid], "to": refid_to_uid[c.to_refid]}
+             for c in result.invokes
+             if c.from_refid in refid_to_uid and c.to_refid in refid_to_uid]
+    count = _rel_batch(edges, "INVOKES", "uid", "uid", label="INVOKES")
+    print(f"  Invokes: {count} (of {len(result.invokes)} references)")
 
 
 # ---------------------------------------------------------------------------

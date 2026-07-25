@@ -16,7 +16,7 @@ Quick start::
 from __future__ import annotations
 
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 from typing import Optional
 
@@ -97,8 +97,7 @@ def parse(
     stub_refids: set[str] = set()
 
     if class_pages:
-        max_workers = min(32, (len(class_pages) // 10) + 1)
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        with ProcessPoolExecutor() as ex:
             futures = {
                 ex.submit(_parse_one_class_page, info): info
                 for info in class_pages
@@ -123,9 +122,35 @@ def parse(
     member_pages = [p for p in pages if p.page_type == PageType.MEMBER]
     print(f"\nPass 2: Parsing {len(member_pages)} member pages ...")
 
+    # Build base_refid → index map for O(1) stub-replacement lookup.
+    # The result.methods list is mutated during pass 2 (replace or append)
+    # so we refresh the index after each mutation via a closure.
+    methods_by_base: dict[str, int] = {}
+    for i, m in enumerate(result.methods):
+        base = m.refid.split("#")[0]
+        if base not in methods_by_base:
+            methods_by_base[base] = i
+
+    def _upsert_method(member, stub_refids):
+        base_refid = member.refid.split("#")[0]
+        idx = methods_by_base.get(base_refid)
+        if idx is not None and idx < len(result.methods):
+            existing = result.methods[idx]
+            if existing.refid in stub_refids:
+                if not member.brief_description and existing.brief_description:
+                    member.brief_description = existing.brief_description
+                result.methods[idx] = member
+                stub_refids.discard(existing.refid)
+                # Index now points to the replacement — keep mapping
+                return
+        # Not found or index stale — append a new entry
+        new_idx = len(result.methods)
+        result.methods.append(member)
+        methods_by_base[base_refid] = new_idx
+
+    # Use all CPU cores for member pages (largest batch)
     if member_pages:
-        max_workers = min(32, (len(member_pages) // 10) + 1)
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        with ProcessPoolExecutor() as ex:
             futures = {
                 ex.submit(_parse_one_member_page, info): info
                 for info in member_pages
@@ -136,7 +161,7 @@ def parse(
                 try:
                     entries = future.result()
                     for member, params in entries:
-                        _replace_or_add_method(result, member, stub_refids)
+                        _upsert_method(member, stub_refids)
                         result.parameters.extend(params)
                 except Exception as e:
                     info = futures[future]
@@ -150,8 +175,7 @@ def parse(
     print(f"\nPass 3: Parsing {len(free_pages)} free function pages ...")
 
     if free_pages:
-        max_workers = min(32, (len(free_pages) // 10) + 1)
-        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+        with ProcessPoolExecutor() as ex:
             futures = {
                 ex.submit(_parse_one_free_function_page, info): info
                 for info in free_pages

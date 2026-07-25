@@ -691,63 +691,45 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         project_sources = _find_project_source_dirs(project_dir)
     print(f"Project source dirs: {[str(d) for d in project_sources]}")
 
-    # ── Phase 3: Unified Doxygen run (cached) ─────────────────
-    import pickle
-    doxy_cache = output_base / f"{project_name}_unified.pkl"
-    if doxy_cache.exists() and not args.force:
-        print(f"\n--- Loading cached parse: {doxy_cache} ---")
-        with open(doxy_cache, "rb") as f:
-            result = pickle.load(f)
-        print(f"  Loaded {_count_nodes(result)} nodes")
-    else:
-        print(f"\n--- Unified Doxygen: {project_name} + {len(dep_include_dirs)} deps ---")
-        xml_dir = run_unified_doxygen(
-            project_name=project_name,
-            project_source_dirs=project_sources,
-            dep_include_dirs=dep_include_dirs,
-            output_base=output_base,
-            file_patterns=file_patterns,
-            exclude_patterns=exclude_patterns,
-            predefined=predefined,
-        )
-        if not xml_dir:
-            print("Doxygen failed.", file=sys.stderr)
-            sys.exit(1)
+    # ── Phase 3: Unified Doxygen run ────────────────────────
+    print(f"\n--- Unified Doxygen: {project_name} + {len(dep_include_dirs)} deps ---")
+    xml_dir = run_unified_doxygen(
+        project_name=project_name,
+        project_source_dirs=project_sources,
+        dep_include_dirs=dep_include_dirs,
+        output_base=output_base,
+        file_patterns=file_patterns,
+        exclude_patterns=exclude_patterns,
+        predefined=predefined,
+    )
+    if not xml_dir:
+        print("Doxygen failed.", file=sys.stderr)
+        sys.exit(1)
 
-        # ── Phase 4: Parse unified XML ────────────────────────────
-        print(f"\n--- Parsing unified XML ---")
-        result = parse_xml_dir(xml_dir, source=project_name, layer="dependency")
+    # ── Phase 4: Parse unified XML ────────────────────────────
+    print(f"\n--- Parsing unified XML ---")
+    result = parse_xml_dir(xml_dir, source=project_name, layer="dependency")
 
-        # ── Phase 5: Tag nodes by source ──────────────────────────
-        from doxygen_index.doxygen import tag_nodes_by_source
-        tag_nodes_by_source(result, project_dir, dep_include_dirs, project_name)
-        by_source = _count_by_source(result)
-        for src, count in sorted(by_source.items()):
-            print(f"  {src}: {count} nodes")
+    # ── Phase 5: Tag nodes by source ──────────────────────────
+    from doxygen_index.doxygen import tag_nodes_by_source
+    tag_nodes_by_source(result, project_dir, dep_include_dirs, project_name)
+    by_source = _count_by_source(result)
+    for src, count in sorted(by_source.items()):
+        print(f"  {src}: {count} nodes")
 
-    # ── Phase 6: cppreference (optional, cached) ──────────────
+    # ── Phase 6: cppreference (optional) ─────────────────────
     if args.cppreference:
         from doxygen_index.cppreference import download, parse as parse_cppref
         from doxygen_index.graph_json import merge_parse_results
         print("\n=== cppreference ===")
         cache_dir = Path(args.cppreference_cache_dir).expanduser()
-        cppref_pkl = cache_dir / "cppreference.pkl"
 
-        if cppref_pkl.exists() and not args.cppreference_force:
-            print(f"  Loading cached parse: {cppref_pkl}")
-            with open(cppref_pkl, "rb") as f:
-                cppref_result = pickle.load(f)
-        else:
-            archive_root = download(
-                cache_dir,
-                url=args.cppreference_archive_url,
-                force=args.cppreference_force,
-            )
-            cppref_result = parse_cppref(archive_root)
-            cache_dir.mkdir(parents=True, exist_ok=True)
-            with open(cppref_pkl, "wb") as f:
-                pickle.dump(cppref_result, f)
-            print(f"  Cached: {cppref_pkl} ({cppref_pkl.stat().st_size:,} bytes)")
+        archive_root = download(
+            cache_dir,
+            url=args.cppreference_archive_url,
+            force=args.cppreference_force,
+        )
+        cppref_result = parse_cppref(archive_root)
 
         print(f"  Parsed: {len(cppref_result.classes)} classes, "
               f"{len(cppref_result.functions)} functions, "
@@ -767,15 +749,9 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
     _derive_namespace_compositions(result)
     print(f"  Namespace compositions: {len(result.compositions)} entries")
 
-    # ── Cache the fully-processed result for subsequent runs ──
-    doxy_cache.parent.mkdir(parents=True, exist_ok=True)
-    with open(doxy_cache, "wb") as f:
-        pickle.dump(result, f)
-    print(f"  Cached: {doxy_cache} ({doxy_cache.stat().st_size:,} bytes)")
-
-    # ── Phase 8: Export (CSV and/or Neo4j) ───────────────────
-    export_csv_flag = args.csv or not args.neo4j
+    # ── Phase 7c: Export CSV ───────────────────────────────────
     export_neo4j = args.neo4j
+    export_csv_flag = True
 
     if export_csv_flag:
         print(f"\n--- Exporting CSV ---")
@@ -786,7 +762,6 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         from doxygen_index.neo4j_backend import (
             connect_neo4j, ensure_schema, clear_source,
             write_result as neo4j_write,
-            update_result as neo4j_update,
         )
         print(f"\n--- {project_name} → Neo4j ({args.neo4j_uri}) ---")
         connect_neo4j(
@@ -797,9 +772,7 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         if args.clear:
             _confirm_destructive(f"source '{project_name}'", args.yes)
             clear_source(project_name)
-            neo4j_write(result)
-        else:
-            neo4j_update(result, source=project_name)
+        neo4j_write(result)
         print(f"  Neo4j ingest complete")
 
     # ── Summary ────────────────────────────────────────────────
@@ -1146,8 +1119,6 @@ def main() -> None:
     _add_common_args(sp)
     _add_output_args(sp)
     _add_db_args(sp)
-    sp.add_argument("--force", action="store_true",
-                    help="Ignore cached parse results and re-run Doxygen")
     sp.add_argument("--cppreference", action="store_true",
                     help="Also download, parse, and export cppreference")
     sp.add_argument("--cppreference-cache-dir",

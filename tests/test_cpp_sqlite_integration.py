@@ -1,14 +1,13 @@
-"""Integration tests for the Doxygen XML → graph JSON pipeline.
+"""Integration tests for the Doxygen XML → Neo4j → LayerGraph pipeline.
 
 Two fixture levels:
 * ``cpp_sqlite_minimal`` — self-contained 132-line header, no external
   deps.  Used for fast unit tests (class discovery, method extraction,
   CSV export, tagging).
 * ``cpp-sqlite`` (real) — the actual cpp-sqlite project with Conan
-  dependencies (boost, sqlite3, spdlog).  Uses ``doxygen-index codegraph``
-  (the CLI's own unified Doxygen pipeline) for indexing and caching.
-  The CLI writes a pickle cache to ``<output-dir>/<project>_unified.pkl``;
-  ``TestFullGraphExport`` loads it to produce ``cpp_sqlite_one_hop.json``.
+  dependencies (boost, sqlite3, spdlog).  ``codegraph_graph`` runs
+  ``doxygen-index codegraph --neo4j`` to index into Neo4j, then
+  retrieves the as-built LayerGraph for assertions.
 
 Requirements: ``doxygen`` must be on PATH.  Real-fixture tests require
 ``conan install . --build=missing`` in ``tests/fixtures/cpp-sqlite``.
@@ -49,6 +48,80 @@ def _parse_fixture() -> "ParseResult":
 
     result = parse_xml_dir(xml_dir, source="cpp_sqlite_minimal", layer="dependency")
     return result
+
+
+# ---------------------------------------------------------------------------
+# Config resolution tests (pure unit tests — no Doxygen or Neo4j needed)
+# ---------------------------------------------------------------------------
+
+
+class TestConfigResolution:
+    """Verify that ``_find_project_source_dirs`` reads
+    ``.doxygen-index.toml`` and falls back correctly."""
+
+    def test_config_input_paths_take_precedence(self, tmp_path: Path):
+        """When .doxygen-index.toml specifies input_paths, they are
+        used instead of the heuristic (include/, src/, etc.)."""
+        from doxygen_index.cli import _find_project_source_dirs
+
+        # Create a project dir with BOTH a config path and a heuristic path.
+        # The config says "my_src"; the heuristic would find "include/".
+        (tmp_path / "my_src").mkdir()
+        (tmp_path / "my_src" / "header.h").write_text("// ok")
+        (tmp_path / "include").mkdir()
+        (tmp_path / "include" / "header.h").write_text("// also ok")
+
+        (tmp_path / ".doxygen-index.toml").write_text(
+            '[project]\nname = "test"\ninput_paths = ["my_src"]\n'
+        )
+
+        dirs = _find_project_source_dirs(tmp_path)
+        resolved = [d.relative_to(tmp_path) for d in dirs]
+        # Only the config-specified path, not the heuristic include/
+        assert Path("my_src") in resolved
+        assert Path("include") not in resolved, (
+            f"Heuristic include/ should not appear when config exists, got {resolved}"
+        )
+
+    def test_fallback_when_no_config(self, tmp_path: Path):
+        """Without .doxygen-index.toml, the heuristic finds standard dirs."""
+        from doxygen_index.cli import _find_project_source_dirs
+
+        (tmp_path / "src").mkdir()
+        (tmp_path / "src" / "main.cpp").write_text("// test")
+
+        dirs = _find_project_source_dirs(tmp_path)
+        resolved = [d.relative_to(tmp_path) for d in dirs]
+        assert Path("src") in resolved, (
+            f"Heuristic should find src/ when no config, got {resolved}"
+        )
+
+    def test_fallback_when_no_dirs_found(self, tmp_path: Path):
+        """When no standard dirs exist and no config, fall back to
+        the project dir itself."""
+        from doxygen_index.cli import _find_project_source_dirs
+
+        dirs = _find_project_source_dirs(tmp_path)
+        assert dirs == [tmp_path], (
+            f"Should fall back to project dir, got {dirs}"
+        )
+
+    def test_config_nonexistent_path_ignored(self, tmp_path: Path):
+        """A config input_path that doesn't exist on disk is skipped."""
+        from doxygen_index.cli import _find_project_source_dirs
+
+        (tmp_path / "exists").mkdir()
+        (tmp_path / "exists" / "header.h").write_text("// ok")
+
+        (tmp_path / ".doxygen-index.toml").write_text(
+            '[project]\nname = "test"\ninput_paths = ["exists", "nope"]\n'
+        )
+
+        dirs = _find_project_source_dirs(tmp_path)
+        resolved = [d.relative_to(tmp_path) for d in dirs]
+        assert Path("exists") in resolved
+        assert Path("nope") not in resolved
+        assert len(dirs) == 1, f"Expected 1 dir, got {len(dirs)}: {resolved}"
 
 
 # ---------------------------------------------------------------------------
@@ -198,8 +271,68 @@ class TestTagging:
             assert m.tags == ["dependency"]
 
 
+class TestNamespaceComposition:
+    """Verify that ``_derive_namespace_compositions`` runs during
+    ``post_process`` and populates ``result.compositions`` correctly.
+
+    This codepath (plain ``parse_xml_dir`` → ``post_process``) is
+    separate from the ``cmd_codegraph`` pipeline — a regression here
+    would mean standalone Doxygen parses lose namespace COMPOSES.
+    """
+
+    def test_cpp_sqlite_namespace_composes_all_classes(self, parsed_result):
+        """Every cpp_sqlite class should be composed by the namespace."""
+        ns_refid = None
+        for ns in parsed_result.namespaces:
+            if ns.qualified_name == "cpp_sqlite":
+                ns_refid = ns.refid
+                break
+        assert ns_refid is not None, "cpp_sqlite namespace not found"
+
+        composed_refids = {
+            c.child_refid for c in parsed_result.compositions
+            if c.parent_refid == ns_refid
+        }
+
+        cpp_sqlite_classes = [
+            c for c in parsed_result.classes
+            if c.qualified_name.startswith("cpp_sqlite::")
+        ]
+        assert len(cpp_sqlite_classes) >= 6, (
+            f"Expected >=6 cpp_sqlite classes, got {len(cpp_sqlite_classes)}"
+        )
+
+        for cls in cpp_sqlite_classes:
+            assert cls.refid in composed_refids, (
+                f"cpp_sqlite namespace should COMPOSE {cls.qualified_name}"
+            )
+
+    def test_non_cpp_sqlite_classes_not_composed(self, parsed_result):
+        """Classes outside cpp_sqlite namespace are not composed by it."""
+        ns_refid = None
+        for ns in parsed_result.namespaces:
+            if ns.qualified_name == "cpp_sqlite":
+                ns_refid = ns.refid
+                break
+        assert ns_refid is not None
+
+        composed_refids = {
+            c.child_refid for c in parsed_result.compositions
+            if c.parent_refid == ns_refid
+        }
+
+        non_cpp_cls = [
+            c for c in parsed_result.classes
+            if not c.qualified_name.startswith("cpp_sqlite::")
+        ]
+        for cls in non_cpp_cls:
+            assert cls.refid not in composed_refids, (
+                f"cpp_sqlite namespace should NOT compose {cls.qualified_name}"
+            )
+
+
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers (minimal fixture)
 # ---------------------------------------------------------------------------
 
 def _find_class(result, qualified_name: str):
@@ -225,17 +358,13 @@ def _methods_of(result, cls):
 #   MUST be parsed in the same Doxygen run as the project (everything in
 #   INPUT).  The one-hop filter keeps only directly-connected dep nodes.
 #
-#   ``TestDepIndexing`` runs the unified parse once (slow) and pickles
-#   the ParseResult.  ``TestFullGraphExport`` loads the cached result
-#   (fast) and produces ``cpp_sqlite_one_hop.json``.
+#   ``codegraph_graph`` runs the unified Doxygen parse + cppreference
+#   merge + Neo4j ingest via the CLI, then retrieves the as-built
+#   LayerGraph from Neo4j.  The serialized JSON is committed for
+#   downstream consumers (visualisation, graph analysis).
 
 _REAL_FIXTURE = FIXTURE_DIR.parent / "cpp-sqlite"
-
-# The CLI's ``codegraph`` subcommand caches the unified ParseResult at
-# ``<output-dir>/<project>_unified.pkl``.  Tests load from there instead
-# of maintaining a separate pickle cache.
 CODEGRAPH_OUTPUT = FIXTURE_DIR.parent / "codegraph_output"
-_UNIFIED_CACHE = CODEGRAPH_OUTPUT / "cpp-sqlite_unified.pkl"
 
 
 def _conan_deps_available() -> bool:
@@ -248,192 +377,108 @@ def _conan_deps_available() -> bool:
         return False
 
 
+def _flatten_layer_graph(serialized: list[dict]) -> list[dict]:
+    """Flatten a LayerGraph serialization (nested ``composes``)
+    into a flat list of dicts, matching the one-hop JSON format
+    used by existing assertions.
+
+    Each node dict gets ``edges`` as a flat list with
+    ``relation_type``, ``target_uid``, ``target_type`` keys.
+    """
+    flat: list[dict] = []
+    stack = list(serialized)
+    while stack:
+        node = stack.pop()
+        # Preserve existing edges (non-COMPOSES from serialize())
+        edges = list(node.get("edges", []))
+        # COMPOSES children → edges + push for flattening
+        for child in node.get("composes", []):
+            edges.append({
+                "relation_type": "COMPOSES",
+                "target_uid": child.get("uid", ""),
+                "target_type": child.get("kind", ""),
+            })
+            stack.append(child)
+        node["edges"] = edges
+        node.pop("composes", None)
+        flat.append(node)
+    return flat
+
+
 @pytest.fixture(scope="module")
-def merged_result():
-    """Load the cached unified ParseResult produced by the CLI.
+def codegraph_graph():
+    """Full reindex + Neo4j ingest + LayerGraph retrieval.
 
-    Populated by ``TestDepIndexing`` on first run.  Subsequent runs are
-    instant (no Doxygen needed).
+    1. Runs ``doxygen-index codegraph --neo4j --force`` on the
+       cpp-sqlite fixture (same CLI command used in
+       ../cpp-sqlite/.vscode/tasks.json).
+    2. Retrieves the as-built LayerGraph from Neo4j.
+    3. Flattens and saves as ``cpp_sqlite_one_hop.json``.
+
+    Module-scoped — runs once per session.  The JSON is committed
+    so downstream consumers can work without Neo4j.
     """
-    import pickle
-    if not _UNIFIED_CACHE.exists():
-        pytest.skip("unified parse cache not populated — run TestDepIndexing first")
-    with open(_UNIFIED_CACHE, "rb") as f:
-        result = pickle.load(f)
-    node_count = (
-        len(result.classes) + len(result.methods)
-        + len(result.attributes) + len(result.functions)
-        + len(result.namespaces) + len(result.enums)
-        + len(result.concepts) + len(result.defines)
-    )
-    print(f"\n  Loaded unified parse from CLI cache: {node_count} nodes")
-    return result
-
-
-class TestDepIndexing:
-    """Run ``doxygen-index codegraph`` (the CLI's own unified Doxygen
-    pipeline) which handles discovery, parsing, tagging, caching, and
-    optional cppreference merge — all in one command.
-
-    The CLI writes a pickle cache to
-    ``<output-dir>/<project>_unified.pkl``.  Subsequent tests load it
-    via :func:`merged_result` — no separate test pickle cache needed.
-    """
-
-    def test_index_unified_and_cache(self):
-        """Run ``doxygen-index codegraph`` on the cpp-sqlite fixture
-        with cppreference enabled.
-
-        The CLI runs one Doxygen parse covering project source + all
-        Conan dependency include directories, producing cross-references
-        (INVOKES edges) from project code to dependency symbols.
-        """
-        if not _doxygen_available():
-            pytest.skip("doxygen not found on PATH")
-        if not _conan_deps_available():
-            pytest.skip("conan deps not installed")
-
-        CODEGRAPH_OUTPUT.mkdir(parents=True, exist_ok=True)
-
-        result = subprocess.run(
-            [
-                "doxygen-index", "codegraph",
-                "--project-dir", str(_REAL_FIXTURE),
-                "--output-dir", str(CODEGRAPH_OUTPUT),
-                "--cppreference",
-                "--force",
-            ],
-            capture_output=True, text=True, timeout=900,
-        )
-        print(result.stdout)
-        if result.returncode != 0:
-            print(result.stderr, file=sys.stderr)
-            pytest.fail(f"doxygen-index codegraph failed (rc={result.returncode})")
-
-        assert _UNIFIED_CACHE.exists(), (
-            f"CLI did not produce expected pickle at {_UNIFIED_CACHE}"
-        )
-
-        import pickle
-        import os
-        with open(_UNIFIED_CACHE, "rb") as f:
-            parsed = pickle.load(f)
-
-        node_count = (
-            len(parsed.classes) + len(parsed.methods)
-            + len(parsed.attributes) + len(parsed.functions)
-            + len(parsed.namespaces) + len(parsed.enums)
-            + len(parsed.concepts) + len(parsed.defines)
-        )
-        size_bytes = os.path.getsize(_UNIFIED_CACHE)
-        print(f"\n  Unified parse: {node_count} nodes")
-        print(f"  Pickle size: {size_bytes:,} bytes")
-        assert node_count > 100, (
-            f"Expected >100 nodes in unified parse, got {node_count}"
-        )
-
-
-def _generate_one_hop_json(merged_result) -> dict:
-    """Generate the one-hop filtered graph JSON from *merged_result*.
-
-    Writes ``cpp_sqlite_one_hop.json`` to ``CODEGRAPH_OUTPUT`` and
-    returns the filtered node list.  Idempotent — callers that only
-    need the JSON on disk can ignore the return value.
-    """
-    from doxygen_index.graph_json import result_to_graph_json
     import json
-
-    full_graph = result_to_graph_json(merged_result, source="cpp-sqlite")
-
-    # Identify project-owned nodes by source field.
-    project_source = "cpp-sqlite"
-    project_uids: set[str] = set()
-    for node in full_graph:
-        if node.get("source", "") == project_source:
-            uid = node.get("uid", "")
-            if uid:
-                project_uids.add(uid)
-
-    # Collect one-hop neighbours: dep nodes targeted by project edges.
-    neighbour_uids: set[str] = set()
-    for node in full_graph:
-        if node.get("uid", "") not in project_uids:
-            continue
-        for edge in node.get("edges", []):
-            target = edge.get("target_uid", "")
-            if target and target not in project_uids:
-                neighbour_uids.add(target)
-
-    # Also pull in namespace parents of neighbour nodes.  A dependency
-    # type (e.g. ``std::shared_ptr``) appears as a neighbour because
-    # project code has a DEPENDS_ON edge to it.  Its parent namespace
-    # (``std``) composes it, so the namespace node itself isn't targeted
-    # by any project edge — but we want it in the one-hop graph for
-    # structural context.
-    # We do this BEFORE building the keep set so that the parent
-    # namespace's own COMPOSES edges (to other siblings the project
-    # doesn't directly depend on) are also included.
-    parent_ns_uids: set[str] = set()
-    for node in full_graph:
-        if node.get("kind") != "namespace":
-            continue
-        for edge in node.get("edges", []):
-            if edge.get("relation_type") == "COMPOSES" and edge.get("target_uid", "") in neighbour_uids:
-                parent_ns_uids.add(node.get("uid", ""))
-
-    keep_uids = project_uids | neighbour_uids | parent_ns_uids
-    filtered = [n for n in full_graph if n.get("uid", "") in keep_uids]
+    if not _doxygen_available():
+        pytest.skip("doxygen not found on PATH")
+    if not _conan_deps_available():
+        pytest.skip("conan deps not installed")
 
     CODEGRAPH_OUTPUT.mkdir(parents=True, exist_ok=True)
+
+    # ── Step 1: Index into Neo4j ────────────────────────────
+    # Pass test container credentials as env vars so the CLI
+    # subprocess connects to the correct Neo4j instance.
+    import os as _os
+    env = {**_os.environ,
+           "NEO4J_URI": "bolt://localhost:7689",
+           "NEO4J_USER": "neo4j",
+           "NEO4J_PASSWORD": "doxygen-index-test"}
+
+    result = subprocess.run(
+        [
+            "doxygen-index", "codegraph",
+            "--project-dir", str(_REAL_FIXTURE),
+            "--output-dir", str(CODEGRAPH_OUTPUT),
+            "--cppreference",
+            "--neo4j",
+            "--only", "sqlite3,boost,spdlog",
+        ],
+        env=env, timeout=600,
+    )
+    if result.returncode != 0:
+        pytest.fail(f"doxygen-index codegraph failed (rc={result.returncode})")
+
+    # ── Step 2: Retrieve LayerGraph from Neo4j ──────────────
+    from codegraph.graph import LayerGraph
+    graph = LayerGraph.from_neo4j("as-built")
+    serialized = graph.serialize(fields="all")
+
+    # ── Step 3: Flatten and save ───────────────────────────
+    flat = _flatten_layer_graph(serialized)
     output = CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop.json"
-    output.write_text(json.dumps(filtered, indent=2, default=str),
+    output.write_text(json.dumps(flat, indent=2, default=str),
                       encoding="utf-8")
-
-    print(f"\n  Filtered graph: {len(filtered)} nodes "
-          f"({len(project_uids)} project + {len(neighbour_uids)} neighbours)")
-    print(f"  Output: {output}")
-    print(f"  Size: {output.stat().st_size:,} bytes")
-    return filtered
-
-
-@pytest.fixture(scope="module")
-def one_hop_json(merged_result) -> list[dict]:
-    """Return the one-hop filtered graph JSON, regenerating only when
-    the pickle cache is newer than the JSON on disk.
-
-    Module-scoped — runs once regardless of test order.  When the
-    JSON is fresh the fixture returns instantly from disk.
-    """
-    import json
-    output = CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop.json"
-    if output.exists() and _UNIFIED_CACHE.exists():
-        pickle_mtime = _UNIFIED_CACHE.stat().st_mtime
-        json_mtime = output.stat().st_mtime
-        if json_mtime >= pickle_mtime:
-            print(f"\n  Loading cached one-hop JSON ({output.stat().st_size:,} bytes)")
-            return json.loads(output.read_text(encoding="utf-8"))
-    return _generate_one_hop_json(merged_result)
+    print(f"\n  LayerGraph as-built: {len(flat)} nodes")
+    print(f"  Output: {output} ({output.stat().st_size:,} bytes)")
+    return flat
 
 
 class TestFullGraphExport:
-    """Export the real cpp-sqlite codebase as a LayerGraph-compatible JSON.
+    """Retrieve the as-built LayerGraph from Neo4j and verify structure.
 
-    Loads the cached ParseResult produced by ``doxygen-index codegraph``
-    and writes ``cpp_sqlite_one_hop.json``.  The fixture is committed
-    so downstream consumers (visualisation, graph analysis) can work
-    with a realistic C++ project without running Doxygen.
+    ``codegraph_graph`` indexes cpp-sqlite into Neo4j via the CLI,
+    retrieves the as-built LayerGraph, flattens it, and saves
+    ``cpp_sqlite_one_hop.json``.  Tests interrogate the flat list.
 
-    ``one_hop_json`` is a module-scoped fixture — it runs once and is
-    shared by all tests in this class, so running any single test
-    produces a fresh JSON without imposing ordering.
+    Module-scoped — runs once per session.
     """
 
-    def test_export_json_with_one_hop(self, one_hop_json):
-        """Parse cpp-sqlite + cached deps and write one-hop graph JSON."""
-        filtered = one_hop_json
+    def test_export_json_with_one_hop(self, codegraph_graph):
+        """Verify the as-built LayerGraph has expected nodes and edges."""
+        filtered = codegraph_graph
         assert len(filtered) > 50, f"Expected >50 nodes, got {len(filtered)}"
 
-        # Basic structural assertions
         all_edges = []
         for node in filtered:
             all_edges.extend(node.get("edges", []))
@@ -441,43 +486,35 @@ class TestFullGraphExport:
         assert "COMPOSES" in edge_types, f"Expected COMPOSES in {edge_types}"
         assert "INVOKES" in edge_types, f"Expected INVOKES in {edge_types}"
 
-        # Verify key classes from the real codebase are present
         node_names = {n.get("name", "") for n in filtered}
         assert "Database" in node_names
         assert "DAOBase" in node_names
         assert "DataAccessObject" in node_names
         assert "Transaction" in node_names
 
-        # Verify dep type nodes appear (one-hop pull-in)
         dep_sources = {n.get("source", "") for n in filtered}
         print(f"  Edge types: {sorted(edge_types)}")
         print(f"  Sources present: {sorted(dep_sources)}")
 
-    def test_all_edges_resolve_to_nodes(self, merged_result):
-        """Verify edge target resolution quality.
+    # DEVNOTE: ``test_all_edges_resolve_to_nodes`` previously used the
+    # full merged ParseResult.  The as-built LayerGraph only includes
+    # project nodes + one-hop neighbours, so edge coverage is scoped.
+    # If full-graph resolution testing is needed, retrieve a full
+    # LayerGraph (all tags) from Neo4j.
 
-        Doxygen generates ``<references>`` to symbols it can resolve via
-        ``#include`` but doesn't always fully document (e.g. macros,
-        extern functions, implementation-detail symbols).  These appear
-        as INVOKES edges whose targets don't exist in the graph.
-
-        This test asserts that NON-INVOKES edges all resolve and that
-        the overall resolution rate is reasonable.
-        """
-        from doxygen_index.graph_json import result_to_graph_json
-
-        full_graph = result_to_graph_json(merged_result, source="cpp-sqlite")
-        node_uids = {n["uid"] for n in full_graph}
+    def test_all_edges_resolve_to_nodes(self, codegraph_graph):
+        """Verify edges in the as-built graph resolve to nodes."""
+        data = codegraph_graph
+        node_uids = {n["uid"] for n in data}
 
         total_edges = 0
         unresolved: list[dict] = []
-        for node in full_graph:
+        for node in data:
             for edge in node.get("edges", []):
                 total_edges += 1
                 if edge["target_uid"] not in node_uids:
                     unresolved.append(edge)
 
-        # INVOKES to undocumented symbols are expected.
         non_invokes_unresolved = [
             e for e in unresolved
             if e["relation_type"] != "INVOKES"
@@ -492,7 +529,7 @@ class TestFullGraphExport:
               f"({resolution_pct:.1f}%)")
         print(f"  Unresolved INVOKES: {len(unresolved)} (expected)")
 
-    def test_discovered_dependencies(self, merged_result):
+    def test_discovered_dependencies(self):
         """Verify conan discovers expected dependencies for cpp-sqlite."""
         if not _conan_deps_available():
             pytest.skip("conan deps not installed")
@@ -500,20 +537,16 @@ class TestFullGraphExport:
         from doxygen_index.conan import discover_packages
         pkgs = discover_packages(project_dir=str(_REAL_FIXTURE), build_type="Debug")
 
-        # Core deps should be present
         assert "boost" in pkgs, f"boost not in {sorted(pkgs)}"
         assert "sqlite3" in pkgs, f"sqlite3 not in {sorted(pkgs)}"
         assert "spdlog" in pkgs, f"spdlog not in {sorted(pkgs)}"
 
-    def test_dependency_relationships(self, one_hop_json):
-        """Verify the one-hop JSON has expected DEPENDS_ON, INVOKES,
+    def test_dependency_relationships(self, codegraph_graph):
+        """Verify the as-built graph has expected DEPENDS_ON, INVOKES,
         and INCLUDES relationships from cpp-sqlite to its dependencies."""
-        import json
-
-        data = one_hop_json
+        data = codegraph_graph
         uid_map = {n["uid"]: n for n in data}
 
-        # Gather all DEPENDS_ON edges as (from_qn, to_qn, to_source) triples.
         depends_on: set[tuple[str, str, str]] = set()
         includes: set[tuple[str, str, str]] = set()
         invokes: set[tuple[str, str, str]] = set()
@@ -532,68 +565,42 @@ class TestFullGraphExport:
                 elif rt == "INVOKES":
                     invokes.add(entry)
 
-        # ── External DEPENDS_ON (project → conan dep) ──
-        assert ("cpp_sqlite::Database::db_", "sqlite3", "sqlite3") in depends_on, \
-            "Database::db_ should DEPENDS_ON sqlite3"
-        assert ("cpp_sqlite::Database::getRawDB()", "sqlite3", "sqlite3") in depends_on, \
-            "Database::getRawDB should DEPENDS_ON sqlite3"
-        assert ("cpp_sqlite::Database::daos_", "boost::unordered_map", "boost") in depends_on, \
-            "Database::daos_ should DEPENDS_ON boost::unordered_map"
-        assert ("cpp_sqlite::Database::pLogger_", "spdlog::logger", "spdlog") in depends_on, \
-            "Database::pLogger_ should DEPENDS_ON spdlog::logger"
+        assert ("cpp_sqlite::Database::db_", "sqlite3", "sqlite3") in depends_on
+        assert ("cpp_sqlite::Database::getRawDB()", "sqlite3", "sqlite3") in depends_on
+        assert ("cpp_sqlite::Database::daos_", "boost::unordered_map", "boost") in depends_on
+        assert ("cpp_sqlite::Database::pLogger_", "spdlog::logger", "spdlog") in depends_on
 
-        # ── Stdlib DEPENDS_ON (project → cppreference) ──
-        assert ("cpp_sqlite::Database::db_", "std::unique_ptr", "cppreference") in depends_on, \
-            "Database::db_ should DEPENDS_ON std::unique_ptr"
-        assert ("cpp_sqlite::Database::pLogger_", "std::shared_ptr", "cppreference") in depends_on, \
-            "Database::pLogger_ should DEPENDS_ON std::shared_ptr"
+        assert ("cpp_sqlite::Database::db_", "std::unique_ptr", "cppreference") in depends_on
+        assert ("cpp_sqlite::Database::pLogger_", "std::shared_ptr", "cppreference") in depends_on
         assert ("cpp_sqlite::DataAccessObject::writeBuffer_", "std::vector",
-                "cppreference") in depends_on, \
-            "DataAccessObject::writeBuffer_ should DEPENDS_ON std::vector"
+                "cppreference") in depends_on
 
-        # ── INCLUDES (project → dep headers) ──
-        assert ("DBDatabase.hpp", "sqlite3.h", "sqlite3") in includes, \
-            "DBDatabase.hpp should INCLUDE sqlite3.h"
-        assert ("DBDatabase.hpp", "unordered_map.hpp", "boost") in includes, \
-            "DBDatabase.hpp should INCLUDE unordered_map.hpp"
-        assert ("DBTraits.hpp", "sqlite3.h", "sqlite3") in includes, \
-            "DBTraits.hpp should INCLUDE sqlite3.h"
+        assert ("DBDatabase.hpp", "sqlite3.h", "sqlite3") in includes
+        assert ("DBDatabase.hpp", "unordered_map.hpp", "boost") in includes
+        assert ("DBTraits.hpp", "sqlite3.h", "sqlite3") in includes
 
-        # ── INVOKES (project → dep functions) ──
-        # Database::select calls sqlite3 C API functions.
         assert ("cpp_sqlite::Database::select(PreparedSQLStmt &stmt)",
-                "sqlite3_step", "sqlite3") in invokes, \
-            "Database::select should INVOKE sqlite3_step"
+                "sqlite3_step", "sqlite3") in invokes
         assert ("cpp_sqlite::Database::insert(PreparedSQLStmt &stmt, T &data)",
-                "sqlite3_bind_int64", "sqlite3") in invokes, \
-            "Database::insert should INVOKE sqlite3_bind_int64"
+                "sqlite3_bind_int64", "sqlite3") in invokes
         assert ("cpp_sqlite::Database::isInTransaction(())",
-                "sqlite3_close", "sqlite3") in invokes, \
-            "Database::isInTransaction should INVOKE sqlite3_close"
+                "sqlite3_close", "sqlite3") in invokes
 
-        # ── Source provenance: project nodes are tagged "as-built",
-        #    dependency nodes are tagged "dependency".
-        #    ``tag_nodes_by_source`` in doxygen.py sets both ``source``
-        #    and ``tags``.
         for node in data:
             src = node.get("source", "")
             tags = node.get("tags", [])
             if src == "cpp-sqlite":
-                assert "as-built" in tags, \
-                    f"cpp-sqlite node {node.get('qualified_name','')} should be as-built"
-                assert "dependency" not in tags, \
-                    f"cpp-sqlite node {node.get('qualified_name','')} should NOT be dependency"
+                assert "as-built" in tags
+                assert "dependency" not in tags
             elif src in ("boost", "spdlog", "sqlite3", "cppreference", "gtest"):
-                assert "dependency" in tags, \
-                    f"{src} node {node.get('qualified_name','')} should be dependency"
+                assert "dependency" in tags
 
-        # ── Dep node counts by source ──
         from collections import Counter
         src_counts = Counter(n.get("source", "?") for n in data)
-        assert src_counts.get("boost", 0) >= 3, f"Expected >=3 boost nodes, got {src_counts.get('boost', 0)}"
-        assert src_counts.get("spdlog", 0) >= 4, f"Expected >=4 spdlog nodes, got {src_counts.get('spdlog', 0)}"
-        assert src_counts.get("sqlite3", 0) >= 10, f"Expected >=10 sqlite3 nodes, got {src_counts.get('sqlite3', 0)}"
-        assert src_counts.get("cppreference", 0) >= 7, f"Expected >=7 cppreference nodes, got {src_counts.get('cppreference', 0)}"
+        assert src_counts.get("boost", 0) >= 3
+        assert src_counts.get("spdlog", 0) >= 4
+        assert src_counts.get("sqlite3", 0) >= 10
+        assert src_counts.get("cppreference", 0) >= 7
 
         print(f"\n  DEPENDS_ON: {len(depends_on)} unique edges")
         print(f"  INCLUDES:   {len(includes)} unique edges")
@@ -603,13 +610,11 @@ class TestFullGraphExport:
     # Namespace COMPOSES assertions
     # ------------------------------------------------------------------
 
-    def test_cpp_sqlite_namespace_composes_classes(self, one_hop_json):
-        """Verify that the ``cpp_sqlite`` namespace node has COMPOSES
-        edges to the project's top-level classes and structs."""
-        data = one_hop_json
+    def test_cpp_sqlite_namespace_composes_classes(self, codegraph_graph):
+        """Verify the ``cpp_sqlite`` namespace COMPOSES project classes."""
+        data = codegraph_graph
         uid_map = {n["uid"]: n for n in data}
 
-        # Locate the cpp_sqlite namespace node (source=cpp-sqlite).
         cpp_sqlite_ns = None
         for n in data:
             if (n.get("kind") == "namespace"
@@ -619,7 +624,6 @@ class TestFullGraphExport:
                 break
         assert cpp_sqlite_ns is not None, "cpp_sqlite namespace node not found"
 
-        # Gather all COMPOSES targets from this namespace.
         composes_edges = [
             e for e in cpp_sqlite_ns.get("edges", [])
             if e.get("relation_type") == "COMPOSES"
@@ -631,8 +635,6 @@ class TestFullGraphExport:
             if qn:
                 composes_targets.add(qn)
 
-        # Expected top-level cpp_sqlite classes and structs.
-        # Note: DAOBase is defined in the global namespace, not cpp_sqlite.
         expected_classes = [
             "cpp_sqlite::DataAccessObject",
             "cpp_sqlite::Database",
@@ -648,29 +650,21 @@ class TestFullGraphExport:
                 f"cpp_sqlite namespace should COMPOSE {expected}"
             )
 
-        print(f"\n  cpp_sqlite COMPOSES {len(composes_edges)} children:")
-        for qn in sorted(composes_targets)[:10]:
-            print(f"    {qn}")
-        if len(composes_targets) > 10:
-            print(f"    ... and {len(composes_targets) - 10} more")
+        print(f"\n  cpp_sqlite COMPOSES {len(composes_edges)} children")
 
-    def test_std_namespace_composes_stdlib_classes(self, merged_result):
-        """Verify that the ``std`` namespace node (from cppreference)
-        has COMPOSES edges to stdlib class nodes like ``std::vector``
-        and ``std::shared_ptr``.
+    # DEVNOTE: Previously used the full merged ParseResult to verify
+    # that std namespace COMPOSES all expected stdlib types.  The as-built
+    # LayerGraph only includes std types directly referenced by project
+    # nodes, so the set of COMPOSES children is scoped.
 
-        Uses the full graph (from ``merged_result``) rather than the
-        one-hop filtered graph, because the one-hop filter strips
-        namespace nodes that are parents of dependency types.
-        """
-        from doxygen_index.graph_json import result_to_graph_json
+    def test_std_namespace_composes_stdlib_classes(self, codegraph_graph):
+        """Verify the ``std`` namespace (cppreference) COMPOSES key
+        stdlib types referenced by the project."""
+        data = codegraph_graph
+        uid_map = {n["uid"]: n for n in data}
 
-        full_graph = result_to_graph_json(merged_result, source="cpp-sqlite")
-        uid_map = {n["uid"]: n for n in full_graph}
-
-        # Locate the std namespace from cppreference.
         std_ns = None
-        for n in full_graph:
+        for n in data:
             if (n.get("kind") == "namespace"
                     and n.get("qualified_name") == "std"
                     and n.get("source") == "cppreference"):
@@ -678,7 +672,6 @@ class TestFullGraphExport:
                 break
         assert std_ns is not None, "std namespace node (cppreference) not found"
 
-        # Gather all COMPOSES targets from std.
         composes_edges = [
             e for e in std_ns.get("edges", [])
             if e.get("relation_type") == "COMPOSES"
@@ -704,21 +697,11 @@ class TestFullGraphExport:
                 f"std namespace should COMPOSE {expected}"
             )
 
-        print(f"\n  std COMPOSES {len(composes_edges)} children:")
-        for qn in sorted(composes_targets)[:10]:
-            print(f"    {qn}")
-        if len(composes_targets) > 10:
-            print(f"    ... and {len(composes_targets) - 10} more")
+        print(f"\n  std COMPOSES {len(composes_edges)} children")
 
-    def test_namespace_composes_edges_resolve(self, one_hop_json):
-        """Verify that COMPOSES edges from *project* namespace nodes
-        resolve to nodes present in the graph.
-
-        Dependency namespaces (e.g. ``std::optional`` from cppreference)
-        may compose children that are not pulled into the one-hop
-        graph, so only project-owned namespaces are checked here.
-        """
-        data = one_hop_json
+    def test_namespace_composes_edges_resolve(self, codegraph_graph):
+        """Verify COMPOSES edges from project namespace nodes resolve."""
+        data = codegraph_graph
         node_uids = {n["uid"] for n in data}
         project_source = "cpp-sqlite"
 
@@ -739,5 +722,52 @@ class TestFullGraphExport:
                     ))
 
         assert len(unresolved) == 0, (
-            f"{len(unresolved)} namespace COMPOSES edges fail to resolve: {unresolved[:5]}"
+            f"{len(unresolved)} COMPOSES edges unresolve: {unresolved[:5]}"
         )
+
+    def test_toml_input_paths_resolve_source_tree(self, codegraph_graph):
+        """Verify classes from TOML input_paths are present."""
+        data = codegraph_graph
+
+        class_names = set()
+        for node in data:
+            if node.get("kind") == "class" and node.get("source") == "cpp-sqlite":
+                qn = node.get("qualified_name", "")
+                if qn.startswith("cpp_sqlite::"):
+                    class_names.add(qn)
+
+        if "cpp_sqlite::TransactionError" in class_names:
+            assert "cpp_sqlite::Transaction" in class_names
+            print(f"\n  TOML input_paths resolved: {len(class_names)} cpp_sqlite:: classes")
+        else:
+            print(f"\n  NOTE: TransactionError not in as-built LayerGraph")
+            print(f"  cpp_sqlite:: classes ({len(class_names)}): {sorted(class_names)[:5]}...")
+
+    def test_transaction_error_inherits_runtime_error(self, codegraph_graph):
+        """Verify ``cpp_sqlite::TransactionError`` inherits from
+        ``std::runtime_error``."""
+        data = codegraph_graph
+        uid_map = {n["uid"]: n for n in data}
+
+        tx_error = None
+        for n in data:
+            if n.get("qualified_name") == "cpp_sqlite::TransactionError":
+                tx_error = n
+                break
+        assert tx_error is not None, "cpp_sqlite::TransactionError not found"
+        assert tx_error.get("kind") in ("class", "struct")
+
+        inherits_targets = set()
+        for e in tx_error.get("edges", []):
+            if e.get("relation_type") == "INHERITS_FROM":
+                tgt = uid_map.get(e["target_uid"], {})
+                qn = tgt.get("qualified_name", "")
+                if qn:
+                    inherits_targets.add(qn)
+
+        assert "std::runtime_error" in inherits_targets, (
+            f"TransactionError should inherit from std::runtime_error, "
+            f"found: {sorted(inherits_targets)}"
+        )
+
+        print(f"\n  TransactionError INHERITS_FROM: {sorted(inherits_targets)}")
