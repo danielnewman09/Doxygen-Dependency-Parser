@@ -495,6 +495,14 @@ def _collect_live_file_paths(result: ParseResult) -> set[str]:
     return {f.path for f in result.files if f.path}
 
 
+def _collect_live_file_refids(result: ParseResult) -> set[str]:
+    """Collect all FileNode refids from a ParseResult.
+
+    Uses refid (module name) instead of path, which is stable across
+    absolute/relative path changes.
+    """
+    return {f.refid for f in result.files if getattr(f, 'refid', '')}
+
 def _collect_live_member_refids(result: ParseResult) -> set[str]:
     """Collect all member refids from a ParseResult.
 
@@ -538,7 +546,6 @@ def delete_stale_nodes(
     def _delete_stale(label: str, identity_prop: str, live_set: set[str]) -> int:
         """Delete nodes of *label* for *source* where identity_prop NOT IN live_set."""
         if not live_set:
-            # All nodes of this type are stale
             query = (
                 f"MATCH (n:{label} {{source: $src}}) "
                 f"DETACH DELETE n "
@@ -594,8 +601,8 @@ def delete_stale_nodes(
     # Delete stale namespaces (by qualified_name)
     _delete_stale("NamespaceNode", "qualified_name", live_qualified_names)
 
-    # Delete stale files (by path)
-    _delete_stale("FileNode", "path", live_file_paths)
+    # Delete stale files (by refid — stable across absolute/relative path changes)
+    _delete_stale("FileNode", "refid", live_file_paths)
 
     # Delete stale test-related nodes
     _delete_stale("TestNode", "qualified_name", live_qualified_names)
@@ -636,12 +643,12 @@ def update_result(result: ParseResult, source: str) -> dict[str, int]:
         Dict mapping node label → count of deleted stale nodes.
     """
     live_qnames = _collect_live_refids(result)
-    live_file_paths = _collect_live_file_paths(result)
+    live_file_refids = _collect_live_file_refids(result)
     live_member_refids = _collect_live_member_refids(result)
 
     write_result(result)
 
-    return delete_stale_nodes(source, live_qnames, live_file_paths, live_member_refids)
+    return delete_stale_nodes(source, live_qnames, live_file_refids, live_member_refids)
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +711,7 @@ def _rel_batch(batch_data: list[dict], rel_type: str,
             UNWIND $batch AS row
             MATCH ({from_clause} {{{from_key}: row.from}})
             MATCH ({to_clause} {{{to_key}: row.to}})
-            CREATE (a)-[:{rel_type}]->(b)
+            MERGE (a)-[:{rel_type}]->(b)
             RETURN count(*) AS cnt
         """, {"batch": batch})
         if results:
@@ -1099,7 +1106,7 @@ def _write_implementation_relationships(result: ParseResult) -> None:
             edges.append({"from": member_uid, "to": impl_uid})
 
     count = _rel_batch(edges, "HAS_IMPLEMENTATION", "uid", "uid",
-                       from_label="ImplementationNode", to_label="CompoundNode",
+                       from_label="MemberNode", to_label="ImplementationNode",
                        label="HAS_IMPLEMENTATION")
     print(f"  Relationships: HAS_IMPLEMENTATION ({count} edges)", flush=True)
 
@@ -1118,7 +1125,7 @@ def _write_invoke_relationships(result: ParseResult) -> None:
              for c in result.invokes
              if c.from_refid in refid_to_uid and c.to_refid in refid_to_uid]
     count = _rel_batch(edges, "INVOKES", "uid", "uid",
-                       from_label="MethodNode", to_label="MethodNode",
+                       from_label="MemberNode", to_label="MemberNode",
                        label="INVOKES")
     print(f"  Invokes: {count} (of {len(result.invokes)} references)")
 
