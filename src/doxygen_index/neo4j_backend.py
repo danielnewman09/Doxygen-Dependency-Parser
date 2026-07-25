@@ -1132,19 +1132,50 @@ def _write_invoke_relationships(result: ParseResult) -> None:
     if not result.invokes:
         print("  Invokes: 0")
         return
-    # Build refid→uid map for indexed uid-based matching
+    # Build refid→uid map for indexed uid-based matching.
+    # Also build name→uid maps so that external-dependency INVOKES
+    # edges (e.g. sqlite3_step, boost::mp_for_each) resolve even
+    # when their Doxygen refids don't match the cross-source refid
+    # stored on the node (a known limitation of context-dependent
+    # Doxygen refids).
     refid_to_uid: dict[str, str] = {}
+    name_to_uid: dict[str, str] = {}
+    qname_to_uid: dict[str, str] = {}
     for lst in (result.methods, result.functions, result.defines):
         for n in lst:
             if hasattr(n, 'uid') and n.uid and hasattr(n, 'refid') and n.refid:
                 refid_to_uid[n.refid] = n.uid
-    edges = [{"from": refid_to_uid[c.from_refid], "to": refid_to_uid[c.to_refid]}
-             for c in result.invokes
-             if c.from_refid in refid_to_uid and c.to_refid in refid_to_uid]
+            if hasattr(n, 'uid') and n.uid and hasattr(n, 'name') and n.name:
+                # Last-write-wins for duplicates — in practice same-name
+                # functions from different namespaces have different refids
+                # and the primary match is refid.  The name fallback is
+                # only used when refid doesn't resolve.
+                name_to_uid[n.name] = n.uid
+            if hasattr(n, 'uid') and n.uid and hasattr(n, 'qualified_name') and n.qualified_name:
+                qname_to_uid[n.qualified_name] = n.uid
+
+    edges, skipped = [], 0
+    for c in result.invokes:
+        from_uid = refid_to_uid.get(c.from_refid)
+        if from_uid is None:
+            skipped += 1
+            continue
+        to_uid = refid_to_uid.get(c.to_refid)
+        if to_uid is None and c.to_name:
+            # Try qualified-name fallback first (e.g. "cpp_sqlite::Database::getDAO")
+            to_uid = qname_to_uid.get(c.to_name)
+        if to_uid is None and c.to_name:
+            # Try bare-name fallback (e.g. "sqlite3_step")
+            to_uid = name_to_uid.get(c.to_name)
+        if to_uid is None:
+            skipped += 1
+            continue
+        edges.append({"from": from_uid, "to": to_uid})
+
     count = _rel_batch(edges, "INVOKES", "uid", "uid",
                        from_label="MemberNode", to_label="MemberNode",
                        label="INVOKES")
-    print(f"  Invokes: {count} (of {len(result.invokes)} references)")
+    print(f"  Invokes: {count} (of {len(result.invokes)} references, {skipped} unresolved)")
 
 
 # ---------------------------------------------------------------------------
