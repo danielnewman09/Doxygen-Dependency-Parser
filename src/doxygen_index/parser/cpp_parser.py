@@ -1003,6 +1003,12 @@ def _derive_namespace_compositions(result: ParseResult) -> None:
     Matching is scoped by (qualified_name, source) so that, e.g., a
     ``std`` namespace from one Doxygen parse run doesn't accidentally compose
     classes from another source whose names happen to start with ``std::``.
+
+    When a child's parent namespace doesn't exist in ``result.namespaces``
+    (e.g. ``boost::unordered_map`` when ``boost`` has no Doxygen namespace
+    compound), a synthetic NamespaceNode is created so the child still gets
+    a proper parent.  Nested missing namespaces (``spdlog::spdlog_ex`` when
+    neither exists) are handled recursively.
     """
     # Map (qualified_name, source) → refid for all namespaces.
     ns_refid_by_key: dict[tuple[str, str], str] = {}
@@ -1013,16 +1019,70 @@ def _derive_namespace_compositions(result: ParseResult) -> None:
         if qname and refid:
             ns_refid_by_key[(qname, src)] = refid
 
-    if not ns_refid_by_key:
-        return
-
-    # Candidate children: sub-namespaces + top-level compounds + file-level
-    # functions.  Classes found via result.classes; structs are parsed as
-    # ClassNode (kind="struct") so they are included too.
+    # Build a set of all known child qualified_names (for children that
+    # happen to also be namespaces declared in the source).  We use this
+    # to avoid creating a synthetic when a real one already exists.
+    known_child_qnames: set[tuple[str, str]] = set()
     child_sources = (
         result.namespaces + result.classes + result.interfaces
         + result.enums + result.unions + result.concepts + result.functions
     )
+    for child in child_sources:
+        cq = getattr(child, "qualified_name", None)
+        cs = getattr(child, "source", "") or ""
+        if cq:
+            known_child_qnames.add((cq, cs))
+
+    def _ensure_namespace(ns_qname: str, source: str) -> str | None:
+        """Return the refid for *ns_qname*, creating a synthetic
+        NamespaceNode (and any intermediate ancestors) into
+        ``result.namespaces`` if it doesn't already exist."""
+        key = (ns_qname, source)
+        existing = ns_refid_by_key.get(key)
+        if existing:
+            return existing
+
+        # Derive the parent namespace of this one (e.g. spdlog for spdlog::spdlog_ex).
+        parent_ns = derive_module(ns_qname)
+
+        # Normalise: if this synthetic namespace has the same (qname, source)
+        # as a *real* child node, we should NOT create a duplicate — the
+        # real one will be created when that compound is parsed.  However,
+        # if the real one hasn't been created yet (because its Doxygen
+        # compound comes later), we still create a synthetic.  On merge
+        # in Neo4j the real one will replace the synthetic's properties
+        # while the uid stays the same (both computed from source + qname).
+
+        # Recursively ensure the parent exists first.
+        parent_refid: str | None = None
+        if parent_ns:
+            parent_refid = _ensure_namespace(parent_ns, source)
+
+        # Create a synthetic NamespaceNode.
+        synthetic_refid = f"synthetic-ns:{ns_qname}"
+        synthetic_name = ns_qname.split("::")[-1]
+        ns_node = NamespaceNode(
+            refid=synthetic_refid,
+            name=synthetic_name,
+            qualified_name=ns_qname,
+            source=source,
+            layer="as-built",
+        )
+        result.namespaces.append(ns_node)
+        ns_refid_by_key[key] = synthetic_refid
+
+        # Compose this synthetic namespace under its parent.
+        if parent_refid and parent_ns:
+            result.compositions.append(CompositionEntry(
+                parent_refid=parent_refid,
+                child_refid=synthetic_refid,
+                child_type="NamespaceNode",
+            ))
+
+        return synthetic_refid
+
+    if not ns_refid_by_key and not known_child_qnames:
+        return
 
     for child in child_sources:
         child_qname = getattr(child, "qualified_name", None)
@@ -1036,7 +1096,8 @@ def _derive_namespace_compositions(result: ParseResult) -> None:
         if not parent_qname:
             continue
 
-        parent_refid = ns_refid_by_key.get((parent_qname, child_source))
+        # Ensure the parent namespace exists (synthesizing if needed).
+        parent_refid = _ensure_namespace(parent_qname, child_source)
         if not parent_refid:
             continue
 

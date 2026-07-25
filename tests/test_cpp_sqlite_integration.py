@@ -735,6 +735,53 @@ class TestFullGraphExport:
 
         print(f"\n  std COMPOSES {len(composes_children)} children")
 
+    def test_boost_namespace_composes_boost_types(self, codegraph_graph):
+        """The synthetic ``boost`` namespace COMPOSES boost::unordered_map
+        (pulled in via one-hop from cpp-sqlite)."""
+        serialized, uid_map = codegraph_graph
+
+        boost_ns = None
+        for n in uid_map.values():
+            if n.get("kind") == "namespace" and n.get("qualified_name") == "boost":
+                boost_ns = n
+                break
+        assert boost_ns is not None, "boost namespace node not found"
+
+        composes = boost_ns.get("composes", [])
+        composes_targets = {
+            c.get("qualified_name", "") or c.get("name", "")
+            for c in composes
+        }
+        assert "boost::unordered_map" in composes_targets, (
+            "boost namespace should COMPOSE boost::unordered_map"
+        )
+        print(f"\n  boost COMPOSES {len(composes)} children")
+
+    def test_spdlog_namespace_composes_spdlog_types(self, codegraph_graph):
+        """The synthetic ``spdlog`` namespace COMPOSES spdlog::logger and
+        spdlog::spdlog_ex (pulled in via one-hop from cpp-sqlite)."""
+        serialized, uid_map = codegraph_graph
+
+        spdlog_ns = None
+        for n in uid_map.values():
+            if n.get("kind") == "namespace" and n.get("qualified_name") == "spdlog":
+                spdlog_ns = n
+                break
+        assert spdlog_ns is not None, "spdlog namespace node not found"
+
+        composes = spdlog_ns.get("composes", [])
+        composes_targets = {
+            c.get("qualified_name", "") or c.get("name", "")
+            for c in composes
+        }
+        assert "spdlog::logger" in composes_targets, (
+            "spdlog namespace should COMPOSE spdlog::logger"
+        )
+        assert "spdlog::spdlog_ex" in composes_targets, (
+            "spdlog namespace should COMPOSE spdlog::spdlog_ex"
+        )
+        print(f"\n  spdlog COMPOSES {len(composes)} children")
+
     def test_namespace_composes_edges_resolve(self, codegraph_graph):
         """Verify COMPOSES children from project namespace nodes resolve."""
         serialized, uid_map = codegraph_graph
@@ -857,10 +904,14 @@ class TestFullGraphViz:
             assert qn in node_ids, f"{qn} should appear in Cytoscape nodes"
 
     def test_viz_has_namespace_nodes(self, cy_data):
-        """std and cpp_sqlite namespaces appear as Cytoscape nodes."""
+        """std, cpp_sqlite, boost, and spdlog namespaces appear as
+        Cytoscape nodes — including synthetic namespaces created for
+        external dependency aggregation."""
         node_ids = {n["data"]["id"] for n in cy_data["nodes"]}
         assert "std" in node_ids
         assert "cpp_sqlite" in node_ids
+        assert "boost" in node_ids
+        assert "spdlog" in node_ids
 
     def test_viz_has_dependency_nodes(self, cy_data):
         """Key dependency types appear as Cytoscape nodes."""
