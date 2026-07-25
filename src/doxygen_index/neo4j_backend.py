@@ -417,7 +417,7 @@ def write_result(result: ParseResult) -> None:
             continue
         label = batch_labels[i]
         # Build full neomodel label hierarchy (e.g. MethodNode:MemberNode)
-        full_labels = ":".join(node_list[0].inherited_labels()) + ":CodeGraphNode"
+        full_labels = ":".join(node_list[0].inherited_labels())
         props_list = [
             {k: v for k, v in n.__properties__.items() if v is not None}
             for n in node_list
@@ -433,18 +433,15 @@ def write_result(result: ParseResult) -> None:
                 print(f"  {label}: {min(j + _BATCH, len(props_list))}/{len(props_list)}", flush=True)
         print(f"  {label}: {len(node_list)}", flush=True)
 
-    # Ensure uid index (non-unique — tolerates ParseResult dupes)
-    db.cypher_query(
-        "MATCH (n) WHERE n.uid IS NOT NULL AND NOT n:CodeGraphNode SET n:CodeGraphNode"
-    )
-    try:
-        db.cypher_query(
-            "CREATE INDEX codegraph_uid_idx IF NOT EXISTS "
-            "FOR (n:CodeGraphNode) ON (n.uid)"
-        )
-        print("  Index: CodeGraphNode.uid index ready", flush=True)
-    except Exception as e:
-        print(f"  Note: index skipped ({e})", flush=True)
+    # ── Ensure per-label uid indexes ───────────────────────────
+    for lbl in ("AttributeNode", "FunctionNode", "ImplementationNode"):
+        try:
+            db.cypher_query(
+                f"CREATE INDEX IF NOT EXISTS FOR (n:{lbl}) ON (n.uid)"
+            )
+        except Exception:
+            pass
+    print("  Index: per-label uid indexes ready", flush=True)
 
     # Parameters
     print(f"  Parameters phase: {len(result.parameters)} params", flush=True)
@@ -670,7 +667,7 @@ def _write_parameters(result: ParseResult) -> None:
         db.cypher_query("""
             UNWIND $batch AS row
             WITH row WHERE row._member_uid <> ''
-            MATCH (m:CodeGraphNode {uid: row._member_uid})
+            MATCH (m:MemberNode {uid: row._member_uid})
             MERGE (m)-[:HAS_PARAMETER]->(p:ParameterNode {
                 position: row.position,
                 name: row.name,
@@ -684,31 +681,36 @@ def _write_parameters(result: ParseResult) -> None:
 
 
 def _rel_batch(batch_data: list[dict], rel_type: str,
-               from_key: str, to_key: str, label: str = "") -> int:
+               from_key: str, to_key: str,
+               from_label: str = "", to_label: str = "",
+               label: str = "") -> int:
     """Batch-insert relationships via UNWIND + CREATE.
 
-    Uses the ``CodeGraphNode`` label (inherited by all node types)
-    so that the uid constraint index is leveraged for fast lookups.
-    Uses CREATE (not MERGE) — caller must ensure fresh data
-    (e.g. ``--clear`` before indexing).
+    Uses label-qualified MATCH so uid constraints are leveraged.
+    Pass ``from_label`` / ``to_label`` as the base neomodel label
+    (e.g. 'CompoundNode', 'MemberNode', 'NamespaceNode', 'FileNode')
+    that has a uid constraint.
+
     Prints progress every 1000 edges.
     """
     if not batch_data:
         return 0
+    from_clause = f"a:{from_label}" if from_label else "a"
+    to_clause = f"b:{to_label}" if to_label else "b"
     total = 0
     for i in range(0, len(batch_data), 1000):
         batch = batch_data[i:i + 1000]
         results, _ = db.cypher_query(f"""
             UNWIND $batch AS row
-            MATCH (a:CodeGraphNode {{{from_key}: row.from}})
-            MATCH (b:CodeGraphNode {{{to_key}: row.to}})
+            MATCH ({from_clause} {{{from_key}: row.from}})
+            MATCH ({to_clause} {{{to_key}: row.to}})
             CREATE (a)-[:{rel_type}]->(b)
             RETURN count(*) AS cnt
         """, {"batch": batch})
         if results:
             total += results[0][0]
         if label:
-            print(f"  {label}: {min(i + 1000, len(batch_data))}/{len(batch_data)}")
+            print(f"  {label}: {min(i + 1000, len(batch_data))}/{len(batch_data)}", flush=True)
     return total
 
 
@@ -727,19 +729,25 @@ def _write_compound_member_connect(result: ParseResult) -> None:
              if hasattr(m, 'uid') and m.uid
              and m.compound_refid in refid_to_uid]
     print(f"  COMPOSES methods: {len(edges)} edges → batching...")
-    _rel_batch(edges, "COMPOSES", "uid", "uid", label="COMPOSES methods")
+    _rel_batch(edges, "COMPOSES", "uid", "uid",
+              from_label="CompoundNode", to_label="MemberNode",
+              label="COMPOSES methods")
 
     attr_edges = [{"from": refid_to_uid[a.compound_refid], "to": a.uid}
                   for a in result.attributes
                   if hasattr(a, 'uid') and a.uid
                   and a.compound_refid in refid_to_uid]
-    _rel_batch(attr_edges, "COMPOSES", "uid", "uid", label="COMPOSES attributes")
+    _rel_batch(attr_edges, "COMPOSES", "uid", "uid",
+              from_label="CompoundNode", to_label="MemberNode",
+              label="COMPOSES attributes")
 
     enum_edges = [{"from": refid_to_uid[v.compound_refid], "to": v.uid}
                   for v in result.enum_values
                   if hasattr(v, 'uid') and v.uid
                   and v.compound_refid in refid_to_uid]
-    _rel_batch(enum_edges, "COMPOSES", "uid", "uid", label="COMPOSES enum_values")
+    _rel_batch(enum_edges, "COMPOSES", "uid", "uid",
+              from_label="CompoundNode", to_label="MemberNode",
+              label="COMPOSES enum_values")
 
     total = len(edges) + len(attr_edges) + len(enum_edges)
     print(f"  Relationships: COMPOSES (compound→member) ({total} edges)")
@@ -758,14 +766,18 @@ def _write_file_relationships(result: ParseResult) -> None:
                  result.interfaces + result.concepts)
     edges = _filepath_edges(compounds, result.files)
     if edges:
-        total += _rel_batch(edges, "DEFINED_IN", "uid", "uid", label="DEFINED_IN compounds")
+        total += _rel_batch(edges, "DEFINED_IN", "uid", "uid",
+                            from_label="CompoundNode", to_label="FileNode",
+                            label="DEFINED_IN compounds")
     # Members → FileNode (by path)
     print("  DEFINED_IN (members) ...", end=" ", flush=True)
     members = (result.methods + result.attributes + result.functions +
                result.tests + result.test_steps + result.defines)
     edges = _filepath_edges(members, result.files)
     if edges:
-        total += _rel_batch(edges, "DEFINED_IN", "uid", "uid", label="DEFINED_IN members")
+        total += _rel_batch(edges, "DEFINED_IN", "uid", "uid",
+                            from_label="MemberNode", to_label="FileNode",
+                            label="DEFINED_IN members")
     # Namespaces → FileNode (by refid)
     ns_edges = []
     ns_by_refid = {f.refid: f for f in result.files if getattr(f, 'refid', '')}
@@ -773,7 +785,9 @@ def _write_file_relationships(result: ParseResult) -> None:
         if hasattr(ns, 'uid') and ns.uid and ns.refid in ns_by_refid:
             ns_edges.append({"from": ns.uid, "to": ns_by_refid[ns.refid].uid})
     if ns_edges:
-        total += _rel_batch(ns_edges, "DEFINED_IN", "uid", "uid", label="DEFINED_IN namespaces")
+        total += _rel_batch(ns_edges, "DEFINED_IN", "uid", "uid",
+                            from_label="NamespaceNode", to_label="FileNode",
+                            label="DEFINED_IN namespaces")
     print(f"  DEFINED_IN: {total} edges", flush=True)
 
 
@@ -865,7 +879,10 @@ def _write_namespace_composition(result: ParseResult) -> None:
             if parent_uid:
                 edges.append({"from": parent_uid, "to": ns.uid})
 
-    count = _rel_batch(edges, "COMPOSES", "uid", "uid", label="NS_COMPOSES")
+    count = _rel_batch(edges, "COMPOSES", "uid", "uid",
+                       from_label="NamespaceNode",
+                       to_label="CompoundNode|MemberNode|NamespaceNode|FileNode",
+                       label="NS_COMPOSES")
     print(f"  Relationships: NS_COMPOSES ({count} edges)")
 
 
@@ -908,7 +925,9 @@ def _write_inheritance_relationships(result: ParseResult) -> None:
         print(f"  Relationships: INHERITS_FROM (0 edges, {skipped} unresolved)")
         return
 
-    count = _rel_batch(edges, "INHERITS_FROM", "uid", "uid", label="INHERITS_FROM")
+    count = _rel_batch(edges, "INHERITS_FROM", "uid", "uid",
+                       from_label="CompoundNode", to_label="CompoundNode",
+                       label="INHERITS_FROM")
     print(f"  Relationships: INHERITS_FROM ({count} edges, {skipped} unresolved)")
 
 
@@ -931,7 +950,9 @@ def _write_specialization_relationships(result: ParseResult) -> None:
         if primary_uid and spec_uid:
             edges.append({"from": spec_uid, "to": primary_uid})
 
-    count = _rel_batch(edges, "SPECIALIZES", "uid", "uid", label="SPECIALIZES")
+    count = _rel_batch(edges, "SPECIALIZES", "uid", "uid",
+                       from_label="CompoundNode", to_label="CompoundNode",
+                       label="SPECIALIZES")
     print(f"  Relationships: SPECIALIZES ({count} edges)", flush=True)
 
 
@@ -993,7 +1014,7 @@ def _write_template_param_relationships(result: ParseResult) -> None:
         results, _meta = db.cypher_query("""
             UNWIND $batch AS row
             MATCH (source:CompoundNode|MemberNode {qualified_name: row.from_qn})
-            MERGE (tp:ClassNode {qualified_name: 'type_param:' + row.from_qn + ':' + toString(row.position)})
+            MERGE (tp:ClassNode:CompoundNode {qualified_name: 'type_param:' + row.from_qn + ':' + toString(row.position)})
             ON CREATE SET tp.kind = 'type_parameter',
                           tp.name = CASE
                               WHEN row.declname <> '' THEN row.declname
@@ -1077,7 +1098,9 @@ def _write_implementation_relationships(result: ParseResult) -> None:
         if member_uid and impl_uid:
             edges.append({"from": member_uid, "to": impl_uid})
 
-    count = _rel_batch(edges, "HAS_IMPLEMENTATION", "uid", "uid", label="HAS_IMPLEMENTATION")
+    count = _rel_batch(edges, "HAS_IMPLEMENTATION", "uid", "uid",
+                       from_label="ImplementationNode", to_label="CompoundNode",
+                       label="HAS_IMPLEMENTATION")
     print(f"  Relationships: HAS_IMPLEMENTATION ({count} edges)", flush=True)
 
 
@@ -1094,7 +1117,9 @@ def _write_invoke_relationships(result: ParseResult) -> None:
     edges = [{"from": refid_to_uid[c.from_refid], "to": refid_to_uid[c.to_refid]}
              for c in result.invokes
              if c.from_refid in refid_to_uid and c.to_refid in refid_to_uid]
-    count = _rel_batch(edges, "INVOKES", "uid", "uid", label="INVOKES")
+    count = _rel_batch(edges, "INVOKES", "uid", "uid",
+                       from_label="MethodNode", to_label="MethodNode",
+                       label="INVOKES")
     print(f"  Invokes: {count} (of {len(result.invokes)} references)")
 
 

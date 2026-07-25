@@ -1132,6 +1132,8 @@ def main() -> None:
                     help="Clear existing data for this source before a full re-write. "
                          "By default, incremental update is used (adds new, updates "
                          "changed, deletes stale nodes without wiping).")
+    sp.add_argument("--yes", "-y", action="store_true",
+                    help="Skip confirmation prompts (e.g. when using --clear).")
     sp.set_defaults(func=cmd_codegraph)
 
     # cppreference

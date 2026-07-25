@@ -426,6 +426,11 @@ def codegraph_graph():
 
     CODEGRAPH_OUTPUT.mkdir(parents=True, exist_ok=True)
 
+    # ── Step 0: Wipe stale Neo4j data ─────────────────────────
+    from neomodel import config as _nm_config, db as _nm_db
+    _nm_config.DATABASE_URL = "bolt://neo4j:doxygen-index-test@localhost:7689"
+    _nm_db.cypher_query("MATCH (n) DETACH DELETE n")
+
     # ── Step 1: Index into Neo4j ────────────────────────────
     # Pass test container credentials as env vars so the CLI
     # subprocess connects to the correct Neo4j instance.
@@ -442,6 +447,8 @@ def codegraph_graph():
             "--output-dir", str(CODEGRAPH_OUTPUT),
             "--cppreference",
             "--neo4j",
+            "--clear",
+            "--yes",
             "--only", "sqlite3,boost,spdlog",
         ],
         env=env, timeout=600,
