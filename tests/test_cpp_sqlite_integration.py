@@ -377,32 +377,20 @@ def _conan_deps_available() -> bool:
         return False
 
 
-def _flatten_layer_graph(serialized: list[dict]) -> list[dict]:
-    """Flatten a LayerGraph serialization (nested ``composes``)
-    into a flat list of dicts, matching the one-hop JSON format
-    used by existing assertions.
+def _flat_uid_map(serialized: list[dict]) -> dict[str, dict]:
+    """Build a flat {uid: node_dict} map by walking the nested ``composes`` tree.
 
-    Each node dict gets ``edges`` as a flat list with
-    ``relation_type``, ``target_uid``, ``target_type`` keys.
+    Does NOT modify node dicts — preserves the original LayerGraph structure
+    where COMPOSES children appear under the ``composes`` key, not as flat
+    ``edges`` entries.
     """
-    flat: list[dict] = []
+    uid_map: dict[str, dict] = {}
     stack = list(serialized)
     while stack:
         node = stack.pop()
-        # Preserve existing edges (non-COMPOSES from serialize())
-        edges = list(node.get("edges", []))
-        # COMPOSES children → edges + push for flattening
-        for child in node.get("composes", []):
-            edges.append({
-                "relation_type": "COMPOSES",
-                "target_uid": child.get("uid", ""),
-                "target_type": child.get("kind", ""),
-            })
-            stack.append(child)
-        node["edges"] = edges
-        node.pop("composes", None)
-        flat.append(node)
-    return flat
+        uid_map[node["uid"]] = node
+        stack.extend(node.get("composes", []))
+    return uid_map
 
 
 @pytest.fixture(scope="module")
@@ -461,45 +449,50 @@ def codegraph_graph():
     graph = LayerGraph.from_neo4j("as-built")
     serialized = graph.serialize(fields="all")
 
-    # ── Step 3: Flatten and save ───────────────────────────
-    flat = _flatten_layer_graph(serialized)
+    # ── Step 3: Save raw serialization ─────────────────────
     output = CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop.json"
-    output.write_text(json.dumps(flat, indent=2, default=str),
+    output.write_text(json.dumps(serialized, indent=2, default=str),
                       encoding="utf-8")
-    print(f"\n  LayerGraph as-built: {len(flat)} nodes")
+
+    uid_map = _flat_uid_map(serialized)
+    print(f"\n  LayerGraph as-built: {len(uid_map)} nodes")
     print(f"  Output: {output} ({output.stat().st_size:,} bytes)")
-    return flat
+    return (serialized, uid_map)
 
 
 class TestFullGraphExport:
     """Retrieve the as-built LayerGraph from Neo4j and verify structure.
 
     ``codegraph_graph`` indexes cpp-sqlite into Neo4j via the CLI,
-    retrieves the as-built LayerGraph, flattens it, and saves
-    ``cpp_sqlite_one_hop.json``.  Tests interrogate the flat list.
+    retrieves the as-built LayerGraph, and saves
+    ``cpp_sqlite_one_hop.json``.  Tests receive ``(serialized, uid_map)``
+    where ``serialized`` is the raw nested LayerGraph tree and
+    ``uid_map`` is a flat ``{uid: node_dict}`` for lookups.
 
     Module-scoped — runs once per session.
     """
 
     def test_export_json_with_one_hop(self, codegraph_graph):
         """Verify the as-built LayerGraph has expected nodes and edges."""
-        filtered = codegraph_graph
-        assert len(filtered) > 50, f"Expected >50 nodes, got {len(filtered)}"
+        serialized, uid_map = codegraph_graph
+        assert len(uid_map) > 50, f"Expected >50 nodes, got {len(uid_map)}"
 
         all_edges = []
-        for node in filtered:
+        for node in uid_map.values():
             all_edges.extend(node.get("edges", []))
         edge_types = {e["relation_type"] for e in all_edges}
-        assert "COMPOSES" in edge_types, f"Expected COMPOSES in {edge_types}"
+        # INVOKES, INCLUDES, INHERITS, DEPENDS_ON are stored as edges.
+        # COMPOSES is structural (nested under the ``composes`` key).
         assert "INVOKES" in edge_types, f"Expected INVOKES in {edge_types}"
+        assert "DEPENDS_ON" in edge_types, f"Expected DEPENDS_ON in {edge_types}"
 
-        node_names = {n.get("name", "") for n in filtered}
+        node_names = {n.get("name", "") for n in uid_map.values()}
         assert "Database" in node_names
         assert "DAOBase" in node_names
         assert "DataAccessObject" in node_names
         assert "Transaction" in node_names
 
-        dep_sources = {n.get("source", "") for n in filtered}
+        dep_sources = {n.get("source", "") for n in uid_map.values()}
         print(f"  Edge types: {sorted(edge_types)}")
         print(f"  Sources present: {sorted(dep_sources)}")
 
@@ -518,19 +511,27 @@ class TestFullGraphExport:
         to other dependency nodes not included in the one-hop scope,
         so those edges are not checked here.
         """
-        data = codegraph_graph
-        node_uids = {n["uid"] for n in data}
+        serialized, uid_map = codegraph_graph
         project_source = "cpp-sqlite"
 
         total_edges = 0
         unresolved: list[dict] = []
-        for node in data:
+        for node in uid_map.values():
             if node.get("source") != project_source:
                 continue
             for edge in node.get("edges", []):
                 total_edges += 1
-                if edge["target_uid"] not in node_uids:
+                if edge["target_uid"] not in uid_map:
                     unresolved.append(edge)
+            # COMPOSES children are structural but should also resolve
+            for child in node.get("composes", []):
+                child_uid = child.get("uid", "")
+                if child_uid not in uid_map:
+                    unresolved.append({
+                        "relation_type": "COMPOSES",
+                        "target_uid": child_uid,
+                        "target_type": child.get("kind", ""),
+                    })
 
         non_invokes_unresolved = [
             e for e in unresolved
@@ -565,13 +566,12 @@ class TestFullGraphExport:
     def test_dependency_relationships(self, codegraph_graph):
         """Verify the as-built graph has expected DEPENDS_ON, INVOKES,
         and INCLUDES relationships from cpp-sqlite to its dependencies."""
-        data = codegraph_graph
-        uid_map = {n["uid"]: n for n in data}
+        serialized, uid_map = codegraph_graph
 
         depends_on: set[tuple[str, str, str]] = set()
         includes: set[tuple[str, str, str]] = set()
         invokes: set[tuple[str, str, str]] = set()
-        for node in data:
+        for node in uid_map.values():
             from_qn = node.get("qualified_name", "") or node.get("name", "")
             for edge in node.get("edges", []):
                 target = uid_map.get(edge["target_uid"], {})
@@ -615,7 +615,7 @@ class TestFullGraphExport:
         assert ("cpp_sqlite::Database::withTransaction(Func &&func)",
                 "cpp_sqlite::Transaction::commit()", "cpp-sqlite") in invokes
 
-        for node in data:
+        for node in uid_map.values():
             src = node.get("source", "")
             tags = node.get("tags", [])
             if not tags:
@@ -629,7 +629,7 @@ class TestFullGraphExport:
                 assert "dependency" in tags
 
         from collections import Counter
-        src_counts = Counter(n.get("source", "?") for n in data)
+        src_counts = Counter(n.get("source", "?") for n in uid_map.values())
         # One-hop graph only includes dependency nodes directly referenced
         # by project nodes via DEPENDS_ON, INHERITS_FROM, etc.
         assert src_counts.get("boost", 0) >= 1
@@ -648,11 +648,10 @@ class TestFullGraphExport:
 
     def test_cpp_sqlite_namespace_composes_classes(self, codegraph_graph):
         """Verify the ``cpp_sqlite`` namespace COMPOSES project classes."""
-        data = codegraph_graph
-        uid_map = {n["uid"]: n for n in data}
+        serialized, uid_map = codegraph_graph
 
         cpp_sqlite_ns = None
-        for n in data:
+        for n in uid_map.values():
             if (n.get("kind") == "namespace"
                     and n.get("qualified_name") == "cpp_sqlite"
                     and n.get("source") == "cpp-sqlite"):
@@ -660,14 +659,11 @@ class TestFullGraphExport:
                 break
         assert cpp_sqlite_ns is not None, "cpp_sqlite namespace node not found"
 
-        composes_edges = [
-            e for e in cpp_sqlite_ns.get("edges", [])
-            if e.get("relation_type") == "COMPOSES"
-        ]
+        # COMPOSES children are nested under "composes", not in "edges"
+        composes_children = cpp_sqlite_ns.get("composes", [])
         composes_targets: set[str] = set()
-        for e in composes_edges:
-            tgt = uid_map.get(e["target_uid"], {})
-            qn = tgt.get("qualified_name", "") or tgt.get("name", "")
+        for child in composes_children:
+            qn = child.get("qualified_name", "") or child.get("name", "")
             if qn:
                 composes_targets.add(qn)
 
@@ -686,7 +682,7 @@ class TestFullGraphExport:
                 f"cpp_sqlite namespace should COMPOSE {expected}"
             )
 
-        print(f"\n  cpp_sqlite COMPOSES {len(composes_edges)} children")
+        print(f"\n  cpp_sqlite COMPOSES {len(composes_children)} children")
 
     # DEVNOTE: Previously used the full merged ParseResult to verify
     # that std namespace COMPOSES all expected stdlib types.  The as-built
@@ -696,11 +692,10 @@ class TestFullGraphExport:
     def test_std_namespace_composes_stdlib_classes(self, codegraph_graph):
         """Verify the ``std`` namespace (cppreference) COMPOSES key
         stdlib types referenced by the project."""
-        data = codegraph_graph
-        uid_map = {n["uid"]: n for n in data}
+        serialized, uid_map = codegraph_graph
 
         std_ns = None
-        for n in data:
+        for n in uid_map.values():
             if (n.get("kind") == "namespace"
                     and n.get("qualified_name") == "std"
                     and n.get("source") == "cppreference"):
@@ -708,14 +703,10 @@ class TestFullGraphExport:
                 break
         assert std_ns is not None, "std namespace node (cppreference) not found"
 
-        composes_edges = [
-            e for e in std_ns.get("edges", [])
-            if e.get("relation_type") == "COMPOSES"
-        ]
+        composes_children = std_ns.get("composes", [])
         composes_targets: set[str] = set()
-        for e in composes_edges:
-            tgt = uid_map.get(e["target_uid"], {})
-            qn = tgt.get("qualified_name", "") or tgt.get("name", "")
+        for child in composes_children:
+            qn = child.get("qualified_name", "") or child.get("name", "")
             if qn:
                 composes_targets.add(qn)
 
@@ -733,27 +724,24 @@ class TestFullGraphExport:
                 f"std namespace should COMPOSE {expected}"
             )
 
-        print(f"\n  std COMPOSES {len(composes_edges)} children")
+        print(f"\n  std COMPOSES {len(composes_children)} children")
 
     def test_namespace_composes_edges_resolve(self, codegraph_graph):
-        """Verify COMPOSES edges from project namespace nodes resolve."""
-        data = codegraph_graph
-        node_uids = {n["uid"] for n in data}
+        """Verify COMPOSES children from project namespace nodes resolve."""
+        serialized, uid_map = codegraph_graph
         project_source = "cpp-sqlite"
 
         unresolved: list[tuple[str, str, str]] = []
-        for n in data:
+        for n in uid_map.values():
             if (n.get("kind") != "namespace"
                     or n.get("source") != project_source):
                 continue
-            for edge in n.get("edges", []):
-                if edge.get("relation_type") != "COMPOSES":
-                    continue
-                tgt = edge.get("target_uid", "")
-                if tgt and tgt not in node_uids:
+            for child in n.get("composes", []):
+                tgt = child.get("uid", "")
+                if tgt and tgt not in uid_map:
                     unresolved.append((
                         n.get("qualified_name", "?"),
-                        edge["relation_type"],
+                        "COMPOSES",
                         tgt,
                     ))
 
@@ -763,10 +751,10 @@ class TestFullGraphExport:
 
     def test_toml_input_paths_resolve_source_tree(self, codegraph_graph):
         """Verify classes from TOML input_paths are present."""
-        data = codegraph_graph
+        serialized, uid_map = codegraph_graph
 
         class_names = set()
-        for node in data:
+        for node in uid_map.values():
             if node.get("kind") == "class" and node.get("source") == "cpp-sqlite":
                 qn = node.get("qualified_name", "")
                 if qn.startswith("cpp_sqlite::"):
@@ -782,11 +770,10 @@ class TestFullGraphExport:
     def test_transaction_error_inherits_runtime_error(self, codegraph_graph):
         """Verify ``cpp_sqlite::TransactionError`` inherits from
         ``std::runtime_error``."""
-        data = codegraph_graph
-        uid_map = {n["uid"]: n for n in data}
+        serialized, uid_map = codegraph_graph
 
         tx_error = None
-        for n in data:
+        for n in uid_map.values():
             if n.get("qualified_name") == "cpp_sqlite::TransactionError":
                 tx_error = n
                 break
