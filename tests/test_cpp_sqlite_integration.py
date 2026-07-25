@@ -656,7 +656,8 @@ class TestFullGraphExport:
     # ------------------------------------------------------------------
 
     def test_cpp_sqlite_namespace_composes_classes(self, codegraph_graph):
-        """Verify the ``cpp_sqlite`` namespace COMPOSES project classes."""
+        """Verify the ``cpp_sqlite`` namespace COMPOSES project classes
+        and concepts."""
         serialized, uid_map = codegraph_graph
 
         cpp_sqlite_ns = None
@@ -686,12 +687,26 @@ class TestFullGraphExport:
             "cpp_sqlite::BaseTransferObject",
             "cpp_sqlite::RepeatedFieldTransferObject",
         ]
+        expected_concepts = [
+            "cpp_sqlite::TransferObject",
+            "cpp_sqlite::ValidTransferObject",
+            "cpp_sqlite::DefaultConstructibleTransferObject",
+            "cpp_sqlite::CopyableTransferObject",
+            "cpp_sqlite::MovableTransferObject",
+            "cpp_sqlite::IsForeignKey",
+            "cpp_sqlite::IsRepeatedFieldTransferObject",
+        ]
         for expected in expected_classes:
             assert expected in composes_targets, (
                 f"cpp_sqlite namespace should COMPOSE {expected}"
             )
+        for expected in expected_concepts:
+            assert expected in composes_targets, (
+                f"cpp_sqlite namespace should COMPOSE concept {expected}"
+            )
 
         print(f"\n  cpp_sqlite COMPOSES {len(composes_children)} children")
+        print(f"    classes: {len(expected_classes)}, concepts: {len(expected_concepts)}")
 
     # DEVNOTE: Previously used the full merged ParseResult to verify
     # that std namespace COMPOSES all expected stdlib types.  The as-built
@@ -781,6 +796,49 @@ class TestFullGraphExport:
             "spdlog namespace should COMPOSE spdlog::spdlog_ex"
         )
         print(f"\n  spdlog COMPOSES {len(composes)} children")
+
+    def test_concept_constrains_edges(self, codegraph_graph):
+        """Concepts have CONSTRAINS edges to the types they reference
+        in their initializer (e.g. TransferObject → BaseTransferObject)."""
+        serialized, uid_map = codegraph_graph
+
+        # Rebuild uid→qualified_name map so we can resolve the target.
+        uid_to_qn: dict[str, str] = {}
+        def _index_uids(entries):
+            for e in entries:
+                uid = e.get("uid", "")
+                qn = e.get("qualified_name", "") or e.get("name", "")
+                if uid and qn:
+                    uid_to_qn[uid] = qn
+                _index_uids(e.get("composes", []))
+        _index_uids(serialized)
+
+        # Find TransferObject concept and check its edges
+        constrains: set[tuple[str, str]] = set()
+        def _collect(entries):
+            for e in entries:
+                qn = e.get("qualified_name", "")
+                for edge in e.get("edges", []):
+                    if edge["relation_type"] == "CONSTRAINS":
+                        target = uid_to_qn.get(edge["target_uid"], edge["target_uid"])
+                        constrains.add((qn, target))
+                _collect(e.get("composes", []))
+        _collect(serialized)
+
+        assert ("cpp_sqlite::BaseTransferObject", "cpp_sqlite::TransferObject") in constrains
+        assert ("cpp_sqlite::IsForeignKeyT", "cpp_sqlite::IsForeignKey") in constrains
+        # Concept-to-concept references from initializer text
+        # Direction: referenced → referencer
+        assert ("cpp_sqlite::TransferObject", "cpp_sqlite::DefaultConstructibleTransferObject") in constrains
+        assert ("cpp_sqlite::TransferObject", "cpp_sqlite::CopyableTransferObject") in constrains
+        assert ("cpp_sqlite::TransferObject", "cpp_sqlite::MovableTransferObject") in constrains
+        assert ("cpp_sqlite::TransferObject", "cpp_sqlite::ValidTransferObject") in constrains
+        assert ("cpp_sqlite::DefaultConstructibleTransferObject", "cpp_sqlite::ValidTransferObject") in constrains
+        assert ("cpp_sqlite::ValidTransferObject", "cpp_sqlite::IsRepeatedFieldTransferObject") in constrains
+        # Template-parameter concept constraints:
+        # template<ValidTransferObject T> struct RepeatedFieldTransferObject
+        assert ("cpp_sqlite::ValidTransferObject", "cpp_sqlite::RepeatedFieldTransferObject") in constrains
+        print(f"\n  CONSTRAINS edges in JSON: {len(constrains)}")
 
     def test_namespace_composes_edges_resolve(self, codegraph_graph):
         """Verify COMPOSES children from project namespace nodes resolve."""
@@ -988,6 +1046,22 @@ class TestFullGraphViz:
             + "; ".join(self_edges)
         )
         print(f"\n  Self-referential edges: 0 ✓")
+
+    def test_viz_constrains_edges(self, cy_data):
+        """CONSTRAINS edges from concepts to referenced types appear
+        in the Cytoscape graph."""
+        constrains: set[tuple[str, str]] = set()
+        for e in cy_data["edges"]:
+            if e["data"]["label"] == "CONSTRAINS":
+                constrains.add((e["data"]["source"], e["data"]["target"]))
+
+        assert ("cpp_sqlite::BaseTransferObject", "cpp_sqlite::TransferObject") in constrains
+        assert ("cpp_sqlite::IsForeignKeyT", "cpp_sqlite::IsForeignKey") in constrains
+        assert ("cpp_sqlite::TransferObject", "cpp_sqlite::DefaultConstructibleTransferObject") in constrains
+        assert ("cpp_sqlite::TransferObject", "cpp_sqlite::ValidTransferObject") in constrains
+        assert ("cpp_sqlite::ValidTransferObject", "cpp_sqlite::IsRepeatedFieldTransferObject") in constrains
+        assert ("cpp_sqlite::ValidTransferObject", "cpp_sqlite::RepeatedFieldTransferObject") in constrains
+        print(f"\n  CONSTRAINS cytoscape edges: {len(constrains)}")
 
     def test_viz_invokes_edges(self, cy_data):
         """INVOKES edges from collapsed project methods appear as edges

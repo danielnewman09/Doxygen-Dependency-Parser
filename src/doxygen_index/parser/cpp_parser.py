@@ -42,6 +42,7 @@ from doxygen_index.parser.model import (
     ParseResult,
     TemplateParamRef,
     SpecializesRef,
+    ConceptConstraintEntry,
     InvokeEntry,
     ImplementationRef,
     IncludeEntry,
@@ -80,11 +81,45 @@ def normalize_argsstring(argsstring: str) -> str:
 
 
 
-def derive_module(qualified_name: str) -> str:
-    """Extract the namespace prefix from a C++ qualified name."""
-    if "::" not in qualified_name:
+def _qualified_name_parent(qualified_name: str) -> str:
+    """Return the parent namespace/module of *qualified_name*.
+
+    Splits at the last ``::`` (or ``.``) that is NOT inside angle
+    brackets, so that ``IsVector< std::vector< T > >`` correctly
+    resolves its parent to ``cpp_sqlite`` (not ``IsVector< std``).
+    """
+    depth = 0
+    last_sep = -1
+    sep = None
+    # Walk backwards to find the last scope separator
+    for i in range(len(qualified_name) - 1, 0, -1):
+        ch = qualified_name[i]
+        if ch == '>':
+            depth += 1
+        elif ch == '<':
+            depth = max(0, depth - 1)
+        elif depth == 0:
+            if qualified_name[i:i + 2] == '::':
+                sep = '::'
+                last_sep = i
+                break
+            if ch == '.' and qualified_name[i - 1] != '.':
+                sep = '.'
+                last_sep = i
+                break
+    if last_sep < 0:
         return ""
-    return qualified_name.rsplit("::", 1)[0]
+    return qualified_name[:last_sep]
+
+
+def derive_module(qualified_name: str) -> str:
+    """Extract the namespace prefix from a C++ qualified name.
+
+    Only splits on ``::`` that are *outside* angle brackets so that
+    template specialisations like ``IsVector< std::vector< T > >``
+    don't produce a fake parent ``IsVector< std``.
+    """
+    return _qualified_name_parent(qualified_name)
 
 
 
@@ -590,6 +625,21 @@ class CppParser(LanguageParser):
         init_elem = compounddef.find("initializer")
         if init_elem is not None:
             initializer = get_text(init_elem)
+            # Extract refs — the referenced entity constrains the
+            # concept that references it (referenced → referencer).
+            for ref in init_elem.findall(".//ref"):
+                ref_refid = ref.get("refid", "")
+                if ref_refid and ref_refid != fields["refid"]:
+                    kindref = ref.get("kindref", "compound")
+                    # Map Doxygen kindref to codegraph node type.
+                    to_type = "CompoundNode"
+                    if kindref == "concept":
+                        to_type = "ConceptNode"
+                    result.concept_constraints.append(ConceptConstraintEntry(
+                        from_refid=ref_refid,    # referenced entity
+                        to_refid=fields["refid"],  # concept doing the referencing
+                        to_type=to_type,
+                    ))
 
         result.concepts.append(ConceptNode(
             refid=fields["refid"],
@@ -967,6 +1017,12 @@ def _resolve_concept_constraints(result: ParseResult) -> None:
     concept qualified name (either with or without namespace prefix),
     set concept_qualified_name on the ref so that an ENFORCES_CONCEPT
     edge can be created during ingestion.
+
+    Also resolves concept-to-concept references in ``<initializer>``
+    text that Doxygen doesn't emit as ``<ref>`` elements.  A concept
+    like ``TransferObject`` referenced in another concept's constraint
+    expression (e.g. ``DefaultConstructibleTransferObject``) produces
+    a CONSTRAINS edge from the referencing concept to the referenced one.
     """
     concept_names = {c.qualified_name for c in result.concepts}
     # Also include short names (after ::) for prefix-less matches
@@ -990,6 +1046,141 @@ def _resolve_concept_constraints(result: ParseResult) -> None:
         # Try short name match
         if constraint in concept_short_names:
             tp.concept_qualified_name = concept_short_names[constraint]
+
+    # --- CONSTRAINS edges from template constraints ---
+    # When a template param like ``template<ValidTransferObject T>`` constrains
+    # a compound (e.g. RepeatedFieldTransferObject), the concept (ValidTransferObject)
+    # CONSTRAINS that compound.  Emit a ConceptConstraintEntry with the concept
+    # as the ``from`` and the constrained compound as the ``to``.
+    concept_qname_to_refid: dict[str, str] = {}
+    for c in result.concepts:
+        if hasattr(c, 'refid') and c.refid and hasattr(c, 'qualified_name'):
+            concept_qname_to_refid[c.qualified_name] = c.refid
+    for tp in result.template_param_refs:
+        if not tp.concept_qualified_name or not tp.from_refid:
+            continue
+        concept_refid = concept_qname_to_refid.get(tp.concept_qualified_name)
+        if not concept_refid:
+            continue
+        pair = (concept_refid, tp.from_refid)
+        result.concept_constraints.append(
+            ConceptConstraintEntry(
+                from_refid=concept_refid,
+                to_refid=tp.from_refid,
+                to_type="CompoundNode",
+            )
+        )
+
+    # --- Concept-to-concept references from initializer text ---
+    # Doxygen emits ``<ref>`` for compounds referenced in template
+    # arguments but NOT for concept names appearing as constraints
+    # (e.g. ``TransferObject<T>`` in ``DefaultConstructibleTransferObject``
+    # is plain text, not a ``<ref>``).  Scan each concept's initializer
+    # for known concept qualified names and emit CONSTRAINS edges.
+    #
+    # Build qualified_name → refid lookups.
+    concept_refids: dict[str, str] = {}
+    for c in result.concepts:
+        if hasattr(c, 'refid') and c.refid and hasattr(c, 'qualified_name'):
+            concept_refids[c.qualified_name] = c.refid
+
+    # Track already-recorded pairs so we don't duplicate.
+    existing_pairs: set[tuple[str, str]] = {
+        (cc.from_refid, cc.to_refid) for cc in result.concept_constraints
+    }
+
+    # Reverse map: short name → set of qualified_names (for disambiguation).
+    short_to_qns: dict[str, set[str]] = {}
+    for qn in concept_names:
+        short = qn.rsplit("::", 1)[-1] if "::" in qn else qn
+        short_to_qns.setdefault(short, set()).add(qn)
+
+    for concept in result.concepts:
+        initializer = getattr(concept, 'initializer', '') or ''
+        if not initializer:
+            continue
+        from_refid = getattr(concept, 'refid', None)
+        if not from_refid:
+            continue
+        from_qn = getattr(concept, 'qualified_name', '')
+
+        for target_qn in concept_names:
+            if target_qn == from_qn:
+                continue  # skip self
+
+            # Search for the qualified name OR the short name in the
+            # initializer text.  Use word-boundary matches (the concept
+            # name must appear as a standalone identifier, not as a
+            # substring of a longer name, e.g. ``TransferObject``
+            # matching inside ``DefaultConstructibleTransferObject``).
+            short = target_qn.rsplit("::", 1)[-1] if "::" in target_qn else target_qn
+
+            # Qualified name match (precise).
+            if target_qn in initializer:
+                pass  # found
+            elif short in initializer:
+                # Verify it's a word-boundary match (not embedded in a
+                # longer identifier).
+                import re as _re
+                pattern = _re.compile(r'\b' + _re.escape(short) + r'\b')
+                if not pattern.search(initializer):
+                    continue
+                # Disambiguate: if multiple concepts share the same short
+                # name, prefer the one in the same namespace.
+                candidates = short_to_qns.get(short, {target_qn})
+                if len(candidates) > 1:
+                    from_ns = from_qn.rsplit("::", 1)[0] if "::" in from_qn else ""
+                    same_ns = [qn for qn in candidates
+                               if qn.rsplit("::", 1)[0] == from_ns]
+                    if same_ns:
+                        target_qn = same_ns[0]
+                    # else keep the original (first in set — non-deterministic
+                    # but rare in practice).
+            else:
+                continue
+
+            target_refid = concept_refids.get(target_qn)
+            if not target_refid:
+                continue
+
+            pair = (target_refid, from_refid)
+            if pair in existing_pairs:
+                continue
+            existing_pairs.add(pair)
+
+            result.concept_constraints.append(
+                ConceptConstraintEntry(
+                    from_refid=target_refid,     # referenced concept
+                    to_refid=from_refid,          # concept doing the referencing
+                    to_type="ConceptNode",
+                )
+            )
+
+    # --- Template-parameter CONSTRAINS edges ---
+    # When a compound's template parameter is constrained by a concept
+    # (e.g. ``template<ValidTransferObject T> struct RepeatedFieldTransferObject``),
+    # the concept constrains the compound itself.
+    #
+    # Build refid → from_refid (owning compound) lookup from template param refs.
+    tp_from_to_concept: dict[str, tuple[str, str]] = {}
+    for tp in result.template_param_refs:
+        if tp.concept_qualified_name and tp.from_refid:
+            concept_refid = concept_refids.get(tp.concept_qualified_name)
+            if concept_refid:
+                tp_from_to_concept[tp.from_refid] = (concept_refid, tp.concept_qualified_name)
+
+    for tp_from_refid, (concept_refid, concept_qn) in tp_from_to_concept.items():
+        pair = (concept_refid, tp_from_refid)
+        if pair in existing_pairs:
+            continue
+        existing_pairs.add(pair)
+        result.concept_constraints.append(
+            ConceptConstraintEntry(
+                from_refid=concept_refid,    # the concept
+                to_refid=tp_from_refid,      # the compound it constrains
+                to_type="CompoundNode",
+            )
+        )
 
 
 def _derive_namespace_compositions(result: ParseResult) -> None:

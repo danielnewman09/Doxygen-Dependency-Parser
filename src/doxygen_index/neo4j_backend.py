@@ -465,6 +465,7 @@ def write_result(result: ParseResult) -> None:
     _write_checked_by_relationships(result)
     _write_defined_in_relationships(result)
     _write_depends_on_relationships(result)
+    _write_concept_constraints(result)
 
 
 # ---------------------------------------------------------------------------
@@ -834,21 +835,35 @@ def _write_include_relationships(result: ParseResult) -> None:
     print(f"  Includes: {len(resolved)} resolved, {len(unresolved)} external (skipped)")
 
 
+def _cpp_namespace_parent(qualified_name: str) -> str:
+    """Return the C++ namespace parent, skipping ``::`` inside ``<>``."""
+    depth = 0
+    for i in range(len(qualified_name) - 2, 0, -1):
+        ch = qualified_name[i]
+        if ch == '>':
+            depth += 1
+        elif ch == '<':
+            depth = max(0, depth - 1)
+        elif depth == 0 and qualified_name[i:i + 2] == '::':
+            return qualified_name[:i]
+    return ""
+
+
 def _namespace_for(qualified_name: str, module: str = "") -> str:
     """Determine the containing namespace qualified name.
 
     For Python: module is like 'codegraph.graph' and qualified_name uses '.'.
     For C++: module is like 'cpp_sqlite' and qualified_name uses '::'.
     Falls back to splitting the qualified_name on the last separator.
+    Only splits outside angle brackets so template specialisations
+    like ``IsVector<std::vector<T>>`` don't produce a fake namespace.
     """
     if module:
         return module
     # Try Python-style '.' first, then C++-style '::'
     if '.' in qualified_name:
         return qualified_name.rsplit('.', 1)[0]
-    if '::' in qualified_name:
-        return qualified_name.rsplit('::', 1)[0]
-    return ""
+    return _cpp_namespace_parent(qualified_name)
 
 
 def _write_namespace_composition(result: ParseResult) -> None:
@@ -879,6 +894,7 @@ def _write_namespace_composition(result: ParseResult) -> None:
     _add_nodes(result.classes)
     _add_nodes(result.interfaces)
     _add_nodes(result.enums)
+    _add_nodes(result.concepts)
     _add_nodes(result.functions)
     for ns in result.namespaces:
         if hasattr(ns, 'uid') and ns.uid and ('::' in ns.qualified_name or '.' in ns.qualified_name):
@@ -1375,6 +1391,48 @@ def _write_depends_on_relationships(result: ParseResult) -> None:
             label="DEPENDS_ON (member)",
         )
     print(f"  Relationships: DEPENDS_ON ({total} edges, {skipped} unresolved)")
+
+
+def _write_concept_constraints(result: ParseResult) -> None:
+    """Create CONSTRAINS edges from ConceptNode → CompoundNode.
+
+    Extracted from ``<ref>`` elements in the concept's
+    ``<initializer>`` (e.g.  ``TransferObject`` references
+    ``BaseTransferObject`` via ``std::derived_from``).
+    """
+    if not result.concept_constraints:
+        print("  Relationships: CONSTRAINS (0 edges)")
+        return
+
+    # Build refid → uid lookup for concepts (from) and compounds (to).
+    refid_to_uid: dict[str, str] = {}
+    for node in result.concepts:
+        if hasattr(node, 'uid') and node.uid and hasattr(node, 'refid'):
+            refid_to_uid[node.refid] = node.uid
+    for lst in (
+        result.classes, result.enums, result.unions,
+        result.interfaces, result.concepts,
+    ):
+        for node in lst:
+            if hasattr(node, 'uid') and node.uid and hasattr(node, 'refid'):
+                refid_to_uid[node.refid] = node.uid
+
+    edges: list[dict] = []
+    for cc in result.concept_constraints:
+        from_uid = refid_to_uid.get(cc.from_refid)
+        to_uid = refid_to_uid.get(cc.to_refid)
+        if from_uid and to_uid:
+            edges.append({"from": from_uid, "to": to_uid})
+
+    if not edges:
+        print(f"  Relationships: CONSTRAINS (0 edges, {len(result.concept_constraints)} unresolved)")
+        return
+
+    count = _rel_batch(edges, "CONSTRAINS", "uid", "uid",
+                       from_label="CompoundNode", to_label="CompoundNode",
+                       label="CONSTRAINS")
+    skipped = len(result.concept_constraints) - len(edges)
+    print(f"  Relationships: CONSTRAINS ({count} edges, {skipped} unresolved)")
 
 
 # ---------------------------------------------------------------------------

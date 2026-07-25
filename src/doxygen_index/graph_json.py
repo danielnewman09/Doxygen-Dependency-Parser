@@ -205,6 +205,11 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
     for di in result.fixture_defined_in:
         fdi_by_from[di.from_refid].append(di.to_refid)
 
+    # from_refid → [(to_refid, to_type)] — concept_constraints (CONSTRAINS)
+    concept_constraints_by_from: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    for cc in result.concept_constraints:
+        concept_constraints_by_from[cc.from_refid].append((cc.to_refid, cc.to_type))
+
     # Serialize each node and attach edges
     serialized: list[dict] = []
 
@@ -254,6 +259,7 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
                 fot_by_from,
                 fcb_by_from,
                 fdi_by_from,
+                concept_constraints_by_from,
             )
             # Filter out self-references (edge target_uid == this node's uid).
             node_uid = entry.get("uid", "")
@@ -372,6 +378,7 @@ def _build_node_edges(
     fot_by_from: dict[str, list[tuple[str, str]]],
     fcb_by_from: dict[str, list[str]],
     fdi_by_from: dict[str, list[str]],
+    concept_constraints_by_from: dict[str, list[tuple[str, str]]],
 ) -> list[dict]:
     """Build the edge list for a single node using pre-built index maps.
 
@@ -419,7 +426,7 @@ def _build_node_edges(
                 edges.append({
                     "relation_type": "INCLUDES",
                     "target_uid": refid_to_uid[inc_refid],
-                    "target_type": "FileNode",
+                    "target_type": refid_to_type.get(inc_refid, "CompoundNode"),
                 })
 
     # --- INVOKES ---
@@ -528,6 +535,17 @@ def _build_node_edges(
                     "relation_type": "DEFINED_IN",
                     "target_uid": refid_to_uid[to_refid],
                     "target_type": "TestStepNode",
+                })
+
+    # --- CONSTRAINS (concept → compound/concept) ---
+    # Direction is referenced → referencer.
+    if node_refid:
+        for to_refid, to_type in concept_constraints_by_from.get(node_refid, ()):
+            if to_refid in refid_to_uid:
+                edges.append({
+                    "relation_type": "CONSTRAINS",
+                    "target_uid": refid_to_uid[to_refid],
+                    "target_type": to_type,
                 })
 
     return edges

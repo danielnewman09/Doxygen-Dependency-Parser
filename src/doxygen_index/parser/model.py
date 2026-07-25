@@ -78,6 +78,27 @@ class DependsOnEntry:
 
 
 @dataclass
+class ConceptConstraintEntry:
+    """A ``CONSTRAINS`` relationship from a referenced type/concept to
+    the concept that references it.
+
+    Extracted from ``<ref>`` elements in the concept's ``<initializer>``
+    and from text scanning.  The direction is *referenced → referencer*:
+    the thing that appears in the constraint expression constrains the
+    concept that uses it.
+
+    Examples:
+    - ``BaseTransferObject → CONSTRAINS → TransferObject``
+      (BaseTransferObject appears in ``std::derived_from<T, BaseTransferObject>``)
+    - ``TransferObject → CONSTRAINS → ValidTransferObject``
+      (TransferObject appears in ``TransferObject<T> && DefaultConstructibleTransferObject<T>``)
+    """
+    from_refid: str    # refid of the *referenced* type/concept
+    to_refid: str      # refid of the concept that *references* it
+    to_type: str       # node type of the referenced entity (e.g. "CompoundNode", "ConceptNode")
+
+
+@dataclass
 class TemplateParamEntry:
     """A single template parameter extracted from <templateparamlist>."""
     type_constraint: str = ""
@@ -234,6 +255,7 @@ class ParseResult:
     compositions: list[CompositionEntry] = field(default_factory=list)
     inherits: list[InheritsEntry] = field(default_factory=list)
     depends_on: list[DependsOnEntry] = field(default_factory=list)
+    concept_constraints: list[ConceptConstraintEntry] = field(default_factory=list)
     # Resolved namespace-level imports: namespace → imported compound.
     # Derived from ``result.includes`` by resolving relative import names
     # to full qualified refids; emitted as INCLUDES edges on NamespaceNode.
