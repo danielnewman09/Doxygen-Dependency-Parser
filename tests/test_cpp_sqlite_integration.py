@@ -917,16 +917,47 @@ class TestFullGraphViz:
 
         print(f"\n  DEPENDS_ON cytoscape edges: {len(depends_on)}")
 
+    def test_viz_no_self_referential_edges(self, cy_data):
+        """No edge has source == target (self-loop).
+
+        Self-referential edges arise when member methods depend-on or
+        invoke other members of the same class — both source and target
+        are hoisted to the parent compound.  They are filtered out
+        during the Cytoscape transform because they convey no useful
+        cross-class dependency signal."""
+        self_edges: list[str] = []
+        for e in cy_data["edges"]:
+            if e["data"]["source"] == e["data"]["target"]:
+                self_edges.append(
+                    f"{e['data']['source']} → {e['data']['label']}"
+                )
+
+        assert len(self_edges) == 0, (
+            f"Found {len(self_edges)} self-referential edge(s): "
+            + "; ".join(self_edges)
+        )
+        print(f"\n  Self-referential edges: 0 ✓")
+
     def test_viz_invokes_edges(self, cy_data):
         """INVOKES edges from collapsed project methods appear as edges
-        from their parent compound."""
+        from their parent compound.  Self-referential edges (source ==
+        target) are filtered out — a method calling another method of its
+        own class produces no useful cross-class dependency signal."""
         invokes: set[tuple[str, str]] = set()
         for e in cy_data["edges"]:
             if e["data"]["label"] == "INVOKES":
                 invokes.add((e["data"]["source"], e["data"]["target"]))
 
-        # Database methods calling getDAO
-        assert ("cpp_sqlite::Database", "cpp_sqlite::Database") in invokes
+        # No self-referential invokes — filtered out.
+        for (src, tgt) in invokes:
+            assert src != tgt, (
+                f"Self-referential INVOKES edge: {src} → {tgt}"
+            )
+
+        # At least some cross-class INVOKES edges exist.
+        assert len(invokes) >= 1, (
+            f"Expected at least 1 cross-class INVOKES edge, got {len(invokes)}"
+        )
 
         print(f"\n  INVOKES cytoscape edges: {len(invokes)}")
 
