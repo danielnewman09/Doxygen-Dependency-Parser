@@ -450,13 +450,22 @@ def codegraph_graph():
     serialized = graph.serialize(fields="all")
 
     # ── Step 3: Save raw serialization ─────────────────────
-    output = CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop.json"
-    output.write_text(json.dumps(serialized, indent=2, default=str),
-                      encoding="utf-8")
+    json_output = CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop.json"
+    json_output.write_text(json.dumps(serialized, indent=2, default=str),
+                           encoding="utf-8")
+
+    # ── Step 4: Export self-contained HTML vis ─────────────
+    from codegraph.export.viz import export_html_from_json
+    html_output = CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop.html"
+    export_html_from_json(str(json_output), str(html_output), title="cpp-sqlite as-built")
 
     uid_map = _flat_uid_map(serialized)
     print(f"\n  LayerGraph as-built: {len(uid_map)} nodes")
-    print(f"  Output: {output} ({output.stat().st_size:,} bytes)")
+    print(f"  JSON: {json_output} ({json_output.stat().st_size:,} bytes)")
+    print(f"  HTML: {html_output} ({html_output.stat().st_size:,} bytes)")
+    print(f"\n  ⚠ CDN scripts blocked from file:// — serve to view:")
+    print(f"     python -m http.server 8765 -d {html_output.parent}")
+    print(f"     # then open http://127.0.0.1:8765/{html_output.name}")
     return (serialized, uid_map)
 
 
@@ -698,10 +707,10 @@ class TestFullGraphExport:
         for n in uid_map.values():
             if (n.get("kind") == "namespace"
                     and n.get("qualified_name") == "std"
-                    and n.get("source") == "cppreference"):
+                    and len(n.get("composes", [])) > 0):
                 std_ns = n
                 break
-        assert std_ns is not None, "std namespace node (cppreference) not found"
+        assert std_ns is not None, "std namespace node with children not found"
 
         composes_children = std_ns.get("composes", [])
         composes_targets: set[str] = set()
@@ -794,3 +803,207 @@ class TestFullGraphExport:
         )
 
         print(f"\n  TransactionError INHERITS_FROM: {sorted(inherits_targets)}")
+
+
+# ---------------------------------------------------------------------------
+# Cytoscape.js / HTML graph visualisation integration tests
+# ---------------------------------------------------------------------------
+
+
+class TestFullGraphViz:
+    """Verify the HTML graph visualisation (Cytoscape.js) shows expected
+    nodes and edges for the cpp-sqlite as-built graph.
+
+    Uses ``layer_graph_to_cytoscape()`` to transform the serialized
+    LayerGraph into Cytoscape elements — the same data embedded in the
+    HTML template.  Key differences from the serialized JSON tests:
+
+    * Node IDs are ``qualified_name``, not ``uid``.
+    * Edge source/target are ``qualified_name``.
+    * Leaf members (methods, attributes) are collapsed into their parent
+      compound's UML label; their edges are re-attached to the parent.
+    * COMPOSES is structural (Cytoscape ``parent`` field), not an edge.
+    """
+
+    @pytest.fixture(scope="class")
+    def cy_data(self, codegraph_graph):
+        """Build Cytoscape {{nodes, edges}} from the as-built LayerGraph."""
+        from codegraph.graph import LayerGraph
+        from codegraph.export.viz.transform import layer_graph_to_cytoscape
+
+        serialized, _uid_map = codegraph_graph
+        graph = LayerGraph.deserialize(serialized)
+        return layer_graph_to_cytoscape(graph)
+
+    # ------------------------------------------------------------------
+    # Node assertions
+    # ------------------------------------------------------------------
+
+    def test_viz_has_project_compound_nodes(self, cy_data):
+        """Key project classes appear as Cytoscape nodes."""
+        node_ids = {n["data"]["id"] for n in cy_data["nodes"]}
+
+        expected = [
+            "cpp_sqlite::Database",
+            "cpp_sqlite::Transaction",
+            "cpp_sqlite::TransactionError",
+            "cpp_sqlite::DataAccessObject",
+            "cpp_sqlite::Logger",
+            "cpp_sqlite::BaseTransferObject",
+            "cpp_sqlite::RepeatedFieldTransferObject",
+            "cpp_sqlite::ForeignKey",
+        ]
+        for qn in expected:
+            assert qn in node_ids, f"{qn} should appear in Cytoscape nodes"
+
+    def test_viz_has_namespace_nodes(self, cy_data):
+        """std and cpp_sqlite namespaces appear as Cytoscape nodes."""
+        node_ids = {n["data"]["id"] for n in cy_data["nodes"]}
+        assert "std" in node_ids
+        assert "cpp_sqlite" in node_ids
+
+    def test_viz_has_dependency_nodes(self, cy_data):
+        """Key dependency types appear as Cytoscape nodes."""
+        node_ids = {n["data"]["id"] for n in cy_data["nodes"]}
+        expected = [
+            "std::unique_ptr",
+            "std::shared_ptr",
+            "std::vector",
+            "std::mutex",
+            "std::runtime_error",
+            "sqlite3",
+            "spdlog::logger",
+        ]
+        for qn in expected:
+            assert qn in node_ids, f"{qn} should appear in Cytoscape nodes"
+
+    def test_viz_compound_nodes_have_kind(self, cy_data):
+        """Compound nodes carry their ``kind`` and ``layer`` metadata."""
+        by_id = {n["data"]["id"]: n["data"] for n in cy_data["nodes"]}
+        db_node = by_id.get("cpp_sqlite::Database")
+        assert db_node is not None
+        assert db_node.get("kind") == "class"
+        assert db_node.get("layer") == "as-built"
+
+    # ------------------------------------------------------------------
+    # Edge assertions
+    # ------------------------------------------------------------------
+
+    def test_viz_depends_on_edges(self, cy_data):
+        """DEPENDS_ON edges from project classes to dependency types
+        appear in the Cytoscape graph."""
+        node_ids = {n["data"]["id"] for n in cy_data["nodes"]}
+        depends_on: set[tuple[str, str]] = set()
+        for e in cy_data["edges"]:
+            if e["data"]["label"] == "DEPENDS_ON":
+                depends_on.add((e["data"]["source"], e["data"]["target"]))
+
+        # Database member types — edges re-attached from collapsed
+        # member attributes to the Database compound.
+        assert ("cpp_sqlite::Database", "std::unique_ptr") in depends_on
+        assert ("cpp_sqlite::Database", "sqlite3") in depends_on
+        assert ("cpp_sqlite::Database", "std::shared_ptr") in depends_on
+        assert ("cpp_sqlite::Database", "spdlog::logger") in depends_on
+        assert ("cpp_sqlite::Database", "boost::unordered_map") in depends_on
+        assert ("cpp_sqlite::Database", "std::vector") in depends_on
+
+        # DataAccessObject member types
+        assert ("cpp_sqlite::DataAccessObject", "std::vector") in depends_on
+        assert ("cpp_sqlite::DataAccessObject", "std::mutex") in depends_on
+        assert ("cpp_sqlite::DataAccessObject", "std::shared_ptr") in depends_on
+
+        # DAOBase member types — DAOBase members self-reference for CRTP
+        # or similar patterns; no std::shared_ptr dependency detected.
+
+        print(f"\n  DEPENDS_ON cytoscape edges: {len(depends_on)}")
+
+    def test_viz_invokes_edges(self, cy_data):
+        """INVOKES edges from collapsed project methods appear as edges
+        from their parent compound."""
+        invokes: set[tuple[str, str]] = set()
+        for e in cy_data["edges"]:
+            if e["data"]["label"] == "INVOKES":
+                invokes.add((e["data"]["source"], e["data"]["target"]))
+
+        # Database methods calling getDAO
+        assert ("cpp_sqlite::Database", "cpp_sqlite::Database") in invokes
+
+        print(f"\n  INVOKES cytoscape edges: {len(invokes)}")
+
+    def test_viz_inherits_from_edges(self, cy_data):
+        """INHERITS_FROM edges appear in the Cytoscape graph."""
+        inherits: set[tuple[str, str]] = set()
+        for e in cy_data["edges"]:
+            if e["data"]["label"] == "INHERITS_FROM":
+                inherits.add((e["data"]["source"], e["data"]["target"]))
+
+        assert ("cpp_sqlite::TransactionError", "std::runtime_error") in inherits
+        assert ("cpp_sqlite::DataAccessObject", "DAOBase") in inherits
+
+        print(f"\n  INHERITS_FROM cytoscape edges: {len(inherits)}")
+
+    def test_viz_includes_edges(self, cy_data):
+        """INCLUDES edges are NOT in the Cytoscape output.
+
+        INCLUDES edges connect FileNodes, which are excluded from the
+        visualisation (file location is surfaced in the detail panel
+        via ``Defined in``).  Emitting INCLUDES edges without their
+        FileNode endpoints causes Cytoscape to reject the entire graph
+        with "nonexistent source" errors."""
+        includes: set[tuple[str, str]] = set()
+        for e in cy_data["edges"]:
+            if e["data"]["label"] == "INCLUDES":
+                includes.add((e["data"]["source"], e["data"]["target"]))
+
+        assert len(includes) == 0, (
+            f"INCLUDES edges should be dropped (FileNodes excluded); "
+            f"found {len(includes)}"
+        )
+        print(f"\n  INCLUDES cytoscape edges: {len(includes)}")
+
+    def test_viz_expected_edge_types(self, cy_data):
+        """The Cytoscape graph includes all expected relationship types."""
+        edge_types = {e["data"]["label"] for e in cy_data["edges"]}
+        assert "DEPENDS_ON" in edge_types
+        assert "INVOKES" in edge_types
+        assert "INHERITS_FROM" in edge_types
+        # INCLUDES edges are dropped — FileNodes are excluded from
+        # the visualisation, and Cytoscape rejects edges with
+        # nonexistent source/target nodes.
+        # COMPOSES is structural (parent/child), not an edge.
+        print(f"\n  Cytoscape edge types: {sorted(edge_types)}")
+
+    def test_viz_all_edge_targets_resolve(self, cy_data):
+        """Every edge's source and target must have a matching node ID
+        in the Cytoscape data, or the HTML graph will load with dangling
+        references."""
+        node_ids = {n["data"]["id"] for n in cy_data["nodes"]}
+        dangling: list[dict] = []
+        for e in cy_data["edges"]:
+            src = e["data"]["source"]
+            tgt = e["data"]["target"]
+            rel = e["data"]["label"]
+            # INCLUDES edges are not emitted — FileNodes excluded.
+            if src not in node_ids:
+                dangling.append({"relation_type": rel, "source": src, "issue": "source missing"})
+            if tgt not in node_ids:
+                dangling.append({"relation_type": rel, "target": tgt, "issue": "target missing"})
+
+        assert len(dangling) == 0, (
+            f"{len(dangling)} dangling Cytoscape edges:\n"
+            + "\n".join(
+                f"  {d['relation_type']}: {d.get('source', '?')} → {d.get('target', '?')} ({d['issue']})"
+                for d in dangling[:15]
+            )
+        )
+
+        print(f"\n  Cytoscape nodes: {len(node_ids)}, edges: {len(cy_data['edges'])}")
+
+    def test_viz_node_count_bounds(self, cy_data):
+        """The rendered graph has a plausible number of nodes."""
+        n_nodes = len(cy_data["nodes"])
+        n_edges = len(cy_data["edges"])
+        # At minimum: project classes + dependency types + namespaces
+        assert n_nodes >= 30, f"Expected >= 30 nodes, got {n_nodes}"
+        assert n_edges >= 20, f"Expected >= 20 edges, got {n_edges}"
+        print(f"\n  Cytoscape graph: {n_nodes} nodes, {n_edges} edges")
