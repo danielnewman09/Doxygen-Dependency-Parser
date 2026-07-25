@@ -464,6 +464,7 @@ def write_result(result: ParseResult) -> None:
     _write_of_type_relationships(result)
     _write_checked_by_relationships(result)
     _write_defined_in_relationships(result)
+    _write_depends_on_relationships(result)
 
 
 # ---------------------------------------------------------------------------
@@ -1310,6 +1311,70 @@ def _write_defined_in_relationships(result: ParseResult) -> None:
         if results:
             created += results[0][0]
     print(f"  Relationships: DEFINED_IN ({created} edges)")
+
+
+def _write_depends_on_relationships(result: ParseResult) -> None:
+    """Create DEPENDS_ON edges from function/method/attribute nodes to the
+    types they depend on.
+
+    Uses the in-memory refid-to-uid mapping for both source and target
+    nodes, which handles same-source and cross-source (cppreference,
+    dependency) references when they are included in the merged
+    ParseResult.
+    """
+    if not result.depends_on:
+        print("  Relationships: DEPENDS_ON (0 edges)")
+        return
+
+    # Build refid → uid mapping for all node types that can appear
+    # as source or target of DEPENDS_ON edges.
+    refid_to_uid: dict[str, str] = {}
+    # Track which refids belong to compounds vs members for labeled MATCH.
+    compound_refids: set[str] = set()
+    member_refids: set[str] = set()
+    for lst in (
+        result.classes, result.enums, result.unions,
+        result.interfaces, result.concepts,
+    ):
+        for node in lst:
+            if hasattr(node, 'uid') and node.uid and hasattr(node, 'refid') and node.refid:
+                refid_to_uid[node.refid] = node.uid
+                compound_refids.add(node.refid)
+    for lst in (result.methods, result.functions, result.attributes):
+        for node in lst:
+            if hasattr(node, 'uid') and node.uid and hasattr(node, 'refid') and node.refid:
+                refid_to_uid[node.refid] = node.uid
+                member_refids.add(node.refid)
+
+    compound_edges: list[dict] = []
+    member_edges: list[dict] = []
+    skipped = 0
+    for dep in result.depends_on:
+        from_uid = refid_to_uid.get(dep.from_refid)
+        to_uid = refid_to_uid.get(dep.to_refid)
+        if from_uid and to_uid:
+            edge = {"from": from_uid, "to": to_uid}
+            if dep.to_refid in compound_refids:
+                compound_edges.append(edge)
+            else:
+                member_edges.append(edge)
+        else:
+            skipped += 1
+
+    total = 0
+    if compound_edges:
+        total += _rel_batch(
+            compound_edges, "DEPENDS_ON", "uid", "uid",
+            from_label="MemberNode", to_label="CompoundNode",
+            label="DEPENDS_ON (compound)",
+        )
+    if member_edges:
+        total += _rel_batch(
+            member_edges, "DEPENDS_ON", "uid", "uid",
+            from_label="MemberNode", to_label="MemberNode",
+            label="DEPENDS_ON (member)",
+        )
+    print(f"  Relationships: DEPENDS_ON ({total} edges, {skipped} unresolved)")
 
 
 # ---------------------------------------------------------------------------
