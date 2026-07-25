@@ -1089,3 +1089,30 @@ class TestFullGraphViz:
         assert n_nodes >= 30, f"Expected >= 30 nodes, got {n_nodes}"
         assert n_edges >= 20, f"Expected >= 20 edges, got {n_edges}"
         print(f"\n  Cytoscape graph: {n_nodes} nodes, {n_edges} edges")
+
+    def test_viz_no_duplicate_edges(self, cy_data):
+        """No edge should appear more than once with the same
+        (source, target, label) tuple.
+
+        RelationshipFrom descriptors are excluded from serialize_edges
+        (only RelationshipTo is emitted), and collapsed member refs
+        are deduplicated — multiple members of the same class
+        depending on the same type produce one edge, not N."""
+        from collections import Counter
+
+        edge_counts = Counter()
+        for e in cy_data["edges"]:
+            key = (
+                e["data"]["source"],
+                e["data"]["target"],
+                e["data"]["label"],
+            )
+            edge_counts[key] += 1
+
+        duplicates = [(k, v) for k, v in edge_counts.items() if v > 1]
+        assert len(duplicates) == 0, (
+            f"Found {len(duplicates)} duplicate edge(s): "
+            + "; ".join(f"{s}→{t} [{l}] x{c}"
+                         for (s, t, l), c in duplicates)
+        )
+        print(f"\n  No duplicate edges ✓")
