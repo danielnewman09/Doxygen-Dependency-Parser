@@ -1,0 +1,3707 @@
+[
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:887",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "error_state",
+    "qualified_name": "MigrationManager::error_state",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "71378026994c2f2e0c5b2487e6bff89183821ab7",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:888",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "DuplicateVersionError",
+    "qualified_name": "DuplicateVersionError",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "8137f2f72d997c77f1790d67ec0acd9b95026603",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:889",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "is_initialized",
+    "qualified_name": "MigrationManager::is_initialized",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "4adb062509e00ede2a6036b3a0669312d57df96a",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:891",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "registered_versions",
+    "qualified_name": "MigrationManager::registered_versions",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "cc1d8cfd3166a849f5cb722fea1953a764a5aad7",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:895",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "version1_reapplied",
+    "qualified_name": "MigrationManager::version1_reapplied",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "f4a8bbc168a1d94832d30af799a9a749565c42d9",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:897",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "version2_recorded",
+    "qualified_name": "MigrationManager::version2_recorded",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "c4a7155f92b2512e432f72cfee84fdebb036a0bb",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:898",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "version3_recorded",
+    "qualified_name": "MigrationManager::version3_recorded",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "287fe11f47bcecc1600e22be2aa0d6cb73855abb",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:900",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "execution_order",
+    "qualified_name": "MigrationManager::execution_order",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "520e07ce12ee008ebbb4b4783864231c7ac14dda",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:901",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "version1_recorded_on_fail",
+    "qualified_name": "MigrationManager::version1_recorded_on_fail",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "2bddec4cf45764e50d46cfa2659a1f2be78213b9",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:902",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "version2_not_recorded_on_fail",
+    "qualified_name": "MigrationManager::version2_not_recorded_on_fail",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "685281acf5ce4fc95e08a303f9fb82afcfb20b1c",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:903",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "error_on_fail",
+    "qualified_name": "MigrationManager::error_on_fail",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "8b0e92a68faa3598a24406c12922a1a187ffe5b6",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:904",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "version1_schema_preserved",
+    "qualified_name": "MigrationManager::version1_schema_preserved",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "ab5036f45500d42c31c2711501e8f7046b152ad1",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:905",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "mismatch_count",
+    "qualified_name": "MigrationManager::mismatch_count",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "09badcbbdf39d32b0d6b8dbef327e2b89c6a216e",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:906",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "mismatch_version",
+    "qualified_name": "MigrationManager::mismatch_version",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "228dbbd4a9c20e6083cd92501a51126277eb0fe6",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:907",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "mismatch_kind",
+    "qualified_name": "MigrationManager::mismatch_kind",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "3e3a75d52a9165834a7380c9bc47c39d3507ee69",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:908",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "UnexpectedTable",
+    "qualified_name": "UnexpectedTable",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "2e90ccfcf6266c16889993fab3b6ed4f461457e8",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:909",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "migration_applied",
+    "qualified_name": "MigrationManager::migration_applied",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "eefea8a6bb880cad6a95d9ff0d8e5d59a6d30f47",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:910",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "version3_not_recorded",
+    "qualified_name": "MigrationManager::version3_not_recorded",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "ed2a4158bb4e681f1d9f89f38d123fc13a0dbcdc",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:911",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "versions_1_2_remain",
+    "qualified_name": "MigrationManager::versions_1_2_remain",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "ddf850e15cc89924ed9c362bbc9372cbae892376",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:912",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "down_called",
+    "qualified_name": "MigrationManager::down_called",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "17aecaa5c47e422d10c81e91689d687f5e8b4590",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:913",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "error_on_rollback_fail",
+    "qualified_name": "MigrationManager::error_on_rollback_fail",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "2a7c3547166a9ba6a952ac912034d5aa322e0158",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:914",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "version2_still_exists_on_fail",
+    "qualified_name": "MigrationManager::version2_still_exists_on_fail",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "88631b67b8b7f908f5c83a57ee757cf076a99c85",
+    "visibility": ""
+  },
+  {
+    "body_end": 0,
+    "body_start": 0,
+    "brief_description": "",
+    "component_id": null,
+    "compound_refid": "",
+    "definition": "",
+    "detailed_description": "",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:915",
+    "file_path": "",
+    "is_const": false,
+    "is_static": false,
+    "kind": "attribute",
+    "line_number": null,
+    "name": "version1_preserved_on_fail",
+    "qualified_name": "MigrationManager::version1_preserved_on_fail",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "AttributeNode",
+    "type_signature": "",
+    "uid": "ddc18b0965a6fe25e99d0fe126f3613045d07cd9",
+    "visibility": ""
+  },
+  {
+    "component_id": null,
+    "composes": [
+      {
+        "base_classes": [],
+        "brief_description": "Orchestrates schema migrations against a SQLite database using cpp-sqlite.",
+        "component_id": null,
+        "composes": [
+          {
+            "argsstring": "(Database& db)",
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Construct with a reference to the cpp_sqlite Database to manage",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:951",
+            "file_path": "",
+            "is_const": false,
+            "is_constexpr": false,
+            "is_explicit": false,
+            "is_inline": false,
+            "is_static": false,
+            "is_virtual": false,
+            "kind": "method",
+            "line_number": null,
+            "name": "MigrationManager",
+            "qualified_name": "cpp_sqlite::MigrationManager::MigrationManager",
+            "refid": "",
+            "source": "cpp_sqlite",
+            "tags": [
+              "design"
+            ],
+            "type": "MethodNode",
+            "type_signature": "void (cpp_sqlite::Database&)",
+            "uid": "2dc58ffd7e7d4a5a8d09b51a11929678282b84d1",
+            "visibility": "public"
+          },
+          {
+            "argsstring": "()",
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Compute SHA-256 checksum of live schema and compare against the stored checksum of the highest applied SchemaVersion.",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:924",
+            "file_path": "",
+            "is_const": false,
+            "is_constexpr": false,
+            "is_explicit": false,
+            "is_inline": false,
+            "is_static": false,
+            "is_virtual": false,
+            "kind": "method",
+            "line_number": null,
+            "name": "verify",
+            "qualified_name": "cpp_sqlite::MigrationManager::verify",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "MethodNode",
+            "type_signature": "cpp_sqlite::SchemaVerificationResult",
+            "uid": "07ca237141509268fd02d4a687d7af8dc77fc879",
+            "visibility": "public"
+          },
+          {
+            "argsstring": "(int target_version)",
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Roll back migrations above target version in descending order, each in its own Transaction.",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:923",
+            "file_path": "",
+            "is_const": false,
+            "is_constexpr": false,
+            "is_explicit": false,
+            "is_inline": false,
+            "is_static": false,
+            "is_virtual": false,
+            "kind": "method",
+            "line_number": null,
+            "name": "rollback",
+            "qualified_name": "cpp_sqlite::MigrationManager::rollback",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "MethodNode",
+            "type_signature": "cpp_sqlite::MigrationResult (int)",
+            "uid": "e39ac5b5be2092a15a55752ab00843fe23d0fe81",
+            "visibility": "public"
+          },
+          {
+            "argsstring": "()",
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Apply all unapplied migrations in version order, each in its own committed Transaction. Creates schema_versions table on first call. Failing migration rolls back only that migration's Transaction.",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:922",
+            "file_path": "",
+            "is_const": false,
+            "is_constexpr": false,
+            "is_explicit": false,
+            "is_inline": false,
+            "is_static": false,
+            "is_virtual": false,
+            "kind": "method",
+            "line_number": null,
+            "name": "apply",
+            "qualified_name": "cpp_sqlite::MigrationManager::apply",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "MethodNode",
+            "type_signature": "cpp_sqlite::MigrationResult",
+            "uid": "a982bb9e26235a16d6229b9355831441bfe90269",
+            "visibility": "public"
+          },
+          {
+            "argsstring": "(std::unique_ptr<Migration>)",
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Register a migration. Duplicate versions return MigrationErrorCode::DuplicateVersion.",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:921",
+            "file_path": "",
+            "is_const": false,
+            "is_constexpr": false,
+            "is_explicit": false,
+            "is_inline": false,
+            "is_static": false,
+            "is_virtual": false,
+            "kind": "method",
+            "line_number": null,
+            "name": "register_migration",
+            "qualified_name": "cpp_sqlite::MigrationManager::register_migration",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "MethodNode",
+            "type_signature": "cpp_sqlite::MigrationResult",
+            "uid": "814d4e444e92bccc81a0a1a1b379302dbc9e992e",
+            "visibility": "public"
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Registered migrations keyed by version number, stored in ascending order",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:953",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "migrations_",
+            "qualified_name": "cpp_sqlite::MigrationManager::migrations_",
+            "refid": "",
+            "source": "cpp_sqlite",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "std::map<int, std::unique_ptr<cpp_sqlite::Migration>>",
+            "uid": "61bb83209b4cd7a432073e5ef5740e4442e48f81",
+            "visibility": "private"
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Reference to the managed database instance",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:952",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "db_",
+            "qualified_name": "cpp_sqlite::MigrationManager::db_",
+            "refid": "",
+            "source": "cpp_sqlite",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "cpp_sqlite::Database&",
+            "uid": "23e3c5c965df2c15afb9b0efc7df3ab9c2f97a47",
+            "visibility": "private"
+          }
+        ],
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [
+          {
+            "relation_type": "DEPENDS_ON",
+            "target_type": "ClassNode",
+            "target_uid": "dadd4ca4efa858d7b73d7613274a871e1c0b3b61"
+          },
+          {
+            "relation_type": "DEPENDS_ON",
+            "target_type": "ClassNode",
+            "target_uid": "88cca5e78a9de7e712e125fecdbb9daa3ef774f1"
+          },
+          {
+            "relation_type": "DEPENDS_ON",
+            "target_type": "ClassNode",
+            "target_uid": "b9212531b58fb98bf3a8277b8630bf06a29a4e7d"
+          },
+          {
+            "relation_type": "DEPENDS_ON",
+            "target_type": "ClassNode",
+            "target_uid": "26d4c7f84a47a5e784f347a8f9c1d2a316aec1ba"
+          },
+          {
+            "relation_type": "DEPENDS_ON",
+            "target_type": "ClassNode",
+            "target_uid": "b927d76a5a666d19ca90f227d5edf5bb4904f7b7"
+          },
+          {
+            "relation_type": "DEPENDS_ON",
+            "target_type": "ClassNode",
+            "target_uid": "523e24d119bc34003dc1dcecb3cd55b96f38a9e8"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:920",
+        "file_path": "",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "class",
+        "line_number": null,
+        "module": "",
+        "name": "MigrationManager",
+        "qualified_name": "cpp_sqlite::MigrationManager",
+        "refid": "",
+        "source": "markdown-import",
+        "source_type": "",
+        "tags": [
+          "design"
+        ],
+        "type": "ClassNode",
+        "uid": "770b4b285466feafcd8a61cc55b815499920daad",
+        "visibility": "public"
+      },
+      {
+        "base_classes": [],
+        "brief_description": "Result of the verify operation, containing detected schema mismatches.",
+        "component_id": null,
+        "composes": [
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "True if no mismatches were found",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:950",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "is_consistent",
+            "qualified_name": "cpp_sqlite::SchemaVerificationResult::is_consistent",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "bool",
+            "uid": "9e701e92190567100a303f40681d52912284a1ba",
+            "visibility": "public"
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Detected schema mismatches (empty if consistent)",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:949",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "mismatches",
+            "qualified_name": "cpp_sqlite::SchemaVerificationResult::mismatches",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "std::vector<cpp_sqlite::SchemaMismatch>",
+            "uid": "1200cc165e968003d649875a2b29fa7d406c0e77",
+            "visibility": "public"
+          }
+        ],
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [
+          {
+            "relation_type": "DEPENDS_ON",
+            "target_type": "ClassNode",
+            "target_uid": "f9662d8539e788f8330c4b8cc85e69f9edaa49c6"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:948",
+        "file_path": "",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": null,
+        "module": "",
+        "name": "SchemaVerificationResult",
+        "qualified_name": "cpp_sqlite::SchemaVerificationResult",
+        "refid": "",
+        "source": "markdown-import",
+        "source_type": "",
+        "tags": [
+          "design"
+        ],
+        "type": "ClassNode",
+        "uid": "dadd4ca4efa858d7b73d7613274a871e1c0b3b61",
+        "visibility": "public"
+      },
+      {
+        "base_classes": [],
+        "brief_description": "Describes one schema drift detection in a verify result.",
+        "component_id": null,
+        "composes": [
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Human-readable description of the mismatch",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:942",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "detail",
+            "qualified_name": "cpp_sqlite::SchemaMismatch::detail",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "std::string",
+            "uid": "941bb3c1c67c085054ec3668ae83b864fcfb8d24",
+            "visibility": "public"
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "What kind of drift was detected",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:941",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "kind",
+            "qualified_name": "cpp_sqlite::SchemaMismatch::kind",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "cpp_sqlite::MismatchKind",
+            "uid": "cfee220e7835e4276fb981783d22ac1f829aa992",
+            "visibility": "public"
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "The migration version this mismatch relates to",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:940",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "version",
+            "qualified_name": "cpp_sqlite::SchemaMismatch::version",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "int",
+            "uid": "0cf7896bf187e53d307a80a6e0171e6c89f62b5b",
+            "visibility": "public"
+          }
+        ],
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:939",
+        "file_path": "",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": null,
+        "module": "",
+        "name": "SchemaMismatch",
+        "qualified_name": "cpp_sqlite::SchemaMismatch",
+        "refid": "",
+        "source": "markdown-import",
+        "source_type": "",
+        "tags": [
+          "design"
+        ],
+        "type": "ClassNode",
+        "uid": "f9662d8539e788f8330c4b8cc85e69f9edaa49c6",
+        "visibility": "public"
+      },
+      {
+        "base_classes": [],
+        "brief_description": "Value type returned by apply, rollback, and register_migration.",
+        "component_id": null,
+        "composes": [
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Error code (Success on success)",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:931",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "error",
+            "qualified_name": "cpp_sqlite::MigrationResult::error",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "cpp_sqlite::MigrationErrorCode",
+            "uid": "015dd44375d42e36a31cc8ac77537eb03f222ee2",
+            "visibility": "public"
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Whether the operation succeeded",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:930",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "success",
+            "qualified_name": "cpp_sqlite::MigrationResult::success",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "bool",
+            "uid": "eb894fad73fc7f70810146b9f22b0b5b43e6cebe",
+            "visibility": "public"
+          }
+        ],
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:929",
+        "file_path": "",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": null,
+        "module": "",
+        "name": "MigrationResult",
+        "qualified_name": "cpp_sqlite::MigrationResult",
+        "refid": "",
+        "source": "markdown-import",
+        "source_type": "",
+        "tags": [
+          "design"
+        ],
+        "type": "ClassNode",
+        "uid": "88cca5e78a9de7e712e125fecdbb9daa3ef774f1",
+        "visibility": "public"
+      },
+      {
+        "base_classes": [],
+        "brief_description": "Record of an applied migration in the schema_versions tracking table.",
+        "component_id": null,
+        "composes": [
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "SHA-256 hash of the database schema (sqlite_master SQL concatenation) after applying this migration",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:928",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "checksum",
+            "qualified_name": "cpp_sqlite::SchemaVersion::checksum",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "std::string",
+            "uid": "be17162f3b1b4b3ba7f456f64b4e116246cde913",
+            "visibility": "public"
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "ISO 8601 timestamp of application",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:927",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "applied_at",
+            "qualified_name": "cpp_sqlite::SchemaVersion::applied_at",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "std::string",
+            "uid": "0ae6f5997f08ce296414d248f77e2d2bf12cae5f",
+            "visibility": "public"
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Migration version number",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:926",
+            "file_path": "",
+            "is_const": false,
+            "is_static": false,
+            "kind": "attribute",
+            "line_number": null,
+            "name": "version",
+            "qualified_name": "cpp_sqlite::SchemaVersion::version",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "AttributeNode",
+            "type_signature": "int",
+            "uid": "cb636bd059170ae0c634a25a000a5236adcd39e4",
+            "visibility": "public"
+          }
+        ],
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:925",
+        "file_path": "",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "class",
+        "line_number": null,
+        "module": "",
+        "name": "SchemaVersion",
+        "qualified_name": "cpp_sqlite::SchemaVersion",
+        "refid": "",
+        "source": "markdown-import",
+        "source_type": "",
+        "tags": [
+          "design"
+        ],
+        "type": "ClassNode",
+        "uid": "26d4c7f84a47a5e784f347a8f9c1d2a316aec1ba",
+        "visibility": "public"
+      },
+      {
+        "base_classes": [],
+        "brief_description": "Abstract base class that users subclass to define schema migrations.",
+        "component_id": null,
+        "composes": [
+          {
+            "argsstring": "(Transaction&)",
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Roll back the migration within a cpp-sqlite Transaction (pure virtual)",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:919",
+            "file_path": "",
+            "is_const": false,
+            "is_constexpr": false,
+            "is_explicit": false,
+            "is_inline": false,
+            "is_static": false,
+            "is_virtual": false,
+            "kind": "method",
+            "line_number": null,
+            "name": "down",
+            "qualified_name": "cpp_sqlite::Migration::down",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "MethodNode",
+            "type_signature": "void (cpp_sqlite::Transaction&)",
+            "uid": "bc723a5f8b668c8df8486dbc0d6fa2475cef9583",
+            "visibility": "public"
+          },
+          {
+            "argsstring": "(Transaction&)",
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Apply the migration within a cpp-sqlite Transaction (pure virtual)",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:918",
+            "file_path": "",
+            "is_const": false,
+            "is_constexpr": false,
+            "is_explicit": false,
+            "is_inline": false,
+            "is_static": false,
+            "is_virtual": false,
+            "kind": "method",
+            "line_number": null,
+            "name": "up",
+            "qualified_name": "cpp_sqlite::Migration::up",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "MethodNode",
+            "type_signature": "void (cpp_sqlite::Transaction&)",
+            "uid": "5d88cf45a464fa054ff5276e80f8a2d728fe2561",
+            "visibility": "public"
+          },
+          {
+            "argsstring": "()",
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Return the migration version number (pure virtual)",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:917",
+            "file_path": "",
+            "is_const": false,
+            "is_constexpr": false,
+            "is_explicit": false,
+            "is_inline": false,
+            "is_static": false,
+            "is_virtual": false,
+            "kind": "method",
+            "line_number": null,
+            "name": "getVersion",
+            "qualified_name": "cpp_sqlite::Migration::getVersion",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "MethodNode",
+            "type_signature": "int",
+            "uid": "36ec165837344452a16fb797c74721fa83d369e3",
+            "visibility": "public"
+          }
+        ],
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [
+          {
+            "relation_type": "DEPENDS_ON",
+            "target_type": "ClassNode",
+            "target_uid": "523e24d119bc34003dc1dcecb3cd55b96f38a9e8"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:916",
+        "file_path": "",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "class",
+        "line_number": null,
+        "module": "",
+        "name": "Migration",
+        "qualified_name": "cpp_sqlite::Migration",
+        "refid": "",
+        "source": "markdown-import",
+        "source_type": "",
+        "tags": [
+          "design"
+        ],
+        "type": "ClassNode",
+        "uid": "b9212531b58fb98bf3a8277b8630bf06a29a4e7d",
+        "visibility": "public"
+      },
+      {
+        "base_classes": [
+          "std::runtime_error"
+        ],
+        "brief_description": "Exception thrown when a transaction operation fails.",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:699",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBTransaction.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "class",
+        "line_number": 17,
+        "module": "cpp_sqlite",
+        "name": "TransactionError",
+        "qualified_name": "cpp_sqlite::TransactionError",
+        "refid": "classcpp__sqlite_1_1_transaction_error",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "287e27bf5118f18040832e89be762ec8f21307d7",
+        "visibility": ""
+      },
+      {
+        "base_classes": [],
+        "brief_description": "RAII-style transaction management for SQLite database operations.",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "This class provides automatic transaction management with the following features: Automatic rollback if the transaction is not explicitly committed Support for nested transactions via savepoints Exception-safe resource management Usage: Database db( \"test.db\" , true ); { Transaction txn(db); // ... perform database operations ... txn.commit(); // Explicit commit } // If commit() is not called, destructor will rollback For nested transactions: Database db( \"test.db\" , true ); { Transaction outer(db); // ... some operations ... { Transaction inner(db); // Creates a savepoint // ... more operations ... inner.commit(); // Releases savepoint } outer.commit(); }",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:681",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBTransaction.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "class",
+        "line_number": 61,
+        "module": "cpp_sqlite",
+        "name": "Transaction",
+        "qualified_name": "cpp_sqlite::Transaction",
+        "refid": "classcpp__sqlite_1_1_transaction",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "523e24d119bc34003dc1dcecb3cd55b96f38a9e8",
+        "visibility": ""
+      },
+      {
+        "base_classes": [],
+        "brief_description": "Container for repeated (one-to-many) fields in transfer objects.",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "This represents a collection of transfer objects that forms a one-to-many relationship in the database (typically requiring a junction table). T Must be a SingleTransferObject (not another RepeatedField) Example usage: struct Tag : BaseTransferObject { std::string name; }; struct Article : BaseTransferObject { std::string title; RepeatedFieldTransferObject<Tag> tags; // One-to-many relationship }; The constraint SingleTransferObject ensures you cannot nest repeated fields: RepeatedFieldTransferObject<RepeatedFieldTransferObject<Tag>> // Compile error!",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:679",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBRepeatedFieldTransferObject.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": 36,
+        "module": "cpp_sqlite",
+        "name": "RepeatedFieldTransferObject",
+        "qualified_name": "cpp_sqlite::RepeatedFieldTransferObject",
+        "refid": "structcpp__sqlite_1_1_repeated_field_transfer_object",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "088bac51faa342e43b512634f434cff5cc71d3fe",
+        "visibility": ""
+      },
+      {
+        "base_classes": [],
+        "brief_description": "",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:666",
+        "file_path": "cpp_sqlite/src/utils/Logger.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "class",
+        "line_number": 17,
+        "module": "cpp_sqlite",
+        "name": "Logger",
+        "qualified_name": "cpp_sqlite::Logger",
+        "refid": "classcpp__sqlite_1_1_logger",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "3aa5a57f058c6f22014465ab79659abce9d01a87",
+        "visibility": ""
+      },
+      {
+        "base_classes": [
+          "std::false_type"
+        ],
+        "brief_description": "",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:665",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBTraits.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": 48,
+        "module": "cpp_sqlite",
+        "name": "IsVector",
+        "qualified_name": "cpp_sqlite::IsVector",
+        "refid": "structcpp__sqlite_1_1_is_vector",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "409c513ed70da3cf73387cfc2ace89a518d3a5d3",
+        "visibility": ""
+      },
+      {
+        "base_classes": [
+          "std::false_type",
+          "std::true_type"
+        ],
+        "brief_description": "",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:664",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBTraits.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": 110,
+        "module": "cpp_sqlite",
+        "name": "IsForeignKeyT< ForeignKey< T > >",
+        "qualified_name": "cpp_sqlite::IsForeignKeyT< ForeignKey< T > >",
+        "refid": "structcpp__sqlite_1_1_is_foreign_key_t_3_01_foreign_key_3_01_t_01_4_01_4",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "1cb05bd81a6243368e512f0466000b5d65cf2916",
+        "visibility": ""
+      },
+      {
+        "base_classes": [
+          "std::false_type"
+        ],
+        "brief_description": "",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:663",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBTraits.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": 104,
+        "module": "cpp_sqlite",
+        "name": "IsForeignKeyT",
+        "qualified_name": "cpp_sqlite::IsForeignKeyT",
+        "refid": "structcpp__sqlite_1_1_is_foreign_key_t",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "bdb31f04e33ef6a7dfab9a2f058caf16f30f97e9",
+        "visibility": ""
+      },
+      {
+        "base_classes": [],
+        "brief_description": "",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:660",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBTraits.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": 89,
+        "module": "cpp_sqlite",
+        "name": "GetRepeatedFieldParams< RepeatedFieldTransferObject< T > >",
+        "qualified_name": "cpp_sqlite::GetRepeatedFieldParams< RepeatedFieldTransferObject< T > >",
+        "refid": "structcpp__sqlite_1_1_get_repeated_field_params_3_01_repeated_field_transfer_object_3_01_t_01_4_01_4",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "b3839d1b8f3a0e6bc445d41f458684d9a807bad1",
+        "visibility": ""
+      },
+      {
+        "base_classes": [],
+        "brief_description": "",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:658",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBTraits.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": 82,
+        "module": "cpp_sqlite",
+        "name": "GetRepeatedFieldParams",
+        "qualified_name": "cpp_sqlite::GetRepeatedFieldParams",
+        "refid": "structcpp__sqlite_1_1_get_repeated_field_params",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "6f984e34e1f7f3f7716a2640142478fa508492b4",
+        "visibility": ""
+      },
+      {
+        "base_classes": [],
+        "brief_description": "",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:656",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBTraits.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": 125,
+        "module": "cpp_sqlite",
+        "name": "ForeignKeyTypeT< ForeignKey< T > >",
+        "qualified_name": "cpp_sqlite::ForeignKeyTypeT< ForeignKey< T > >",
+        "refid": "structcpp__sqlite_1_1_foreign_key_type_t_3_01_foreign_key_3_01_t_01_4_01_4",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "436d4e20ee6487ecc06f2dbf339e095688665077",
+        "visibility": ""
+      },
+      {
+        "base_classes": [],
+        "brief_description": "",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:655",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBTraits.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": 120,
+        "module": "cpp_sqlite",
+        "name": "ForeignKeyTypeT",
+        "qualified_name": "cpp_sqlite::ForeignKeyTypeT",
+        "refid": "structcpp__sqlite_1_1_foreign_key_type_t",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "f35c9a87505090050c7436ab2269d9b28f47b06c",
+        "visibility": ""
+      },
+      {
+        "base_classes": [],
+        "brief_description": "ForeignKey<T> stores only the ID of a related object T.",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "This allows lazy loading - the full object is not loaded from the database until explicitly requested via the resolve() method. Use this when you want to reference another table without the overhead of loading the full nested object during SELECT operations. Example: struct Vertex3D : public cpp_sqlite::BaseTransferObject { float x, y, z; }; struct RigidBody : public cpp_sqlite::BaseTransferObject { std::string name; ForeignKey<Vertex3D> centerOfMass; // Lazy - just stores ID Vertex3D position; // Eager - auto-loads full object }; // Usage: auto body = bodyDAO.selectById(1); std::cout << \"Center FK ID: \" << body->centerOfMass.id << \"\\n\" ; // Load the full vertex only when needed auto vertex = body->centerOfMass.resolve(db); if (vertex) { std::cout << \"Center: \" << vertex->x << \", \" << vertex->y << \"\\n\" ; }",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:648",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBForeignKey.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": 53,
+        "module": "cpp_sqlite",
+        "name": "ForeignKey",
+        "qualified_name": "cpp_sqlite::ForeignKey",
+        "refid": "structcpp__sqlite_1_1_foreign_key",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "b6a75c580e7095cca118bf3b43f743247ccaa030",
+        "visibility": ""
+      },
+      {
+        "base_classes": [],
+        "brief_description": "",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:635",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBDatabase.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "class",
+        "line_number": 37,
+        "module": "cpp_sqlite",
+        "name": "Database",
+        "qualified_name": "cpp_sqlite::Database",
+        "refid": "classcpp__sqlite_1_1_database",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "b927d76a5a666d19ca90f227d5edf5bb4904f7b7",
+        "visibility": ""
+      },
+      {
+        "base_classes": [
+          "DAOBase"
+        ],
+        "brief_description": "",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:602",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBDataAccessObject.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "class",
+        "line_number": 31,
+        "module": "cpp_sqlite",
+        "name": "DataAccessObject",
+        "qualified_name": "cpp_sqlite::DataAccessObject",
+        "refid": "classcpp__sqlite_1_1_data_access_object",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "2f9d8b05eeab998fe3606cb2f38a802dba11ddb7",
+        "visibility": ""
+      },
+      {
+        "base_classes": [],
+        "brief_description": "The fundamental transfer object for SQL operations.",
+        "component_id": null,
+        "definition": "",
+        "detailed_description": "The Base Transfer Object simply contains an identifier, used for SQL operations and assumed to be the primary key for the associated table. Any subsequent transfer object should inherit from this to enforce the primary key behavior.",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:600",
+        "file_path": "cpp_sqlite/src/cpp_sqlite/DBBaseTransferObject.hpp",
+        "is_abstract": false,
+        "is_final": false,
+        "kind": "struct",
+        "line_number": 21,
+        "module": "cpp_sqlite",
+        "name": "BaseTransferObject",
+        "qualified_name": "cpp_sqlite::BaseTransferObject",
+        "refid": "structcpp__sqlite_1_1_base_transfer_object",
+        "source": "cpp_sqlite",
+        "source_type": "header",
+        "tags": [],
+        "type": "ClassNode",
+        "uid": "caabc73e69f371f7edac93faef50a2f2f6a7feea",
+        "visibility": ""
+      },
+      {
+        "brief_description": "Kinds of schema mismatch detected during verification.",
+        "component_id": null,
+        "composes": [
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Live schema checksum does not match the stored checksum",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:947",
+            "file_path": "",
+            "kind": "enumvalue",
+            "line_number": null,
+            "name": "ChecksumMismatch",
+            "qualified_name": "cpp_sqlite::MismatchKind::ChecksumMismatch",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "EnumValueNode",
+            "uid": "90987d3cb462d53e97e437b9c3655cc89454a4c9",
+            "visibility": ""
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "A column definition differs from the expected schema",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:946",
+            "file_path": "",
+            "kind": "enumvalue",
+            "line_number": null,
+            "name": "ColumnDifference",
+            "qualified_name": "cpp_sqlite::MismatchKind::ColumnDifference",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "EnumValueNode",
+            "uid": "0f2ff146272407930c47e7c2a0920c1cf8a5ae99",
+            "visibility": ""
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "A table exists that is not expected by any migration",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:945",
+            "file_path": "",
+            "kind": "enumvalue",
+            "line_number": null,
+            "name": "ExtraTable",
+            "qualified_name": "cpp_sqlite::MismatchKind::ExtraTable",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "EnumValueNode",
+            "uid": "7f1af50e4937065e2613dd695e7e5c9124823805",
+            "visibility": ""
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "A table expected by the migration does not exist",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:944",
+            "file_path": "",
+            "kind": "enumvalue",
+            "line_number": null,
+            "name": "MissingTable",
+            "qualified_name": "cpp_sqlite::MismatchKind::MissingTable",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "EnumValueNode",
+            "uid": "a54e289352088b3d7361a038c1bef238e3d9c874",
+            "visibility": ""
+          }
+        ],
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:943",
+        "file_path": "",
+        "kind": "enum",
+        "line_number": null,
+        "module": "",
+        "name": "MismatchKind",
+        "qualified_name": "cpp_sqlite::MismatchKind",
+        "refid": "",
+        "source": "markdown-import",
+        "source_type": "",
+        "tags": [
+          "design"
+        ],
+        "type": "EnumNode",
+        "uid": "e87800f3a6464d347ce338581076eb1842951285",
+        "visibility": "public"
+      },
+      {
+        "brief_description": "Error codes for migration operation results.",
+        "component_id": null,
+        "composes": [
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "No migrations have been applied (schema_versions is empty)",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:938",
+            "file_path": "",
+            "kind": "enumvalue",
+            "line_number": null,
+            "name": "NotInitialized",
+            "qualified_name": "cpp_sqlite::MigrationErrorCode::NotInitialized",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "EnumValueNode",
+            "uid": "0d43ce408285675cda18db3584e9c13ac24391ba",
+            "visibility": ""
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Target version does not match any registered migration",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:937",
+            "file_path": "",
+            "kind": "enumvalue",
+            "line_number": null,
+            "name": "VersionNotFound",
+            "qualified_name": "cpp_sqlite::MigrationErrorCode::VersionNotFound",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "EnumValueNode",
+            "uid": "cfc95af65955d382972cfab6b604522d58635d3c",
+            "visibility": ""
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "A migration's down() method threw an exception",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:936",
+            "file_path": "",
+            "kind": "enumvalue",
+            "line_number": null,
+            "name": "RollbackFailed",
+            "qualified_name": "cpp_sqlite::MigrationErrorCode::RollbackFailed",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "EnumValueNode",
+            "uid": "331cf2fe4647943437ba5ae0deb43f75b1df5bb6",
+            "visibility": ""
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "A migration's up() method threw an exception",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:935",
+            "file_path": "",
+            "kind": "enumvalue",
+            "line_number": null,
+            "name": "MigrationFailed",
+            "qualified_name": "cpp_sqlite::MigrationErrorCode::MigrationFailed",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "EnumValueNode",
+            "uid": "231f6fa1c6f2384b53a00dcb87a9b4c0b79e5bc8",
+            "visibility": ""
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "A migration with this version is already registered",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:934",
+            "file_path": "",
+            "kind": "enumvalue",
+            "line_number": null,
+            "name": "DuplicateVersion",
+            "qualified_name": "cpp_sqlite::MigrationErrorCode::DuplicateVersion",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "EnumValueNode",
+            "uid": "a8ac562a12ec9356b94d0bf7b883c169f913ea40",
+            "visibility": ""
+          },
+          {
+            "body_end": 0,
+            "body_start": 0,
+            "brief_description": "Operation completed successfully",
+            "component_id": null,
+            "compound_refid": "",
+            "definition": "",
+            "detailed_description": "",
+            "doc_embedding": [],
+            "edges": [],
+            "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:933",
+            "file_path": "",
+            "kind": "enumvalue",
+            "line_number": null,
+            "name": "Success",
+            "qualified_name": "cpp_sqlite::MigrationErrorCode::Success",
+            "refid": "",
+            "source": "markdown-import",
+            "tags": [
+              "design"
+            ],
+            "type": "EnumValueNode",
+            "uid": "7a8431a81e16495ab89a7f4e13ad0f46c76b7f90",
+            "visibility": ""
+          }
+        ],
+        "definition": "",
+        "detailed_description": "",
+        "doc_embedding": [],
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:932",
+        "file_path": "",
+        "kind": "enum",
+        "line_number": null,
+        "module": "",
+        "name": "MigrationErrorCode",
+        "qualified_name": "cpp_sqlite::MigrationErrorCode",
+        "refid": "",
+        "source": "markdown-import",
+        "source_type": "",
+        "tags": [
+          "design"
+        ],
+        "type": "EnumNode",
+        "uid": "b558c70b4289ab6e5bd6d15f9a8943d3f133d334",
+        "visibility": "public"
+      }
+    ],
+    "description": "",
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:599",
+    "kind": "namespace",
+    "name": "cpp_sqlite",
+    "qualified_name": "cpp_sqlite",
+    "refid": "namespacecpp__sqlite",
+    "source": "cpp_sqlite",
+    "tags": [
+      "design"
+    ],
+    "type": "NamespaceNode",
+    "uid": "90da100e7fd16fbc6942c6068ff6f305ab02ab69"
+  },
+  {
+    "brief_description": "",
+    "detailed_description": "",
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:890",
+    "kind": "literal",
+    "name": "true",
+    "qualified_name": "literal::true",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "LiteralNode",
+    "uid": "94246dd625a7addc2b60aff9926573c10385306d",
+    "value": "true",
+    "value_type": "boolean"
+  },
+  {
+    "brief_description": "",
+    "detailed_description": "",
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:892",
+    "kind": "literal",
+    "name": "1",
+    "qualified_name": "literal::1",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "LiteralNode",
+    "uid": "ed69f003c463d0e9f09369ec9886ac4886bc06e6",
+    "value": "1",
+    "value_type": "int"
+  },
+  {
+    "brief_description": "",
+    "detailed_description": "",
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:894",
+    "kind": "literal",
+    "name": "3",
+    "qualified_name": "literal::3",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "LiteralNode",
+    "uid": "a10b9c0f15463837610d18567f8bce335d85cbb8",
+    "value": "3",
+    "value_type": "int"
+  },
+  {
+    "brief_description": "",
+    "detailed_description": "",
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:896",
+    "kind": "literal",
+    "name": "false",
+    "qualified_name": "literal::false",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "LiteralNode",
+    "uid": "50e8ec71e5657068e56386cf88072d769cfa5de5",
+    "value": "false",
+    "value_type": "boolean"
+  },
+  {
+    "brief_description": "",
+    "detailed_description": "",
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:899",
+    "kind": "literal",
+    "name": "0",
+    "qualified_name": "literal::0",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "type": "LiteralNode",
+    "uid": "bbde3e0a8d001f3ed9af55c6d1caf739a01d49e3",
+    "value": "0",
+    "value_type": "int"
+  },
+  {
+    "composes": [
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "4adb062509e00ede2a6036b3a0669312d57df96a"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:828",
+        "kind": "assertion",
+        "name": "reg_dup_first_migration_registered",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "pre",
+        "qualified_name": "cond::pre::reg_dup_first_migration_registered",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "1a8f00272c1688c3805cd936fac2d0fc98267033"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "cc1d8cfd3166a849f5cb722fea1953a764a5aad7"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:827",
+        "kind": "assertion",
+        "name": "reg_dup_original_retained",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::reg_dup_original_retained",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "53d52d71c4a59357d82457b472360e8abff1f271"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "71378026994c2f2e0c5b2487e6bff89183821ab7"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "8137f2f72d997c77f1790d67ec0acd9b95026603"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:826",
+        "kind": "assertion",
+        "name": "reg_dup_error_is_duplicate",
+        "operator": "==",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::reg_dup_error_is_duplicate",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "edc1eaa0df2ae9eddd2780bcbb46540d96594bd0"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Invoke register_migration with a migration at version 1",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:830",
+        "kind": "test_step",
+        "name": "reg_dup_invoke_register_first",
+        "order": 0,
+        "qualified_name": "step::reg_dup_invoke_register_first",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "d92af71e88d7c089d3e82c49e96755457478b401"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Invoke register_migration with a second migration having the same version as the first",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:829",
+        "kind": "test_step",
+        "name": "reg_dup_invoke_register_second",
+        "order": 0,
+        "qualified_name": "step::reg_dup_invoke_register_second",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "6c631ae302ed7d95583fa95a73b6d425df0ff022"
+      }
+    ],
+    "description": "Register two migrations with the same version number. Verify the second registration returns an error result indicating a duplicate version error. Verify the original migration remains registered.",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:825",
+    "file_path": "",
+    "kind": "test",
+    "line_number": null,
+    "method": "automated",
+    "name": "test_duplicate_version_rejected",
+    "qualified_name": "vm::migration_registration::test_duplicate_version_rejected",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "test_module": "",
+    "test_name": "test_register_migration_rejects_duplicate_version",
+    "type": "TestNode",
+    "uid": "ca8394587618be93a4f1776d275338559bdf192e"
+  },
+  {
+    "composes": [
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "4adb062509e00ede2a6036b3a0669312d57df96a"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:833",
+        "kind": "assertion",
+        "name": "reg_sort_no_migrations",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "pre",
+        "qualified_name": "cond::pre::reg_sort_no_migrations",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "cd4fbf56566e1e97c0449c81f224406b88b24d3d"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "cc1d8cfd3166a849f5cb722fea1953a764a5aad7"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "ed69f003c463d0e9f09369ec9886ac4886bc06e6"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:832",
+        "kind": "assertion",
+        "name": "reg_sort_order_correct",
+        "operator": "==",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::reg_sort_order_correct",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "5a8f0ad83674a385d2bf0f08dd47f548cbc37f68"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Register migrations at versions 3, 1, 2",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:834",
+        "kind": "test_step",
+        "name": "reg_sort_register_three",
+        "order": 0,
+        "qualified_name": "step::reg_sort_register_three",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "057270d71fd0556a43e8558151aa2cfedaeccf0b"
+      }
+    ],
+    "description": "Register migrations at versions 3, 1, and 2. Verify the manager stores them in ascending version order [1, 2, 3] regardless of registration order.",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:831",
+    "file_path": "",
+    "kind": "test",
+    "line_number": null,
+    "method": "automated",
+    "name": "test_sorted_by_version",
+    "qualified_name": "vm::migration_registration::test_sorted_by_version",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "test_module": "",
+    "test_name": "test_register_migration_sorts_by_version",
+    "type": "TestNode",
+    "uid": "26be269ccc36b65b1862d0b508ef1a6fd513ac47"
+  },
+  {
+    "composes": [
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "4adb062509e00ede2a6036b3a0669312d57df96a"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:841",
+        "kind": "assertion",
+        "name": "apply_pending_version1_preexists",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "pre",
+        "qualified_name": "cond::pre::apply_pending_version1_preexists",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "3f030a87e186dc6c7cbed10fdeeaa1912f2e9553"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "f4a8bbc168a1d94832d30af799a9a749565c42d9"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "50e8ec71e5657068e56386cf88072d769cfa5de5"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:840",
+        "kind": "assertion",
+        "name": "apply_pending_version1_not_reapplied",
+        "operator": "is_false",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::apply_pending_version1_not_reapplied",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "c86ab8d2c1ee643f3590e0ce0f2386d3b2ea55a7"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "c4a7155f92b2512e432f72cfee84fdebb036a0bb"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:839",
+        "kind": "assertion",
+        "name": "apply_pending_version2_recorded",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::apply_pending_version2_recorded",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "1bd6eefbfaa5a81bb833fbeb6e34adc0652c237c"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "287fe11f47bcecc1600e22be2aa0d6cb73855abb"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:838",
+        "kind": "assertion",
+        "name": "apply_pending_version3_recorded",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::apply_pending_version3_recorded",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "a491eb5aed31a5ebcbd8da8cd76306befd27df9e"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "cc1d8cfd3166a849f5cb722fea1953a764a5aad7"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "a10b9c0f15463837610d18567f8bce335d85cbb8"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:837",
+        "kind": "assertion",
+        "name": "apply_pending_count_correct",
+        "operator": "==",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::apply_pending_count_correct",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "7919a78e5ce53fd3b43c921b70881d0451f53dbd"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Register migrations at versions 1, 2, 3",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:844",
+        "kind": "test_step",
+        "name": "apply_pending_register_migrations",
+        "order": 0,
+        "qualified_name": "step::apply_pending_register_migrations",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "bc68bc68d4ca90e22d1f67064f9d4ee46f8dcf3e"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Pre-populate schema_versions table with version 1 as applied",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:843",
+        "kind": "test_step",
+        "name": "apply_pending_prepopulate_schema_versions",
+        "order": 0,
+        "qualified_name": "step::apply_pending_prepopulate_schema_versions",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "674ff5db0b52d2a30bc227f509e4e81aaae062eb"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Invoke apply on the migration manager",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:842",
+        "kind": "test_step",
+        "name": "apply_pending_invoke_apply",
+        "order": 0,
+        "qualified_name": "step::apply_pending_invoke_apply",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "2ac2ee63a1d46a1a74ee3e58557d65b1daee0e42"
+      }
+    ],
+    "description": "Register three migrations at versions 1, 2, 3. Pre-populate `schema_versions` with version 1 already applied. Invoke `apply`. Verify only versions 2 and 3 are executed. Verify `schema_versions` now contains versions 2 and 3. Verify the total number of applied migrations is 3.",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:836",
+    "file_path": "",
+    "kind": "test",
+    "line_number": null,
+    "method": "automated",
+    "name": "test_applies_only_pending",
+    "qualified_name": "vm::migration_apply::test_applies_only_pending",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "test_module": "",
+    "test_name": "test_apply_migration_applies_only_pending",
+    "type": "TestNode",
+    "uid": "fa579aea5f1ae19009e2e87b15d4fdc49635a3fe"
+  },
+  {
+    "composes": [
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "4adb062509e00ede2a6036b3a0669312d57df96a"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:850",
+        "kind": "assertion",
+        "name": "apply_fail_migrations_registered",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "pre",
+        "qualified_name": "cond::pre::apply_fail_migrations_registered",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "972643ff296009489f2f5a983df79e8a0b5bd781"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "2bddec4cf45764e50d46cfa2659a1f2be78213b9"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:849",
+        "kind": "assertion",
+        "name": "apply_fail_version1_recorded",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::apply_fail_version1_recorded",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "f620f533b45bb68d2013bf70e8fd0d4e370803d0"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "685281acf5ce4fc95e08a303f9fb82afcfb20b1c"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:848",
+        "kind": "assertion",
+        "name": "apply_fail_version2_not_recorded",
+        "operator": "is_false",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::apply_fail_version2_not_recorded",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "e6e76836b0eb137c2a2f5987c66cd04dd142b090"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "8b0e92a68faa3598a24406c12922a1a187ffe5b6"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:847",
+        "kind": "assertion",
+        "name": "apply_fail_error_signaled",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::apply_fail_error_signaled",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "8f4daca149b7107a4c2ed0cc91cdff69d50269a7"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "ab5036f45500d42c31c2711501e8f7046b152ad1"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:846",
+        "kind": "assertion",
+        "name": "apply_fail_earlier_schema_preserved",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::apply_fail_earlier_schema_preserved",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "0d4a4336dbd433071462e7ee2510b9674ee2ea56"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Register a succeeding migration (v1) and a failing migration (v2)",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:852",
+        "kind": "test_step",
+        "name": "apply_fail_register_migrations",
+        "order": 0,
+        "qualified_name": "step::apply_fail_register_migrations",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "6f120d243ec3212a71750382b074f7994008a4fb"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Invoke apply on the migration manager",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:851",
+        "kind": "test_step",
+        "name": "apply_fail_invoke_apply",
+        "order": 0,
+        "qualified_name": "step::apply_fail_invoke_apply",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "6d50cb47f72cadd0e4e43f1773be84fbec71974b"
+      }
+    ],
+    "description": "Register two migrations at version 1 (succeeds) and version 2 (whose `up` method throws a `std::runtime_error`). Invoke `apply`. Verify version 1 is marked as applied in `schema_versions`. Verify version 2 is NOT marked as applied. Verify the apply operation signals an error indicating the migration failure. Verify the database still contains any schema objects created by version 1.",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:845",
+    "file_path": "",
+    "kind": "test",
+    "line_number": null,
+    "method": "automated",
+    "name": "test_up_failure_rolls_back",
+    "qualified_name": "vm::migration_apply::test_up_failure_rolls_back",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "test_module": "",
+    "test_name": "test_apply_migration_rolls_back_on_up_failure",
+    "type": "TestNode",
+    "uid": "4ab61697f76ad3ea451ec1889eb89e4bc213f841"
+  },
+  {
+    "composes": [
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "4adb062509e00ede2a6036b3a0669312d57df96a"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:855",
+        "kind": "assertion",
+        "name": "apply_order_migrations_registered",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "pre",
+        "qualified_name": "cond::pre::apply_order_migrations_registered",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "b6c00d4814401758f11c31c7370ec53f25a35fb9"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "520e07ce12ee008ebbb4b4783864231c7ac14dda"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "ed69f003c463d0e9f09369ec9886ac4886bc06e6"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:854",
+        "kind": "assertion",
+        "name": "apply_order_is_ascending",
+        "operator": "==",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::apply_order_is_ascending",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "e581ab55838c03e3f91d7675061cd807569e997f"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Register migrations at versions 1, 2, 3",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:857",
+        "kind": "test_step",
+        "name": "apply_order_register_migrations",
+        "order": 0,
+        "qualified_name": "step::apply_order_register_migrations",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "a80f307c51691c86a9d93e8b497a72aca4d7c696"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Invoke apply on the migration manager",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:856",
+        "kind": "test_step",
+        "name": "apply_order_invoke_apply",
+        "order": 0,
+        "qualified_name": "step::apply_order_invoke_apply",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "3c82365c09ecbc786aff8f6114f69fd1acf17b5a"
+      }
+    ],
+    "description": "Register three migrations at versions 1, 2, 3 where each `up` method records its execution in a shared vector. Invoke `apply`. Verify the execution order recorded is [1, 2, 3].",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:853",
+    "file_path": "",
+    "kind": "test",
+    "line_number": null,
+    "method": "automated",
+    "name": "test_apply_in_order",
+    "qualified_name": "vm::migration_apply::test_apply_in_order",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "test_module": "",
+    "test_name": "test_apply_migration_executes_in_version_order",
+    "type": "TestNode",
+    "uid": "77e20b6c5f82cd4b78a5bba8ff2e14b1f98c28ed"
+  },
+  {
+    "composes": [
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "eefea8a6bb880cad6a95d9ff0d8e5d59a6d30f47"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:863",
+        "kind": "assertion",
+        "name": "verify_migration_applied",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "pre",
+        "qualified_name": "cond::pre::verify_migration_applied",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "6147c8eac31e8e7de5d8a31db2011f111abc18d3"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "09badcbbdf39d32b0d6b8dbef327e2b89c6a216e"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "ed69f003c463d0e9f09369ec9886ac4886bc06e6"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:862",
+        "kind": "assertion",
+        "name": "verify_mismatch_count_is_1",
+        "operator": "==",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::verify_mismatch_count_is_1",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "45a1e78baf0a9a7c3753763c8022f4fa8f8bfd69"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "228dbbd4a9c20e6083cd92501a51126277eb0fe6"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "ed69f003c463d0e9f09369ec9886ac4886bc06e6"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:861",
+        "kind": "assertion",
+        "name": "verify_mismatch_version_is_1",
+        "operator": "==",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::verify_mismatch_version_is_1",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "c66c43694d65f5d91f2a6e427b9b55df251568df"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "3e3a75d52a9165834a7380c9bc47c39d3507ee69"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "2e90ccfcf6266c16889993fab3b6ed4f461457e8"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:860",
+        "kind": "assertion",
+        "name": "verify_mismatch_kind_extra_table",
+        "operator": "==",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::verify_mismatch_kind_extra_table",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "4d48a900ececcfe57b95cac5e060af1293d4daa7"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Register and apply a migration at version 1 that creates a table \"users\"",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:866",
+        "kind": "test_step",
+        "name": "verify_register_and_apply_migration",
+        "order": 0,
+        "qualified_name": "step::verify_register_and_apply_migration",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "d343d23665cbaaaa62c3b2025aea9d9ac3d2923b"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Manually add an unexpected table \"extra\" to the database",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:865",
+        "kind": "test_step",
+        "name": "verify_add_unexpected_table",
+        "order": 0,
+        "qualified_name": "step::verify_add_unexpected_table",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "fd95225f7344bf09be30e8f704b1eb8eb74cb4c5"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Invoke verify on the migration manager",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:864",
+        "kind": "test_step",
+        "name": "verify_invoke_verify",
+        "order": 0,
+        "qualified_name": "step::verify_invoke_verify",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "0d38745384f6ecd2b2283a6f3d1ac03b09888093"
+      }
+    ],
+    "description": "Register and apply a migration at version 1 that creates a table \"users\". Then manually alter the database to add an unexpected table \"extra\". Invoke verify. Verify the result contains one mismatch entry. Verify the mismatch reports version 1 and `MismatchKind::ChecksumMismatch`, with a detail describing the schema difference.",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:859",
+    "file_path": "",
+    "kind": "test",
+    "line_number": null,
+    "method": "automated",
+    "name": "test_mismatch_detected",
+    "qualified_name": "vm::schema_verify::test_mismatch_detected",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "test_module": "",
+    "test_name": "test_verify_detects_schema_mismatch",
+    "type": "TestNode",
+    "uid": "685fcfdd88d96463a0850113f0f89923475678cf"
+  },
+  {
+    "composes": [
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "4adb062509e00ede2a6036b3a0669312d57df96a"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:869",
+        "kind": "assertion",
+        "name": "verify_consistent_migration_applied",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "pre",
+        "qualified_name": "cond::pre::verify_consistent_migration_applied",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "5951adf3b54c0d8618bd02651b485c7bc2269dff"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "09badcbbdf39d32b0d6b8dbef327e2b89c6a216e"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "bbde3e0a8d001f3ed9af55c6d1caf739a01d49e3"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:868",
+        "kind": "assertion",
+        "name": "verify_consistent_no_mismatches",
+        "operator": "==",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::verify_consistent_no_mismatches",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "0b428eb36032665672b6359e1777422d023575f5"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Register and apply a migration at version 1 that creates table \"users\"",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:871",
+        "kind": "test_step",
+        "name": "verify_consistent_apply_migration",
+        "order": 0,
+        "qualified_name": "step::verify_consistent_apply_migration",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "c1614c78df995760e29592e818230876b0392750"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Invoke verify on the migration manager",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:870",
+        "kind": "test_step",
+        "name": "verify_consistent_invoke_verify",
+        "order": 0,
+        "qualified_name": "step::verify_consistent_invoke_verify",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "02d01c0e209150ea760932a536299e2841d55b7f"
+      }
+    ],
+    "description": "Register and apply a migration at version 1 that creates a table \"users\". Do not modify the schema afterward. Invoke verify. Verify the result contains zero mismatches.",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:867",
+    "file_path": "",
+    "kind": "test",
+    "line_number": null,
+    "method": "automated",
+    "name": "test_consistent_schema",
+    "qualified_name": "vm::schema_verify::test_consistent_schema",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "test_module": "",
+    "test_name": "test_verify_reports_consistent_schema",
+    "type": "TestNode",
+    "uid": "4f4ca4bfc45ad895ec2563a11eacca7947609ac0"
+  },
+  {
+    "composes": [
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "4adb062509e00ede2a6036b3a0669312d57df96a"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:877",
+        "kind": "assertion",
+        "name": "rollback_three_migrations_applied",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "pre",
+        "qualified_name": "cond::pre::rollback_three_migrations_applied",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "459eb78d15d31e49498b108c0f4fe2727c09b75f"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "17aecaa5c47e422d10c81e91689d687f5e8b4590"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:876",
+        "kind": "assertion",
+        "name": "rollback_down_called",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::rollback_down_called",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "16aea49e67b6746997969bc7440f43d914eda4fc"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "ddf850e15cc89924ed9c362bbc9372cbae892376"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:875",
+        "kind": "assertion",
+        "name": "rollback_versions_1_and_2_remain",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::rollback_versions_1_and_2_remain",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "57c5160d3e8d29af7b5d8ba0efcb20ed9b4c3277"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "ed2a4158bb4e681f1d9f89f38d123fc13a0dbcdc"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:874",
+        "kind": "assertion",
+        "name": "rollback_version3_not_in_table",
+        "operator": "is_false",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::rollback_version3_not_in_table",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "5bf02c03938f88733590b0849d2930a8c1a333b6"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Register and apply migrations at versions 1, 2, 3",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:879",
+        "kind": "test_step",
+        "name": "rollback_apply_three_migrations",
+        "order": 0,
+        "qualified_name": "step::rollback_apply_three_migrations",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "d51040eb20128f46fb2d36f8512d805c40281c23"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Invoke rollback(2) on the migration manager",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:878",
+        "kind": "test_step",
+        "name": "rollback_invoke_rollback",
+        "order": 0,
+        "qualified_name": "step::rollback_invoke_rollback",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "c6c1391256c92e6d95a85104f262e1f07a516746"
+      }
+    ],
+    "description": "Apply migrations at versions 1, 2, 3. Invoke `rollback(2)`. Verify version 3's `down` method was called. Verify only versions 1 and 2 remain in `schema_versions`. Verify version 3 is not in `schema_versions`.",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:873",
+    "file_path": "",
+    "kind": "test",
+    "line_number": null,
+    "method": "automated",
+    "name": "test_rollback_to_version",
+    "qualified_name": "vm::rollback::test_rollback_to_version",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "test_module": "",
+    "test_name": "test_rollback_rolls_back_to_target_version",
+    "type": "TestNode",
+    "uid": "10c77f6d334bee8867b896e97bfc95ebac22f8ca"
+  },
+  {
+    "composes": [
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "4adb062509e00ede2a6036b3a0669312d57df96a"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:884",
+        "kind": "assertion",
+        "name": "rollback_fail_two_applied",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "pre",
+        "qualified_name": "cond::pre::rollback_fail_two_applied",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "8d9dc5514d45f135dfcc7533fd02edfc0b5f134b"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "2a7c3547166a9ba6a952ac912034d5aa322e0158"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:883",
+        "kind": "assertion",
+        "name": "rollback_fail_error_signaled",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::rollback_fail_error_signaled",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "8daa9a84720bd47019dd8aaab64d4dc99160040f"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "88631b67b8b7f908f5c83a57ee757cf076a99c85"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:882",
+        "kind": "assertion",
+        "name": "rollback_fail_version2_still_exists",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::rollback_fail_version2_still_exists",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "c9dc02192fe1949798d10188c799d403b66f937b"
+      },
+      {
+        "description": "",
+        "edges": [
+          {
+            "relation_type": "LEFT_OPERAND",
+            "target_type": "AttributeNode",
+            "target_uid": "ddc18b0965a6fe25e99d0fe126f3613045d07cd9"
+          },
+          {
+            "relation_type": "RIGHT_OPERAND",
+            "target_type": "LiteralNode",
+            "target_uid": "94246dd625a7addc2b60aff9926573c10385306d"
+          }
+        ],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:881",
+        "kind": "assertion",
+        "name": "rollback_fail_version1_preserved",
+        "operator": "is_true",
+        "order": 0,
+        "phase": "post",
+        "qualified_name": "cond::post::rollback_fail_version1_preserved",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "AssertionNode",
+        "uid": "078a37af4ea43a82f27a9c29c1946c27ed6b472f"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Register and apply migrations v1 (succeeds), v2 (fails on down)",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:886",
+        "kind": "test_step",
+        "name": "rollback_fail_apply_migrations",
+        "order": 0,
+        "qualified_name": "step::rollback_fail_apply_migrations",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "35f35c16cad96e7473b19d67c766b3c1434a12a1"
+      },
+      {
+        "body_end": 0,
+        "body_start": 0,
+        "description": "Invoke rollback(1) on the migration manager",
+        "edges": [],
+        "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:885",
+        "kind": "test_step",
+        "name": "rollback_fail_invoke_rollback",
+        "order": 0,
+        "qualified_name": "step::rollback_fail_invoke_rollback",
+        "refid": "",
+        "source": "markdown-import",
+        "tags": [
+          "design"
+        ],
+        "type": "TestStepNode",
+        "uid": "590371c94789589d4aaee728adc86f7195f1c64f"
+      }
+    ],
+    "description": "Apply migrations at versions 1 and 2 where version 2's `down` method throws. Invoke `rollback(1)`. Verify the operation signals an error. Verify version 2 remains in `schema_versions`. Verify version 1 still exists in `schema_versions`.",
+    "doc_embedding": [],
+    "edges": [],
+    "element_id_property": "4:8ebb307e-54ce-4f78-a436-332e574649d3:880",
+    "file_path": "",
+    "kind": "test",
+    "line_number": null,
+    "method": "automated",
+    "name": "test_down_failure_aborts",
+    "qualified_name": "vm::rollback::test_down_failure_aborts",
+    "refid": "",
+    "source": "markdown-import",
+    "tags": [
+      "design"
+    ],
+    "test_module": "",
+    "test_name": "test_rollback_aborts_on_down_failure",
+    "type": "TestNode",
+    "uid": "af58015a841018d8294e452dc145ced7d29dea95"
+  }
+]
