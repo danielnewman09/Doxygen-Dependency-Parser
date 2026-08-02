@@ -225,14 +225,10 @@ def verify_neo4j(result: ParseResult) -> None:
         return
 
     import os
-    uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-    user = os.environ.get("NEO4J_USER", "neo4j")
-    password = os.environ.get("NEO4J_PASSWORD", "msd-local-dev")
-
-    print(f"\nConnecting to Neo4j at {uri}...")
+    print(f"\nConnecting to Neo4j...")
     try:
-        from neomodel import db as neomodel_db
-        neomodel_db.set_connection(f'bolt://{user}:{password}@localhost:7687')
+        from codegraph import get_backend
+        get_backend()  # triggers lazy initialisation
     except Exception as e:
         print(f"Could not connect to Neo4j: {e}")
         print("Is Neo4j running? Try: docker compose up -d")

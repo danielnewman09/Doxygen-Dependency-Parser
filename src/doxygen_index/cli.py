@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -51,15 +50,6 @@ def _add_db_args(parser: argparse.ArgumentParser) -> None:
     """Add database and CSV target arguments."""
     parser.add_argument("--neo4j", action="store_true",
                         help="Ingest into Neo4j graph database")
-    parser.add_argument("--neo4j-uri",
-                        default=os.environ.get("NEO4J_URI", "bolt://localhost:7687"),
-                        help="Neo4j Bolt URI")
-    parser.add_argument("--neo4j-user",
-                        default=os.environ.get("NEO4J_USER", "neo4j"),
-                        help="Neo4j username")
-    parser.add_argument("--neo4j-password",
-                        default=os.environ.get("NEO4J_PASSWORD", "msd-local-dev"),
-                        help="Neo4j password")
     parser.add_argument("--csv", action="store_true",
                         help="Export to CSV files for neo4j-admin import")
     parser.add_argument("--csv-dir", default=None,
@@ -236,14 +226,11 @@ def cmd_project(args: argparse.Namespace) -> None:
 
     if args.format == "neo4j":
         from doxygen_index.neo4j_backend import (
-            connect_neo4j, ensure_schema, clear_source,
+            ensure_schema, clear_source,
             write_result as neo4j_write, update_result as neo4j_update,
         )
         print(f"\n--- {config.name} → Neo4j ---")
-        connect_neo4j(
-            uri=args.neo4j_uri, user=args.neo4j_user,
-            password=args.neo4j_password,
-        )
+        get_backend().health_check()
         ensure_schema()
         if args.clear:
             _confirm_destructive(f"source '{source}'", args.yes)
@@ -551,8 +538,6 @@ def cmd_ingest(args: argparse.Namespace) -> None:
             print(f"--- {dep_name} → Neo4j ---")
             neo4j_ingest(
                 xml_dir, source=dep_name,
-                uri=args.neo4j_uri, user=args.neo4j_user,
-                password=args.neo4j_password,
                 incremental=not args.clear,
             )
             print()
@@ -606,8 +591,6 @@ def cmd_full(args: argparse.Namespace) -> None:
             print(f"--- {dep_name} → Neo4j ---")
             neo4j_ingest(
                 xml_dir, source=dep_name,
-                uri=args.neo4j_uri, user=args.neo4j_user,
-                password=args.neo4j_password,
                 incremental=not args.clear,
             )
             print()
@@ -619,7 +602,7 @@ def cmd_full(args: argparse.Namespace) -> None:
         xml_count = len(list(xml_dir.glob("*.xml")))
         print(f"  {name}: {xml_count} XML files")
     if args.neo4j:
-        print(f"Neo4j: {args.neo4j_uri}")
+        print("Neo4j: configured via .env")
     if args.csv:
         csv_base = Path(args.csv_dir) if args.csv_dir else Path(args.output_dir) / "csv"
         print(f"CSV: {csv_base}")
@@ -760,14 +743,11 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
 
     if export_neo4j:
         from doxygen_index.neo4j_backend import (
-            connect_neo4j, ensure_schema, clear_source,
+            ensure_schema, clear_source,
             write_result as neo4j_write,
         )
-        print(f"\n--- {project_name} → Neo4j ({args.neo4j_uri}) ---")
-        connect_neo4j(
-            uri=args.neo4j_uri, user=args.neo4j_user,
-            password=args.neo4j_password,
-        )
+        print(f"\n--- {project_name} → Neo4j ---")
+        get_backend().health_check()
         ensure_schema()
         if args.clear:
             _confirm_destructive(f"source '{project_name}'", args.yes)
@@ -947,18 +927,14 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
     # ── Neo4j ingest ─────────────────────────────────────────
     if args.neo4j:
         from doxygen_index.neo4j_backend import (
-            connect_neo4j,
             ensure_schema,
             clear_source,
             write_result as neo4j_write,
             update_result as neo4j_update,
         )
-        print(f"\n--- cppreference → Neo4j ({args.neo4j_uri}) ---")
-
-        connect_neo4j(
-            uri=args.neo4j_uri, user=args.neo4j_user,
-            password=args.neo4j_password,
-        )
+        from codegraph import get_backend
+        print(f"\n--- cppreference → Neo4j ---")
+        get_backend().health_check()
 
         ensure_schema()
         if args.clear:
@@ -968,7 +944,7 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
         else:
             neo4j_update(result, source=source)
 
-        results, _meta = db.cypher_query("""
+        results, _meta = get_backend().execute_raw("""
             MATCH (n) WHERE n.source CONTAINS 'cppreference'
             WITH labels(n)[0] AS label
             RETURN label, count(*) AS cnt ORDER BY label
@@ -984,10 +960,7 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
 
 def main() -> None:
     # Load .env from the current working directory so that
-    # NEO4J_URI / NEO4J_USER / NEO4J_PASSWORD are available as argparse
-    # defaults.  We pass the path explicitly because python-dotenv's
-    # find_dotenv() defaults to searching from the caller's source file
-    # location, not from CWD — which is wrong for a CLI tool.
+    # get_backend() can auto-configure from its contents.
     # Existing real environment variables always win.
     load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
 

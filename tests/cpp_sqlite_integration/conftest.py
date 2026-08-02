@@ -121,24 +121,35 @@ def codegraph_graph():
         str(json_output), str(html_output), title="cpp-sqlite as-built"
     )
 
-    # ── Step 5: Export PlantUML (full + collapsed) ───────
-    from codegraph.export.plantuml import export_plantuml
+    # ── Step 5: Export PlantUML (full + collapsed + public-only) ───────
+    from codegraph.export.plantuml import export_plantuml, GraphView
     puml_text = export_plantuml(graph, fields="all")
     puml_output = _CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop.puml"
     puml_output.write_text(puml_text, encoding="utf-8")
 
-    # Collapsed: external deps (std, boost, spdlog, sqlite3) → packages
+    # Collapsed: external deps (std, boost, spdlog, sqlite3) → packages,
+    # no file nodes / file edges.
     puml_collapsed = export_plantuml(
-        graph, fields="all", show_dependency_details=False,
+        graph, fields="all", view=GraphView.COLLAPSED,
     )
     puml_collapsed_output = _CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop_collapsed.puml"
     puml_collapsed_output.write_text(puml_collapsed, encoding="utf-8")
 
-    # Render both to SVG
+    # Public API only: collapsed deps + hidden private members + no
+    # concept nodes + no file nodes.
+    puml_public = export_plantuml(
+        graph, fields="all",
+        view=GraphView.PUBLIC_API,
+    )
+    puml_public_output = _CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop_public.puml"
+    puml_public_output.write_text(puml_public, encoding="utf-8")
+
+    # Render all to SVG
     plantuml_bin = shutil.which("plantuml")
     if plantuml_bin:
         for puml_name in ("cpp_sqlite_one_hop.puml",
-                          "cpp_sqlite_one_hop_collapsed.puml"):
+                          "cpp_sqlite_one_hop_collapsed.puml",
+                          "cpp_sqlite_one_hop_public.puml"):
             subprocess.run(
                 [plantuml_bin, "-tsvg", puml_name],
                 cwd=str(_CODEGRAPH_OUTPUT),

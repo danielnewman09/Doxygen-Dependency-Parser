@@ -151,8 +151,8 @@ def test_neo4j_container():
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_neomodel(test_neo4j_container):
-    """Configure neomodel, install labels, and wipe the database once
-    before the test session starts.
+    """Configure codegraph's Neo4j backend, install labels, and wipe the
+    database once before the test session starts.
 
     Connects to the test container launched by
     :func:`test_neo4j_container` using the credentials baked into
@@ -163,37 +163,39 @@ def setup_neomodel(test_neo4j_container):
     ``NEO4J_URI`` / ``NEO4J_USER`` / ``NEO4J_PASSWORD`` environment
     variables.
     """
-    from neomodel import db, get_config
+    from codegraph import get_backend, set_backend
+    from codegraph.backends.neo4j import Neo4jBackend, Neo4jConfig
 
-    uri = f"bolt://localhost:{_TEST_BOLT_PORT}"
-    user = _TEST_USER
-    password = _TEST_PASSWORD
+    set_backend(Neo4jBackend(Neo4jConfig(
+        uri=f"bolt://localhost:{_TEST_BOLT_PORT}",
+        user=_TEST_USER,
+        password=_TEST_PASSWORD,
+    )))
 
-    host = uri.replace("bolt://", "")
-    config = get_config()
-    config.database_url = f"bolt://{user}:{password}@{host}"
+    backend = get_backend()
 
     # Drop ALL existing constraints and indexes so that a schema change
     # doesn't collide with stale constraints from a previous session.
     try:
-        results, _ = db.cypher_query(
+        results, _ = backend.execute_raw(
             "SHOW CONSTRAINTS YIELD name RETURN name"
         )
         for r in results:
-            db.cypher_query(f"DROP CONSTRAINT {r[0]} IF EXISTS")
-        results, _ = db.cypher_query(
+            backend.execute_raw(f"DROP CONSTRAINT {r[0]} IF EXISTS")
+        results, _ = backend.execute_raw(
             'SHOW INDEXES YIELD name, type WHERE type <> "LOOKUP" RETURN name'
         )
         for r in results:
-            db.cypher_query(f"DROP INDEX {r[0]} IF EXISTS")
+            backend.execute_raw(f"DROP INDEX {r[0]} IF EXISTS")
     except Exception:
         pass  # best-effort — ignore if Neo4j is empty/fresh
 
     # Install labels (creates constraints/indexes)
+    from neomodel import db  # NB: install_all_labels has no codegraph equivalent yet
     db.install_all_labels()
 
     # Wipe the database once before the session
-    db.cypher_query("MATCH (n) DETACH DELETE n")
+    backend.execute_raw("MATCH (n) DETACH DELETE n")
 
 
 @pytest.fixture(autouse=True)
@@ -204,5 +206,5 @@ def clear_db():
     with data from previous tests.
     """
     yield
-    from neomodel import db
-    db.cypher_query("MATCH (n) DETACH DELETE n")
+    from codegraph import get_backend
+    get_backend().execute_raw("MATCH (n) DETACH DELETE n")

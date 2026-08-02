@@ -35,16 +35,10 @@ from codegraph.graph import LayerGraph
 # ══════════════════════════════════════════════════════════════════════════
 
 def connect_neo4j() -> None:
-    """Connect to Neo4j using environment variables or defaults."""
-    from neomodel import db
-
-    uri = os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-    user = os.environ.get("NEO4J_USER", "neo4j")
-    password = os.environ.get("NEO4J_PASSWORD", "msd-local-dev")
-
-    host = uri.replace("bolt://", "")
-    db.set_connection(f"bolt://{user}:{password}@{host}")
-    print(f"Connected to Neo4j at {uri}")
+    """Verify Neo4j is reachable via codegraph backend."""
+    from codegraph import get_backend
+    get_backend().health_check()
+    print("Connected to Neo4j")
 
 
 # ══════════════════════════════════════════════════════════════════════════
