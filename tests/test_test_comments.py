@@ -638,19 +638,19 @@ class TestGraphDescriptionsOverride:
 
 
 class TestFetchNodeDescriptions:
-    """Unit-test the Neo4j read helper with a mocked cypher_query."""
+    """Unit-test the Neo4j read helper with a mocked backend execute_raw."""
 
     def test_returns_non_placeholder_descriptions(self, monkeypatch):
         from doxygen_index import neo4j_backend as nb
-        from neomodel import db
+        from codegraph import get_backend
 
         rows = [
-            ["a.test_evaluator", "Graph: drives the evaluator."],
-            ["a.test_evaluator::step_0", "Setup block"],   # placeholder
-            ["a.other::step_0", ""],                       # empty
+            {"qname": "a.test_evaluator", "description": "Graph: drives the evaluator."},
+            {"qname": "a.test_evaluator::step_0", "description": "Setup block"},  # placeholder
+            {"qname": "a.other::step_0", "description": ""},                       # empty
         ]
-        monkeypatch.setattr(db, "cypher_query",
-                            lambda q, params=None, **k: (rows, None))
+        monkeypatch.setattr(get_backend(), "execute_raw",
+                            lambda q, params=None: (rows, ["qname", "description"]))
         out = nb.fetch_node_descriptions(
             ["a.test_evaluator", "a.test_evaluator::step_0", "a.other::step_0"]
         )
@@ -658,13 +658,14 @@ class TestFetchNodeDescriptions:
 
     def test_include_placeholder_returns_placeholders_too(self, monkeypatch):
         from doxygen_index import neo4j_backend as nb
-        from neomodel import db
+        from codegraph import get_backend
+
         rows = [
-            ["a.test_evaluator", "Graph: drives the evaluator."],
-            ["a.test_evaluator::step_0", "Setup block"],
+            {"qname": "a.test_evaluator", "description": "Graph: drives the evaluator."},
+            {"qname": "a.test_evaluator::step_0", "description": "Setup block"},
         ]
-        monkeypatch.setattr(db, "cypher_query",
-                            lambda q, params=None, **k: (rows, None))
+        monkeypatch.setattr(get_backend(), "execute_raw",
+                            lambda q, params=None: (rows, ["qname", "description"]))
         out = nb.fetch_node_descriptions(["a.test_evaluator",
                                           "a.test_evaluator::step_0"],
                                          include_placeholder=True)
@@ -675,11 +676,11 @@ class TestFetchNodeDescriptions:
 
     def test_query_error_returns_empty_with_warning(self, monkeypatch, capsys):
         from doxygen_index import neo4j_backend as nb
-        from neomodel import db
+        from codegraph import get_backend
 
-        def boom(q, params=None, **k):
+        def boom(q, params=None):
             raise RuntimeError("no connection")
-        monkeypatch.setattr(db, "cypher_query", boom)
+        monkeypatch.setattr(get_backend(), "execute_raw", boom)
         out = nb.fetch_node_descriptions(["a.b"])
         assert out == {}
         assert "could not fetch descriptions from Neo4j" in capsys.readouterr().err

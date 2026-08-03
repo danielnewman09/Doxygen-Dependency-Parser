@@ -23,14 +23,26 @@ and ``setup_neomodel`` session fixtures in ``tests/conftest.py``.
 
 from __future__ import annotations
 
+import os
 import shutil
 import textwrap
 from pathlib import Path
 
 import pytest
 
+from codegraph import get_backend
+
 from doxygen_index.parser import parse_python_dir
 from doxygen_index.graph_json import result_to_graph_json
+
+# The reindex machinery (``doxygen_index.neo4j_backend``) is raw Cypher and
+# Neo4j-only.  It runs only under CODEGRAPH_BACKEND=neo4j until Phase 2 of
+# the backend-decoupling plan ports it to codegraph's repository API.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("CODEGRAPH_BACKEND", "sqlite").lower() != "neo4j",
+    reason="Incremental-reindex suite exercises the raw-Cypher neo4j_backend; "
+           "requires CODEGRAPH_BACKEND=neo4j",
+)
 
 
 #: Root of the language-specific test fixtures.
@@ -50,8 +62,7 @@ OTHER_SOURCE = "reindex_other"
 # ---------------------------------------------------------------------------
 
 def _file_exists(refid: str, source: str = TEST_SOURCE) -> bool:
-    from neomodel import db
-    results, _ = db.cypher_query(
+    results, _ = get_backend().execute_raw(
         "MATCH (f:FileNode {refid: $refid, source: $src}) RETURN count(f)",
         {"refid": refid, "src": source},
     )
@@ -59,8 +70,7 @@ def _file_exists(refid: str, source: str = TEST_SOURCE) -> bool:
 
 
 def _node_count(label: str, source: str = TEST_SOURCE) -> int:
-    from neomodel import db
-    results, _ = db.cypher_query(
+    results, _ = get_backend().execute_raw(
         f"MATCH (n:{label} {{source: $src}}) RETURN count(n)",
         {"src": source},
     )
@@ -68,8 +78,7 @@ def _node_count(label: str, source: str = TEST_SOURCE) -> int:
 
 
 def _node_exists(label: str, qualified_name: str, source: str = TEST_SOURCE) -> bool:
-    from neomodel import db
-    results, _ = db.cypher_query(
+    results, _ = get_backend().execute_raw(
         f"MATCH (n:{label} {{qualified_name: $qn, source: $src}}) RETURN count(n)",
         {"qn": qualified_name, "src": source},
     )
@@ -77,8 +86,7 @@ def _node_exists(label: str, qualified_name: str, source: str = TEST_SOURCE) -> 
 
 
 def _node_property(label: str, qualified_name: str, prop: str, source: str = TEST_SOURCE):
-    from neomodel import db
-    results, _ = db.cypher_query(
+    results, _ = get_backend().execute_raw(
         f"MATCH (n:{label} {{qualified_name: $qn, source: $src}}) "
         f"RETURN n.{prop}",
         {"qn": qualified_name, "src": source},
@@ -89,8 +97,7 @@ def _node_property(label: str, qualified_name: str, prop: str, source: str = TES
 
 
 def _total_node_count(source: str = TEST_SOURCE) -> int:
-    from neomodel import db
-    results, _ = db.cypher_query(
+    results, _ = get_backend().execute_raw(
         "MATCH (n {source: $src}) RETURN count(n)",
         {"src": source},
     )
@@ -102,8 +109,7 @@ def _incoming_edge_count(qualified_name: str, source: str = TEST_SOURCE) -> int:
 
     Used to verify that a deleted node has zero dangling edges.
     """
-    from neomodel import db
-    results, _ = db.cypher_query(
+    results, _ = get_backend().execute_raw(
         "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) "
         "RETURN count(r)",
         {"qn": qualified_name, "src": source},
@@ -113,8 +119,7 @@ def _incoming_edge_count(qualified_name: str, source: str = TEST_SOURCE) -> int:
 
 def _outgoing_edge_count(qualified_name: str, source: str = TEST_SOURCE) -> int:
     """Count ALL outgoing edges from a node, regardless of type."""
-    from neomodel import db
-    results, _ = db.cypher_query(
+    results, _ = get_backend().execute_raw(
         "MATCH (n {qualified_name: $qn, source: $src})-[r]->() "
         "RETURN count(r)",
         {"qn": qualified_name, "src": source},
@@ -123,9 +128,8 @@ def _outgoing_edge_count(qualified_name: str, source: str = TEST_SOURCE) -> int:
 
 
 def _clear_test_sources():
-    from neomodel import db
     for src in [TEST_SOURCE, OTHER_SOURCE]:
-        db.cypher_query(
+        get_backend().execute_raw(
             "MATCH (n {source: $src}) DETACH DELETE n",
             {"src": src},
         )
@@ -205,9 +209,8 @@ SAMPLEPKG = "samplepkg"
 def initial_index(fixture_copy):
     """Parse the fixture, write it to Neo4j, and return the directory path."""
     from doxygen_index.neo4j_backend import write_result
-    from neomodel import db
 
-    db.cypher_query(
+    get_backend().execute_raw(
         "MATCH (n {source: $src}) DETACH DELETE n",
         {"src": TEST_SOURCE},
     )
@@ -217,7 +220,7 @@ def initial_index(fixture_copy):
 
     yield fixture_copy
 
-    db.cypher_query(
+    get_backend().execute_raw(
         "MATCH (n {source: $src}) DETACH DELETE n",
         {"src": TEST_SOURCE},
     )
@@ -431,8 +434,7 @@ def assert_close(
 
         # No edges point to the deleted class or its method
         # (the node doesn't exist, so incoming_edge_count should be 0)
-        from neomodel import db
-        results, _ = db.cypher_query(
+        results, _ = get_backend().execute_raw(
             "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) RETURN count(r)",
             {"qn": old_qname, "src": TEST_SOURCE},
         )
@@ -485,9 +487,8 @@ def assert_close(
         assert not _file_exists(ns_qname)
 
         # No edges point to the deleted namespace
-        from neomodel import db
         for qn in [ns_qname, func_qname, cls_qname]:
-            results, _ = db.cypher_query(
+            results, _ = get_backend().execute_raw(
                 "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) RETURN count(r)",
                 {"qn": qn, "src": TEST_SOURCE},
             )
@@ -556,8 +557,7 @@ class Evaluator:
         assert not _node_exists("MethodNode", deleted_meth_qname)
 
         # No edges point to the deleted method
-        from neomodel import db
-        results, _ = db.cypher_query(
+        results, _ = get_backend().execute_raw(
             "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) RETURN count(r)",
             {"qn": deleted_meth_qname, "src": TEST_SOURCE},
         )
@@ -647,8 +647,7 @@ class TestNodeRenaming:
         assert new_qname in _rel_qnames(new_meth, "parent_compound")
 
         # No edges point to the old node
-        from neomodel import db
-        results, _ = db.cypher_query(
+        results, _ = get_backend().execute_raw(
             "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) RETURN count(r)",
             {"qn": old_qname, "src": TEST_SOURCE},
         )
@@ -788,8 +787,7 @@ class TestNodeUpdate:
         assert cls_after.brief_description != orig_desc
 
         # No duplicates
-        from neomodel import db
-        results, _ = db.cypher_query(
+        results, _ = get_backend().execute_raw(
             "MATCH (n:ClassNode {qualified_name: $qn, source: $src}) RETURN count(n)",
             {"qn": qname, "src": TEST_SOURCE},
         )
@@ -907,7 +905,6 @@ class TestCrossSourceIsolation:
     def test_other_source_untouched(self, initial_index):
         """Updating TEST_SOURCE doesn't affect nodes from OTHER_SOURCE."""
         from doxygen_index.neo4j_backend import write_result, update_result
-        from neomodel import db
 
         # Write a second source
         other_dir = initial_index.parent / "other_samplepkg"
@@ -932,7 +929,7 @@ class TestCrossSourceIsolation:
                                 source=TEST_SOURCE)
 
         # Cleanup
-        db.cypher_query(
+        get_backend().execute_raw(
             "MATCH (n {source: $src}) DETACH DELETE n",
             {"src": OTHER_SOURCE},
         )
@@ -984,7 +981,6 @@ class TestRelationshipIntegrity:
     def test_no_dangling_edges_after_file_deletion(self, initial_index):
         """After deleting a file, no edges of any type point to its nodes."""
         from doxygen_index.neo4j_backend import update_result
-        from neomodel import db
 
         # Delete the entire long_signatures.py file
         (initial_index / SAMPLEPKG / "long_signatures.py").unlink()
@@ -1001,7 +997,7 @@ class TestRelationshipIntegrity:
             "samplepkg.long_signatures.ReportingService.generate_report",
         ]
         for qn in deleted_qnames:
-            results, _ = db.cypher_query(
+            results, _ = get_backend().execute_raw(
                 "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) RETURN count(r)",
                 {"qn": qn, "src": TEST_SOURCE},
             )
@@ -1012,7 +1008,7 @@ class TestRelationshipIntegrity:
         # Also check no outgoing edges from the deleted nodes exist
         # (the nodes themselves should be gone)
         for qn in deleted_qnames:
-            results, _ = db.cypher_query(
+            results, _ = get_backend().execute_raw(
                 "MATCH (n {qualified_name: $qn, source: $src}) RETURN count(n)",
                 {"qn": qn, "src": TEST_SOURCE},
             )
@@ -1066,9 +1062,8 @@ class TestRelationshipIntegrity:
         enriched_desc = "LLM-enriched: evaluates step with confidence"
 
         # Write a rich description directly on a test child node
-        from neomodel import db
         child_qname = f"{test_qname}::evaluator"
-        db.cypher_query(
+        get_backend().execute_raw(
             "MATCH (n {qualified_name: $qname}) SET n.description = $desc",
             {"qname": child_qname, "desc": enriched_desc},
         )
@@ -1078,7 +1073,7 @@ class TestRelationshipIntegrity:
         update_result(result, source=TEST_SOURCE)
 
         # Description must be preserved — not overwritten with placeholder
-        results, _ = db.cypher_query(
+        results, _ = get_backend().execute_raw(
             "MATCH (n {qualified_name: $qname}) RETURN n.description",
             {"qname": child_qname},
         )
@@ -1105,8 +1100,7 @@ class TestRelationshipIntegrity:
         assertion_qname = sorted(assertions)[0]
 
         # Verify the current description IS a placeholder
-        from neomodel import db
-        results, _ = db.cypher_query(
+        results, _ = get_backend().execute_raw(
             "MATCH (n {qualified_name: $qname}) RETURN n.description",
             {"qname": assertion_qname},
         )
@@ -1117,7 +1111,7 @@ class TestRelationshipIntegrity:
 
         # Write a rich description
         enriched = "LLM: Verifies that the step produces the expected result"
-        db.cypher_query(
+        get_backend().execute_raw(
             "MATCH (n {qualified_name: $qname}) SET n.description = $desc",
             {"qname": assertion_qname, "desc": enriched},
         )
@@ -1127,7 +1121,7 @@ class TestRelationshipIntegrity:
         update_result(result, source=TEST_SOURCE)
 
         # Must be preserved
-        results, _ = db.cypher_query(
+        results, _ = get_backend().execute_raw(
             "MATCH (n {qualified_name: $qname}) RETURN n.description",
             {"qname": assertion_qname},
         )

@@ -1,27 +1,27 @@
-"""Pytest fixtures for Neo4j integration tests.
+"""Pytest fixtures — backend-agnostic (Neo4j or SQLite via CODEGRAPH_BACKEND).
+
+SQLite is the DEFAULT backend: an in-memory :class:`SqliteBackend`, no
+Docker, no Neo4j.  Set ``CODEGRAPH_BACKEND=neo4j`` to run the legacy
+Neo4j path instead (starts the ``neo4j-doxygen-index-test`` Docker
+container on port 7689).
 
 Session lifecycle
 -----------------
-1. ``test_neo4j_container`` — starts a dedicated ``neo4j-doxygen-index-test``
-   Docker container on port 7689 via ``docker compose``, waits for it
-   to be healthy, and tears it down after the session.
+1. ``setup_backend`` (session, autouse) — selects the backend:
 
-2. ``setup_neomodel`` — connects to the test container using the
-   credentials baked into ``tests/docker-compose.yml`` (port 7689,
-   password ``doxygen-index-test``).  Drops stale constraints/indexes,
-   installs fresh labels, and wipes the database once before the
-   session.
+   * ``sqlite`` (default) — ``set_backend(SqliteBackend(...))`` with an
+     in-memory database.  No containers, no external services.
+   * ``neo4j`` — start the test container (unless
+     ``DOXYGEN_INDEX_TEST_SKIP_CONTAINER=1``), connect ``Neo4jBackend``,
+     drop stale constraints/indexes, install fresh labels, wipe once.
 
-3. ``clear_db`` — wipes the database after every test function so each
-   test starts with a clean slate.
+2. ``clear_db`` (autouse, function) — wipes the active backend after
+   every test via ``get_backend().wipe()`` (backend-agnostic).  The
+   ``cpp_sqlite_integration`` subdirectory overrides this to a no-op
+   (read-only tests sharing session-scoped data).
 
-Design notes
-------------
-The single source of truth for credentials is
-``tests/docker-compose.yml``, and the conftest mirrors those values
-in hardcoded defaults.  This avoids conflicts with VS Code's
-``python.envFile`` setting, which automatically loads the project
-``.env`` before pytest runs.
+Suites that genuinely require the Neo4j backend (raw-Cypher) skip
+themselves when ``CODEGRAPH_BACKEND != neo4j``.
 """
 
 from __future__ import annotations
@@ -34,18 +34,26 @@ from pathlib import Path
 
 import pytest
 
+# Make the backend selection visible to ``pytest.mark.skipif`` markers in
+# test modules (they evaluate at collection time): default to sqlite.
+os.environ.setdefault("CODEGRAPH_BACKEND", "sqlite")
+# Any ``get_backend()`` call at import/collection time (before the session
+# fixture runs) must not create a file-backed database in the repo root.
+os.environ.setdefault("SQLITE_PATH", ":memory:")
+_BACKEND_NAME = os.environ.get("CODEGRAPH_BACKEND", "sqlite").lower()
+
 _HERE = Path(__file__).resolve().parent
 _COMPOSE_FILE = _HERE / "docker-compose.yml"
 
 # Mirror the credentials baked into tests/docker-compose.yml.
-# These are the authoritative defaults for the test session.
+# These are the authoritative defaults for the Neo4j test session.
 _TEST_BOLT_PORT = 7689
 _TEST_USER = "neo4j"
 _TEST_PASSWORD = "doxygen-index-test"
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Helpers (Neo4j mode only)
 # ---------------------------------------------------------------------------
 
 
@@ -100,12 +108,10 @@ def _bolt_reachable(uri: str, user: str, password: str, timeout: int = 60) -> bo
 def test_neo4j_container():
     """Start a dedicated Neo4j Docker container for the test session.
 
-    Always starts the container regardless of ``NEO4J_URI`` because
-    VS Code's Python extension may pre-load the project ``.env`` file,
-    which sets ``NEO4J_URI`` to the *development* container's port.
-    Checking ``NEO4J_URI`` would therefore cause the fixture to skip
-    starting the test container, and ``setup_neomodel`` would then try
-    to connect to a dead port.
+    Only used when ``CODEGRAPH_BACKEND=neo4j``.  Always starts the
+    container regardless of ``NEO4J_URI`` because VS Code's Python
+    extension may pre-load the project ``.env`` file, which sets
+    ``NEO4J_URI`` to the *development* container's port.
 
     The container is torn down automatically when the session ends.
     """
@@ -150,61 +156,88 @@ def test_neo4j_container():
 
 
 @pytest.fixture(scope="session", autouse=True)
-def setup_neomodel(test_neo4j_container):
-    """Configure codegraph's Neo4j backend, install labels, and wipe the
-    database once before the test session starts.
+def setup_backend(request):
+    """Configure the active codegraph backend for the test session.
 
-    Connects to the test container launched by
+    sqlite (default): in-memory SqliteBackend via ``set_backend()`` —
+    no Docker, no Neo4j.
+
+    neo4j: connects to the test container launched by
     :func:`test_neo4j_container` using the credentials baked into
-    ``tests/docker-compose.yml``.
-
-    If you need to use an external Neo4j instance instead, set
-    ``DOXYGEN_INDEX_TEST_SKIP_CONTAINER=1`` and provide your own
-    ``NEO4J_URI`` / ``NEO4J_USER`` / ``NEO4J_PASSWORD`` environment
-    variables.
+    ``tests/docker-compose.yml``, drops stale constraints/indexes,
+    installs fresh labels, and wipes the database once before the
+    session.
     """
-    from codegraph import get_backend, set_backend
-    from codegraph.backends.neo4j import Neo4jBackend, Neo4jConfig
+    if _BACKEND_NAME == "neo4j":
+        request.getfixturevalue("test_neo4j_container")
 
-    set_backend(Neo4jBackend(Neo4jConfig(
-        uri=f"bolt://localhost:{_TEST_BOLT_PORT}",
-        user=_TEST_USER,
-        password=_TEST_PASSWORD,
-    )))
+        from codegraph.backends import set_backend
+        from codegraph.backends.neo4j import Neo4jBackend, Neo4jConfig
 
-    backend = get_backend()
+        set_backend(Neo4jBackend(Neo4jConfig(
+            uri=f"bolt://localhost:{_TEST_BOLT_PORT}",
+            user=_TEST_USER,
+            password=_TEST_PASSWORD,
+        )))
 
-    # Drop ALL existing constraints and indexes so that a schema change
-    # doesn't collide with stale constraints from a previous session.
-    try:
-        results, _ = backend.execute_raw(
-            "SHOW CONSTRAINTS YIELD name RETURN name"
-        )
-        for r in results:
-            backend.execute_raw(f"DROP CONSTRAINT {r[0]} IF EXISTS")
-        results, _ = backend.execute_raw(
-            'SHOW INDEXES YIELD name, type WHERE type <> "LOOKUP" RETURN name'
-        )
-        for r in results:
-            backend.execute_raw(f"DROP INDEX {r[0]} IF EXISTS")
-    except Exception:
-        pass  # best-effort — ignore if Neo4j is empty/fresh
+        from codegraph import get_backend
+        backend = get_backend()
 
-    # Install labels (creates constraints/indexes)
-    from neomodel import db  # NB: install_all_labels has no codegraph equivalent yet
-    db.install_all_labels()
+        # Drop ALL existing constraints and indexes so that a schema change
+        # doesn't collide with stale constraints from a previous session.
+        try:
+            results, _ = backend.execute_raw(
+                "SHOW CONSTRAINTS YIELD name RETURN name"
+            )
+            for r in results:
+                backend.execute_raw(f"DROP CONSTRAINT {r[0]} IF EXISTS")
+            results, _ = backend.execute_raw(
+                'SHOW INDEXES YIELD name, type WHERE type <> "LOOKUP" RETURN name'
+            )
+            for r in results:
+                backend.execute_raw(f"DROP INDEX {r[0]} IF EXISTS")
+        except Exception:
+            pass  # best-effort — ignore if Neo4j is empty/fresh
 
-    # Wipe the database once before the session
-    backend.execute_raw("MATCH (n) DETACH DELETE n")
+        # Install labels (creates constraints/indexes)
+        from neomodel import db  # NB: install_all_labels has no codegraph equivalent yet
+        db.install_all_labels()
+
+        # Wipe the database once before the session
+        backend.wipe()
+    else:
+        from codegraph.backends import set_backend
+        from codegraph.backends.sqlite import SqliteBackend, SqliteConfig
+
+        backend = SqliteBackend(SqliteConfig(path=":memory:"))
+        backend.initialize(SqliteConfig(path=":memory:"))
+        set_backend(backend)
+
+    yield
+
+
+@pytest.fixture(scope="session")
+def setup_neomodel(setup_backend):
+    """Backward-compatible alias for :func:`setup_backend`.
+
+    Historical name kept so any code that requested ``setup_neomodel``
+    keeps working; the backend is now backend-agnostic.
+    """
+    yield None
 
 
 @pytest.fixture(autouse=True)
-def clear_db():
-    """Clear the Neo4j database after each test.
+def clear_db(request):
+    """Clear the active backend after each test.
 
     Ensures that tests with explicit unique identifiers don't collide
-    with data from previous tests.
+    with data from previous tests.  Backend-agnostic:
+    ``get_backend().wipe()``.
     """
     yield
+    # Skip wipe for cpp_sqlite_integration subdirectory — those tests
+    # are read-only and share the session-scoped codegraph_graph data.
+    if "cpp_sqlite_integration" in str(request.node.fspath):
+        return
     from codegraph import get_backend
-    get_backend().execute_raw("MATCH (n) DETACH DELETE n")
+    get_backend().wipe()

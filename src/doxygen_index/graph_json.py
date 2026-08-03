@@ -342,15 +342,28 @@ def write_graph_json(
 def _get_prop(node, name: str, *, is_list: bool = False) -> str | list | None:
     """Extract a property from a codegraph node safely.
 
-    neomodel nodes store properties in ``__dict__`` with a leading underscore.
-    ``getattr(node, name)`` may return the neomodel ``StringProperty``
-    descriptor rather than the value when the property was set via the
-    descriptor on a brand-new (unsaved) instance.
+    Handles both storage shapes:
+    - legacy neomodel nodes: properties stored directly in ``__dict__``
+      (possibly with a leading underscore, e.g. ``_tags``).
+    - new Property-based codegraph models: declared properties stored in
+      ``node._props``.
+
+    ``getattr(node, name)`` may return the descriptor rather than the
+    value on a brand-new (unsaved) instance, so the stores above are
+    consulted first.
     """
     if not hasattr(node, name):
         return None
-    # Tags are stored in __dict__['_tags'] as a list
     val = node.__dict__.get(name, None)
+    if val is None:
+        # New Property-based codegraph model: declared properties live in
+        # ``_props`` (a plain dict on the instance).
+        props = node.__dict__.get("_props", None)
+        if isinstance(props, dict):
+            val = props.get(name)
+    if val is None:
+        # Legacy underscore-prefixed storage (e.g. ``_tags``).
+        val = node.__dict__.get(f"_{name}", None)
     if is_list and isinstance(val, list):
         return val
     if isinstance(val, str):

@@ -18,19 +18,17 @@ The :func:`ingest` function defaults to incremental mode
 (``incremental=True``); pass ``clear=True`` for a full re-write.
 The CLI uses incremental by default; ``--clear`` opts into full re-write.
 
-Uses neomodel for node persistence and Cypher for relationship creation.
+Uses codegraph's backend abstraction for node persistence and Cypher for relationship creation.
 """
 
 from __future__ import annotations
 
-import os
 import re
 import sys
 from dataclasses import asdict
 from pathlib import Path
 
-from dotenv import load_dotenv
-from neomodel import db
+from codegraph import get_backend
 
 # Import all node models so neomodel registry discovers them before
 # install_all_labels is called.
@@ -53,56 +51,37 @@ from doxygen_index.parser.model import VerifiesEntry, OperandEntry, CalleeEntry,
 # Connection
 # ---------------------------------------------------------------------------
 
-def connect_neo4j(
-    uri: str | None = None,
-    user: str | None = None,
-    password: str | None = None,
-    database: str | None = None,
-) -> None:
-    """Configure the neomodel connection and verify it works.
+def connect_neo4j() -> None:
+    """Verify the codegraph backend can reach Neo4j.
 
-    Loads ``.env`` first (without overriding real env vars), then resolves
-    credentials from arguments → environment → hardcoded defaults.
+    ``get_backend()`` auto-configures from the ``.env`` file (or
+    environment variables).  This function just triggers lazy
+    initialisation and confirms connectivity.
 
     Exits with a helpful message on auth or connection failure.
     """
-    from neomodel import get_config
     from neo4j.exceptions import AuthError, ServiceUnavailable
 
-    load_dotenv(dotenv_path=Path.cwd() / ".env", override=False)
-
-    uri = uri or os.environ.get("NEO4J_URI", "bolt://localhost:7687")
-    user = user or os.environ.get("NEO4J_USER", "neo4j")
-    password = password or os.environ.get("NEO4J_PASSWORD", "msd-local-dev")
-    database = database or os.environ.get("NEO4J_DATABASE", "neo4j")
-
-    _bolt_host = uri.replace("bolt://", "")
-    config = get_config()
-    config.database_url = f"bolt://{user}:{password}@{_bolt_host}"
-    config.database_name = database
-
-    # Verify connectivity — db.set_connection() runs an internal version
-    # check that can raise AuthError / ServiceUnavailable.
     try:
-        db.set_connection(config.database_url)
-        db.cypher_query("RETURN 1")
+        backend = get_backend()
+        if not backend.health_check():
+            raise ServiceUnavailable("health check returned False")
     except AuthError:
         print(
-            f"\nError: Neo4j authentication failed for user '{user}' at {uri}.\n"
-            f"  Check the credentials in your .env file or pass them via "
-            f"--neo4j-user / --neo4j-password.",
+            "\nError: Neo4j authentication failed.\n"
+            "  Check the credentials in your .env file.",
             file=sys.stderr,
         )
         sys.exit(1)
     except ServiceUnavailable:
         print(
-            f"\nError: Could not reach Neo4j at {uri}.\n"
-            f"  Is the database running?",
+            "\nError: Could not reach Neo4j.\n"
+            "  Is the database running?",
             file=sys.stderr,
         )
         sys.exit(1)
     except Exception as e:
-        print(f"\nError: Could not connect to Neo4j at {uri}: {e}", file=sys.stderr)
+        print(f"\nError: Could not connect to Neo4j: {e}", file=sys.stderr)
         sys.exit(1)
 
 
@@ -112,6 +91,7 @@ def connect_neo4j(
 
 def ensure_schema(stdout=None) -> None:
     """Install neomodel labels, constraints, and indexes."""
+    from neomodel import db  # NB: install_all_labels has no codegraph equivalent yet
     db.install_all_labels(stdout=stdout)
 
 
@@ -161,7 +141,7 @@ def clear_source(source: str) -> None:
          {"src": source}),
     ]
     for query, params in queries:
-        db.cypher_query(query, params)
+        get_backend().execute_raw(query, params)
     print(f"  Cleared existing '{source}' data from Neo4j.")
 
 
@@ -177,7 +157,7 @@ def clear_all() -> None:
         "MATCH (md:Metadata) DETACH DELETE md",
     ]
     for query in queries:
-        db.cypher_query(query)
+        get_backend().execute_raw(query)
     print("  Cleared all codebase data from Neo4j.")
 
 
@@ -270,7 +250,6 @@ def _preserve_descriptions(*node_lists: list) -> None:
         return
 
     # Batch-fetch existing descriptions from Neo4j
-    from neomodel import db
     qnames = list(candidates.keys())
     query = """
         UNWIND $qnames AS qname
@@ -280,11 +259,11 @@ def _preserve_descriptions(*node_lists: list) -> None:
           AND n.description <> ''
         RETURN n.qualified_name AS qname, n.description AS description
     """
-    results, _ = db.cypher_query(query, {"qnames": qnames})
+    results, _ = get_backend().execute_raw(query, {"qnames": qnames})
 
     existing: dict[str, str] = {}
     for row in results:
-        existing[row[0]] = row[1] or ""
+        existing[row["qname"]] = row["description"] or ""
 
     # Merge existing non-placeholder descriptions into incoming nodes
     preserved = 0
@@ -316,7 +295,7 @@ def fetch_node_descriptions(
     graph values into source-file comment blocks without re-running the LLM.
 
     A Neo4j connection must already be configured (call
-    :func:`connect_neo4j` first).  Query errors are reported on stderr and
+    credentials set).  Query errors are reported on stderr and
     yield an empty dict rather than raising, so callers can fall back to
     scaffold/placeholder behaviour when the graph is unreachable.
 
@@ -330,7 +309,6 @@ def fetch_node_descriptions(
     """
     if not qualified_names:
         return {}
-    from neomodel import db
 
     query = """
         UNWIND $qnames AS qname
@@ -341,7 +319,7 @@ def fetch_node_descriptions(
         RETURN n.qualified_name AS qname, n.description AS description
     """
     try:
-        results, _ = db.cypher_query(query, {"qnames": list(qualified_names)})
+        results, _ = get_backend().execute_raw(query, {"qnames": list(qualified_names)})
     except Exception as exc:  # connection / query failure
         print(f"Warning: could not fetch descriptions from Neo4j: {exc}",
               file=sys.stderr)
@@ -349,8 +327,8 @@ def fetch_node_descriptions(
 
     out: dict[str, str] = {}
     for row in results:
-        qn = row[0]
-        desc = row[1] or ""
+        qn = row["qname"]
+        desc = row["description"] or ""
         if not desc:
             continue
         if not include_placeholder and _is_placeholder_description(desc):
@@ -424,7 +402,7 @@ def write_result(result: ParseResult) -> None:
         ]
         for j in range(0, len(props_list), _BATCH):
             batch = props_list[j:j + _BATCH]
-            db.cypher_query(f"""
+            get_backend().execute_raw(f"""
                 UNWIND $batch AS props
                 MERGE (n:{full_labels} {{uid: props.uid}})
                 SET n = props
@@ -436,7 +414,7 @@ def write_result(result: ParseResult) -> None:
     # ── Ensure per-label uid indexes ───────────────────────────
     for lbl in ("AttributeNode", "FunctionNode", "ImplementationNode"):
         try:
-            db.cypher_query(
+            get_backend().execute_raw(
                 f"CREATE INDEX IF NOT EXISTS FOR (n:{lbl}) ON (n.uid)"
             )
         except Exception:
@@ -553,7 +531,7 @@ def delete_stale_nodes(
                 f"DETACH DELETE n "
                 f"RETURN count(n) AS cnt"
             )
-            result, _ = db.cypher_query(query, {"src": source})
+            result, _ = get_backend().execute_raw(query, {"src": source})
         else:
             query = (
                 f"MATCH (n:{label} {{source: $src}}) "
@@ -561,7 +539,7 @@ def delete_stale_nodes(
                 f"DETACH DELETE n "
                 f"RETURN count(n) AS cnt"
             )
-            result, _ = db.cypher_query(query, {"src": source, "live": list(live_set)})
+            result, _ = get_backend().execute_raw(query, {"src": source, "live": list(live_set)})
         cnt = result[0][0] if result else 0
         if cnt:
             deleted_counts[label] = cnt
@@ -576,7 +554,7 @@ def delete_stale_nodes(
                 "DETACH DELETE p "
                 "RETURN count(p) AS cnt"
             )
-            result, _ = db.cypher_query(query, {"src": source})
+            result, _ = get_backend().execute_raw(query, {"src": source})
         else:
             query = (
                 "MATCH (p:ParameterNode) "
@@ -585,7 +563,7 @@ def delete_stale_nodes(
                 "DETACH DELETE p "
                 "RETURN count(p) AS cnt"
             )
-            result, _ = db.cypher_query(
+            result, _ = get_backend().execute_raw(
                 query, {"src": source, "live": list(live_member_refids)}
             )
         cnt = result[0][0] if result else 0
@@ -654,7 +632,7 @@ def update_result(result: ParseResult, source: str) -> dict[str, int]:
 
 
 # ---------------------------------------------------------------------------
-# Relationship helpers (Cypher via db.cypher_query)
+# Relationship helpers (Cypher via get_backend().execute_raw)
 # ---------------------------------------------------------------------------
 
 def _write_parameters(result: ParseResult) -> None:
@@ -673,7 +651,7 @@ def _write_parameters(result: ParseResult) -> None:
         # Convert member_refid → member_uid for indexed MATCH
         for row in batch:
             row["_member_uid"] = refid_to_uid.get(row.get("member_refid", ""), "")
-        db.cypher_query("""
+        get_backend().execute_raw("""
             UNWIND $batch AS row
             WITH row WHERE row._member_uid <> ''
             MATCH (m:MemberNode {uid: row._member_uid})
@@ -709,7 +687,7 @@ def _rel_batch(batch_data: list[dict], rel_type: str,
     total = 0
     for i in range(0, len(batch_data), 1000):
         batch = batch_data[i:i + 1000]
-        results, _ = db.cypher_query(f"""
+        results, _ = get_backend().execute_raw(f"""
             UNWIND $batch AS row
             MATCH ({from_clause} {{{from_key}: row.from}})
             MATCH ({to_clause} {{{to_key}: row.to}})
@@ -717,7 +695,7 @@ def _rel_batch(batch_data: list[dict], rel_type: str,
             RETURN count(*) AS cnt
         """, {"batch": batch})
         if results:
-            total += results[0][0]
+            total += results[0]["cnt"]
         if label:
             print(f"  {label}: {min(i + 1000, len(batch_data))}/{len(batch_data)}", flush=True)
     return total
@@ -822,7 +800,7 @@ def _write_include_relationships(result: ParseResult) -> None:
         batch_size = 1000
         for i in range(0, len(resolved), batch_size):
             batch = resolved[i:i + batch_size]
-            db.cypher_query("""
+            get_backend().execute_raw("""
                 UNWIND $batch AS row
                 MATCH (src:FileNode {refid: row.file_refid})
                 MATCH (dst:FileNode {refid: row.included_refid})
@@ -1035,7 +1013,7 @@ def _write_template_param_relationships(result: ParseResult) -> None:
     created = 0
     for i in range(0, len(batch_dicts), batch_size):
         batch = batch_dicts[i:i + batch_size]
-        results, _meta = db.cypher_query("""
+        results, _meta = get_backend().execute_raw("""
             UNWIND $batch AS row
             MATCH (source:CompoundNode|MemberNode {qualified_name: row.from_qn})
             MERGE (tp:ClassNode:CompoundNode {qualified_name: 'type_param:' + row.from_qn + ':' + toString(row.position)})
@@ -1082,7 +1060,7 @@ def _write_template_param_relationships(result: ParseResult) -> None:
         ec_count = 0
         for i in range(0, len(enforces_batch), batch_size):
             batch = enforces_batch[i:i + batch_size]
-            results, _meta = db.cypher_query("""
+            results, _meta = get_backend().execute_raw("""
                 UNWIND $batch AS row
                 MATCH (tp:ClassNode {qualified_name: row.tp_qn})
                 MATCH (c:ConceptNode {qualified_name: row.concept_qn})
@@ -1193,7 +1171,7 @@ def _write_test_composition_relationships(result: ParseResult) -> None:
     ns_test_count = 0
     for comp in result.compositions:
         if comp.child_type == "TestNode":
-            db.cypher_query("""
+            get_backend().execute_raw("""
                 MATCH (ns:NamespaceNode {refid: $parent})
                 MATCH (t:TestNode {refid: $child})
                 MERGE (ns)-[:COMPOSES]->(t)
@@ -1207,7 +1185,7 @@ def _write_test_composition_relationships(result: ParseResult) -> None:
         batch_size = 1000
         for i in range(0, len(batch_dicts), batch_size):
             batch = batch_dicts[i:i + batch_size]
-            results, _meta = db.cypher_query("""
+            results, _meta = get_backend().execute_raw("""
                 UNWIND $batch AS row
                 MATCH (parent:TestNode {refid: row.parent_refid})
                 MATCH (child {refid: row.child_refid})
@@ -1215,7 +1193,7 @@ def _write_test_composition_relationships(result: ParseResult) -> None:
                 RETURN count(*) AS cnt
             """, {"batch": batch})
             if results:
-                child_count += results[0][0]
+                child_count += results[0]["cnt"]
 
     print(f"  Relationships: TEST_COMPOSES ({ns_test_count} ns→test, {child_count} test→children)")
 
@@ -1230,7 +1208,7 @@ def _write_verifies_relationships(result: ParseResult) -> None:
     created = 0
     for i in range(0, len(batch_dicts), batch_size):
         batch = batch_dicts[i:i + batch_size]
-        results, _meta = db.cypher_query("""
+        results, _meta = get_backend().execute_raw("""
             UNWIND $batch AS row
             MATCH (test:TestNode {refid: row.from_refid})
             MATCH (target {refid: row.to_refid})
@@ -1238,7 +1216,7 @@ def _write_verifies_relationships(result: ParseResult) -> None:
             RETURN count(*) AS cnt
         """, {"batch": batch})
         if results:
-            created += results[0][0]
+            created += results[0]["cnt"]
     print(f"  Relationships: VERIFIES ({created} edges)")
 
 
@@ -1257,7 +1235,7 @@ def _write_operand_relationships(result: ParseResult) -> None:
             continue
         for i in range(0, len(side_batch), batch_size):
             batch = side_batch[i:i + batch_size]
-            results, _meta = db.cypher_query(f"""
+            results, _meta = get_backend().execute_raw(f"""
                 UNWIND $batch AS row
                 MATCH (assertion:AssertionNode {{refid: row.from_refid}})
                 MATCH (operand {{refid: row.to_refid}})
@@ -1266,9 +1244,9 @@ def _write_operand_relationships(result: ParseResult) -> None:
             """, {"batch": batch})
             if results:
                 if side == "left":
-                    left_count += results[0][0]
+                    left_count += results[0]["cnt"]
                 else:
-                    right_count += results[0][0]
+                    right_count += results[0]["cnt"]
     print(f"  Relationships: LEFT_OPERAND ({left_count} edges), RIGHT_OPERAND ({right_count} edges)")
 
 
@@ -1282,7 +1260,7 @@ def _write_callee_relationships(result: ParseResult) -> None:
     created = 0
     for i in range(0, len(batch_dicts), batch_size):
         batch = batch_dicts[i:i + batch_size]
-        results, _meta = db.cypher_query("""
+        results, _meta = get_backend().execute_raw("""
             UNWIND $batch AS row
             MATCH (step:TestStepNode {refid: row.from_refid})
             MATCH (callee {refid: row.to_refid})
@@ -1290,7 +1268,7 @@ def _write_callee_relationships(result: ParseResult) -> None:
             RETURN count(*) AS cnt
         """, {"batch": batch})
         if results:
-            created += results[0][0]
+            created += results[0]["cnt"]
     print(f"  Relationships: CALLEE ({created} edges)")
 
 
@@ -1304,7 +1282,7 @@ def _write_of_type_relationships(result: ParseResult) -> None:
     created = 0
     for i in range(0, len(batch_dicts), batch_size):
         batch = batch_dicts[i:i + batch_size]
-        results, _meta = db.cypher_query("""
+        results, _meta = get_backend().execute_raw("""
             UNWIND $batch AS row
             MATCH (fixture:TestFixtureNode {refid: row.from_refid})
             MATCH (target {refid: row.to_refid})
@@ -1312,7 +1290,7 @@ def _write_of_type_relationships(result: ParseResult) -> None:
             RETURN count(*) AS cnt
         """, {"batch": batch})
         if results:
-            created += results[0][0]
+            created += results[0]["cnt"]
     print(f"  Relationships: OF_TYPE ({created} edges)")
 
 
@@ -1326,7 +1304,7 @@ def _write_checked_by_relationships(result: ParseResult) -> None:
     created = 0
     for i in range(0, len(batch_dicts), batch_size):
         batch = batch_dicts[i:i + batch_size]
-        results, _meta = db.cypher_query("""
+        results, _meta = get_backend().execute_raw("""
             UNWIND $batch AS row
             MATCH (fixture:TestFixtureNode {refid: row.from_refid})
             MATCH (assertion:AssertionNode {refid: row.to_refid})
@@ -1334,7 +1312,7 @@ def _write_checked_by_relationships(result: ParseResult) -> None:
             RETURN count(*) AS cnt
         """, {"batch": batch})
         if results:
-            created += results[0][0]
+            created += results[0]["cnt"]
     print(f"  Relationships: CHECKED_BY ({created} edges)")
 
 
@@ -1348,7 +1326,7 @@ def _write_defined_in_relationships(result: ParseResult) -> None:
     created = 0
     for i in range(0, len(batch_dicts), batch_size):
         batch = batch_dicts[i:i + batch_size]
-        results, _meta = db.cypher_query("""
+        results, _meta = get_backend().execute_raw("""
             UNWIND $batch AS row
             MATCH (fixture:TestFixtureNode {refid: row.from_refid})
             MATCH (step:TestStepNode {refid: row.to_refid})
@@ -1356,7 +1334,7 @@ def _write_defined_in_relationships(result: ParseResult) -> None:
             RETURN count(*) AS cnt
         """, {"batch": batch})
         if results:
-            created += results[0][0]
+            created += results[0]["cnt"]
     print(f"  Relationships: DEFINED_IN ({created} edges)")
 
 
@@ -1473,15 +1451,15 @@ def _write_concept_constraints(result: ParseResult) -> None:
 def ingest(
     xml_dir: Path | str,
     source: str = "msd",
-    uri: str | None = None,
-    user: str | None = None,
-    password: str | None = None,
     database: str = "neo4j",
     clear: bool = False,
     layer: str = "dependency",
     incremental: bool = True,
 ) -> None:
     """Parse Doxygen XML and ingest into Neo4j.
+
+    ``get_backend()`` auto-configures from the ``.env`` file (or
+    environment variables).  No explicit credentials are needed.
 
     By default, performs an **incremental update**: new nodes are created,
     changed nodes are updated in place, and stale nodes (no longer in the
@@ -1491,9 +1469,6 @@ def ingest(
     Args:
         xml_dir: Directory containing Doxygen XML output.
         source: Source label for provenance tracking.
-        uri: Neo4j Bolt URI (default: ``$NEO4J_URI`` or ``bolt://localhost:7687``).
-        user: Neo4j username (default: ``$NEO4J_USER`` or ``neo4j``).
-        password: Neo4j password (default: ``$NEO4J_PASSWORD`` or ``msd-local-dev``).
         database: Neo4j database name.
         clear: If True, clear existing data for this source before a
             full re-write.  Ignored when ``incremental`` is True (the default).
@@ -1501,8 +1476,6 @@ def ingest(
         incremental: If True (the default), incrementally update instead of
             full re-write.  Set to False to force a full re-write.
     """
-    connect_neo4j(uri=uri, user=user, password=password, database=database)
-
     xml_dir = Path(xml_dir)
 
     ensure_schema()
@@ -1522,7 +1495,7 @@ def ingest(
         write_result(result)
 
     # Summary
-    results, _meta = db.cypher_query("""
+    results, _meta = get_backend().execute_raw("""
         MATCH (n) WHERE n.source IS NOT NULL
         RETURN n.source AS src, count(*) AS cnt
         ORDER BY src

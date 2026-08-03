@@ -1769,7 +1769,7 @@ class TestEnrichmentRealLLM:
         print(f"\n  Persisted to {ENRICHMENT_OUTPUT_FILE}")
 
 def _neo4j_available() -> bool:
-    """Check if Neo4j is reachable and credentials are configured."""
+    """Check if Neo4j is reachable via the codegraph backend."""
     try:
         from dotenv import load_dotenv
         load_dotenv(Path(__file__).parent.parent.parent / "codegraph" / ".env", override=False)
@@ -1778,11 +1778,8 @@ def _neo4j_available() -> bool:
     if not os.getenv("NEO4J_URI"):
         return False
     try:
-        from neomodel import db
-        from doxygen_index.neo4j_backend import connect_neo4j
-        connect_neo4j()
-        db.cypher_query("RETURN 1")
-        return True
+        from codegraph import get_backend
+        return get_backend().verify_connectivity()
     except Exception:
         return False
 
@@ -1811,6 +1808,10 @@ class TestEnrichmentNeo4jRoundTrip:
         not _neo4j_available(),
         reason="Neo4j not reachable (set NEO4J_URI/NEO4J_USER/NEO4J_PASSWORD)",
     )
+    @pytest.mark.skipif(
+        os.environ.get("CODEGRAPH_BACKEND", "sqlite").lower() != "neo4j",
+        reason="Neo4j round-trip test requires CODEGRAPH_BACKEND=neo4j",
+    )
     def test_enrichment_persisted_to_neo4j(self, parsed_real):
         """Enrich descriptions, write to Neo4j, query them back.
 
@@ -1825,7 +1826,7 @@ class TestEnrichmentNeo4jRoundTrip:
         from doxygen_index.neo4j_backend import (
             connect_neo4j, ensure_schema, clear_source, write_result,
         )
-        from neomodel import db
+        from codegraph import get_backend
 
         model = os.getenv("LLM_MODEL", "claude-sonnet-4-20250514")
 
@@ -1850,7 +1851,7 @@ class TestEnrichmentNeo4jRoundTrip:
             ("TestStepNode", "s"),
             ("AssertionNode", "a"),
         ]:
-            results, _ = db.cypher_query(f"""
+            results, _ = get_backend().execute_raw(f"""
                 MATCH ({prop}:{label} {{source: 'samplepkg'}})
                 RETURN {prop}.qualified_name, {prop}.description
                 ORDER BY {prop}.qualified_name
@@ -1870,7 +1871,7 @@ class TestEnrichmentNeo4jRoundTrip:
                 )
 
         # 4. Verify no duplicate nodes (clear_source worked)
-        results, _ = db.cypher_query("""
+        results, _ = get_backend().execute_raw("""
             MATCH (f:TestFixtureNode {source: 'samplepkg'})
             WITH f.qualified_name as qn, collect(f) as nodes
             WHERE size(nodes) > 1

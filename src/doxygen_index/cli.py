@@ -26,6 +26,8 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
+from codegraph import get_backend
+
 
 CONFIG_FILENAME = ".doxygen-index.toml"
 
@@ -932,7 +934,6 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
             write_result as neo4j_write,
             update_result as neo4j_update,
         )
-        from codegraph import get_backend
         print(f"\n--- cppreference → Neo4j ---")
         get_backend().health_check()
 

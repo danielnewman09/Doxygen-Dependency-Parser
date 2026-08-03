@@ -22,6 +22,16 @@ from pathlib import Path
 
 import pytest
 
+# This suite ingests the design LayerGraph into the backend and exercises
+# Neo4j-only round-trips; its ``_ensure_neo4j`` fixture swaps the global
+# backend, so under the default sqlite backend the whole module is skipped.
+import os as _os
+pytestmark = pytest.mark.skipif(
+    _os.environ.get("CODEGRAPH_BACKEND", "sqlite").lower() != "neo4j",
+    reason="Design-visualization suite requires CODEGRAPH_BACKEND=neo4j "
+           "(ingests the design LayerGraph into Neo4j)",
+)
+
 _HERE = Path(__file__).resolve().parent
 _CODEGRAPH_OUTPUT = _HERE.parent / "codegraph_output"
 _DESIGN_JSON = _HERE.parent / "data" / "design_layergraph.json"
@@ -30,16 +40,20 @@ _DESIGN_JSON = _HERE.parent / "data" / "design_layergraph.json"
 @pytest.fixture(scope="session")
 def _ensure_neo4j():
     """Ensure Neo4j is reachable on the test port (session-scoped)."""
-    import os as _os
-    from neomodel import config as neomodel_config, db
+    from codegraph import get_backend
+    from codegraph.backends import set_backend
+    from codegraph.backends.neo4j import Neo4jBackend, Neo4jConfig
 
     bolt_uri = "bolt://localhost:7689"
-    _os.environ.setdefault("NEO4J_URI", bolt_uri)
-    _os.environ.setdefault("NEO4J_USER", "neo4j")
-    _os.environ.setdefault("NEO4J_PASSWORD", "doxygen-index-test")
-    neomodel_config.DATABASE_URL = bolt_uri
+    set_backend(Neo4jBackend(Neo4jConfig(
+        uri=bolt_uri,
+        user="neo4j",
+        password="doxygen-index-test",
+    )))
+
+    backend = get_backend()
     try:
-        db.cypher_query("RETURN 1", resolve_objects=False)
+        backend.execute_raw("RETURN 1")
     except Exception as e:
         pytest.skip(f"Neo4j not available on {bolt_uri}: {e}")
 
