@@ -298,6 +298,7 @@ def _add_parameter_refs(
     memberdef: ET.Element,
     refid: str,
     result: ParseResult,
+    source: str,
 ) -> None:
     """Add ParameterNode entries from <param> children."""
     for i, param in enumerate(memberdef.findall("param")):
@@ -310,6 +311,7 @@ def _add_parameter_refs(
             name=param_name or "",
             type=param_type,
             default_value=default_value or "",
+            source=source,
         ))
 
 
@@ -796,7 +798,7 @@ class CppParser(LanguageParser):
             ))
 
         # --- Parameters (shared, for all member kinds that produce nodes) ---
-        _add_parameter_refs(memberdef, refid, result)
+        _add_parameter_refs(memberdef, refid, result, source)
 
         # --- Invoke references (shared) ---
         _add_invoke_refs(memberdef, refid, result)

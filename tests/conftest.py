@@ -199,9 +199,11 @@ def setup_backend(request):
         except Exception:
             pass  # best-effort — ignore if Neo4j is empty/fresh
 
-        # Install labels (creates constraints/indexes)
-        from neomodel import db  # NB: install_all_labels has no codegraph equivalent yet
-        db.install_all_labels()
+        # Create the codegraph-managed schema (per-label uid indexes).
+        # ``install_all_labels()`` is a no-op for the pure-Python model
+        # layer — the backend owns schema creation now.  Without these
+        # indexes every MERGE/MATCH on uid is an O(N²) label scan.
+        backend.apply_schema()
 
         # Wipe the database once before the session
         backend.wipe()

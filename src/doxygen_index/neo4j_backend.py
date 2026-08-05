@@ -30,15 +30,15 @@ from pathlib import Path
 
 from codegraph import get_backend
 
-# Import all node models so neomodel registry discovers them before
-# install_all_labels is called.
-from codegraph import (  # noqa: F401 — needed for install_all_labels
+# Import all node models so CodeGraphNode._registry is populated before
+# backend.apply_schema() enumerates labels for uid indexes.
+from codegraph import (  # noqa: F401 — needed for apply_schema
     ClassNode, InterfaceNode, EnumNode, UnionNode, ConceptNode,
     MethodNode, AttributeNode, EnumValueNode, FunctionNode, DefineNode,
     FileNode, NamespaceNode, ParameterNode,
     ImplementationNode,
 )
-from codegraph.models.test import (  # noqa: F401 — needed for install_all_labels
+from codegraph.models.test import (  # noqa: F401 — needed for apply_schema
     TestNode, AssertionNode, TestStepNode, TestFixtureNode,
 )
 from codegraph.models.literal import LiteralNode  # noqa: F401
@@ -90,9 +90,14 @@ def connect_neo4j() -> None:
 # ---------------------------------------------------------------------------
 
 def ensure_schema(stdout=None) -> None:
-    """Install neomodel labels, constraints, and indexes."""
-    from neomodel import db  # NB: install_all_labels has no codegraph equivalent yet
-    db.install_all_labels(stdout=stdout)
+    """Create the codegraph-managed schema (per-label uid indexes).
+
+    The backend owns schema creation — ``install_all_labels()`` is a
+    no-op for the pure-Python model layer.  ``MERGE``/``MATCH`` on
+    ``uid`` needs these indexes; without them batched writes degrade
+    to O(N²) label scans (measured ~80x slower at 20k nodes).
+    """
+    get_backend().apply_schema()
 
 
 # ---------------------------------------------------------------------------
@@ -356,6 +361,13 @@ def write_result(result: ParseResult) -> None:
     Relationships use UNWIND + MATCH + MERGE.  This is orders of
     magnitude faster than per-node neomodel ``.save()`` calls.
     """
+    # ── Ensure per-label uid indexes BEFORE the batched writes ──
+    # The backend owns schema creation (per-label uid indexes).  Every
+    # ``MERGE (n:Label {uid})`` below must be index-backed or the
+    # write degrades to O(N²) label scans (measured ~80x slower at
+    # 20k nodes).  Idempotent, so safe on every call.
+    ensure_schema()
+
     batch_refs: list[list] = [
         result.files, result.namespaces, result.classes,
         result.enums, result.unions, result.interfaces, result.concepts,
@@ -410,16 +422,6 @@ def write_result(result: ParseResult) -> None:
             if len(props_list) > _BATCH:
                 print(f"  {label}: {min(j + _BATCH, len(props_list))}/{len(props_list)}", flush=True)
         print(f"  {label}: {len(node_list)}", flush=True)
-
-    # ── Ensure per-label uid indexes ───────────────────────────
-    for lbl in ("AttributeNode", "FunctionNode", "ImplementationNode"):
-        try:
-            get_backend().execute_raw(
-                f"CREATE INDEX IF NOT EXISTS FOR (n:{lbl}) ON (n.uid)"
-            )
-        except Exception:
-            pass
-    print("  Index: per-label uid indexes ready", flush=True)
 
     # Parameters
     print(f"  Parameters phase: {len(result.parameters)} params", flush=True)
@@ -644,24 +646,34 @@ def _write_parameters(result: ParseResult) -> None:
         if hasattr(m, 'uid') and m.uid and hasattr(m, 'refid') and m.refid:
             refid_to_uid[m.refid] = m.uid
 
+    # Assign deterministic uids (source + member_refid + position) so
+    # HAS_PARAMETER edges serialize with resolvable target_uids instead
+    # of None.  Mirrors the main write path: every node MERGEs on uid.
+    batch_dicts: list[dict] = []
+    for p in result.parameters:
+        _ensure_deterministic_uid(p)
+        props = {k: v for k, v in p.__properties__.items() if v is not None}
+        props["uid"] = p.uid
+        # Convert member_refid → member_uid for indexed MATCH
+        props["_member_uid"] = refid_to_uid.get(props.get("member_refid", ""), "")
+        batch_dicts.append(props)
+
     batch_size = 1000
-    batch_dicts = [p.__properties__ for p in result.parameters]
     for i in range(0, len(batch_dicts), batch_size):
         batch = batch_dicts[i:i + batch_size]
-        # Convert member_refid → member_uid for indexed MATCH
-        for row in batch:
-            row["_member_uid"] = refid_to_uid.get(row.get("member_refid", ""), "")
         get_backend().execute_raw("""
             UNWIND $batch AS row
             WITH row WHERE row._member_uid <> ''
             MATCH (m:MemberNode {uid: row._member_uid})
-            MERGE (m)-[:HAS_PARAMETER]->(p:ParameterNode {
-                position: row.position,
-                name: row.name,
-                type: row.type
-            })
-            ON CREATE SET p.default_value = row.default_value,
-                          p.member_refid = row.member_refid
+            MERGE (p:ParameterNode {uid: row.uid})
+            SET p.position = row.position,
+                p.name = row.name,
+                p.type = row.type,
+                p.default_value = row.default_value,
+                p.member_refid = row.member_refid,
+                p.source = row.source
+            WITH m, p
+            MERGE (m)-[:HAS_PARAMETER]->(p)
         """, {"batch": batch})
         print(f"  Parameters: {min(i + batch_size, len(batch_dicts))}/{len(batch_dicts)}", flush=True)
     print(f"  Parameters: {len(batch_dicts)}")

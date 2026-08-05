@@ -118,6 +118,7 @@ def visit_function(
                 name=pname,
                 type=ptype,
                 default_value=pdefault,
+                source=ctx.source,
             ))
 
         # Collect call expressions from the body for invoke derivation
@@ -157,6 +158,7 @@ def visit_function(
                 name=pname,
                 type=ptype,
                 default_value=pdefault,
+                source=ctx.source,
             ))
 
         # Collect call expressions from the body for invoke derivation
