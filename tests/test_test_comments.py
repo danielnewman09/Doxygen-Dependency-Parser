@@ -638,19 +638,34 @@ class TestGraphDescriptionsOverride:
 
 
 class TestFetchNodeDescriptions:
-    """Unit-test the Neo4j read helper with a mocked backend execute_raw."""
+    """Unit-test the graph read helper with a mocked repository."""
+
+    @staticmethod
+    def _fake_finder(descriptions: dict[str, str]):
+        """Return a ``find_by_qualified_name`` stub backed by a map."""
+        from types import SimpleNamespace
+
+        def fake(qn: str):
+            desc = descriptions.get(qn)
+            if desc is None:
+                return None
+            return SimpleNamespace(description=desc)
+
+        return fake
 
     def test_returns_non_placeholder_descriptions(self, monkeypatch):
         from doxygen_index import neo4j_backend as nb
         from codegraph import get_backend
 
-        rows = [
-            {"qname": "a.test_evaluator", "description": "Graph: drives the evaluator."},
-            {"qname": "a.test_evaluator::step_0", "description": "Setup block"},  # placeholder
-            {"qname": "a.other::step_0", "description": ""},                       # empty
-        ]
-        monkeypatch.setattr(get_backend(), "execute_raw",
-                            lambda q, params=None: (rows, ["qname", "description"]))
+        find_map = {
+            "a.test_evaluator": "Graph: drives the evaluator.",
+            "a.test_evaluator::step_0": "Setup block",  # placeholder
+            "a.other::step_0": "",                      # empty
+        }
+        monkeypatch.setattr(
+            get_backend().graph, "find_by_qualified_name",
+            self._fake_finder(find_map),
+        )
         out = nb.fetch_node_descriptions(
             ["a.test_evaluator", "a.test_evaluator::step_0", "a.other::step_0"]
         )
@@ -660,12 +675,14 @@ class TestFetchNodeDescriptions:
         from doxygen_index import neo4j_backend as nb
         from codegraph import get_backend
 
-        rows = [
-            {"qname": "a.test_evaluator", "description": "Graph: drives the evaluator."},
-            {"qname": "a.test_evaluator::step_0", "description": "Setup block"},
-        ]
-        monkeypatch.setattr(get_backend(), "execute_raw",
-                            lambda q, params=None: (rows, ["qname", "description"]))
+        find_map = {
+            "a.test_evaluator": "Graph: drives the evaluator.",
+            "a.test_evaluator::step_0": "Setup block",
+        }
+        monkeypatch.setattr(
+            get_backend().graph, "find_by_qualified_name",
+            self._fake_finder(find_map),
+        )
         out = nb.fetch_node_descriptions(["a.test_evaluator",
                                           "a.test_evaluator::step_0"],
                                          include_placeholder=True)
@@ -678,12 +695,13 @@ class TestFetchNodeDescriptions:
         from doxygen_index import neo4j_backend as nb
         from codegraph import get_backend
 
-        def boom(q, params=None):
+        def boom(qn):
             raise RuntimeError("no connection")
-        monkeypatch.setattr(get_backend(), "execute_raw", boom)
+
+        monkeypatch.setattr(get_backend().graph, "find_by_qualified_name", boom)
         out = nb.fetch_node_descriptions(["a.b"])
         assert out == {}
-        assert "could not fetch descriptions from Neo4j" in capsys.readouterr().err
+        assert "could not fetch descriptions from graph" in capsys.readouterr().err
 
     def test_empty_input_returns_empty(self):
         from doxygen_index.neo4j_backend import fetch_node_descriptions

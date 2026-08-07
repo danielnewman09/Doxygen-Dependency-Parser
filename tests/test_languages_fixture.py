@@ -60,6 +60,13 @@ def _uid_for(graph_data: list[dict], qualified_name: str) -> str:
     if cache is None:
         cache = {}
         for node in graph_data:
+            # ImplementationNode shares its parent's qualified_name by
+            # design (uid disambiguated via ``kind``).  Tests reference
+            # the real symbol (method/step), not the implementation
+            # body, so skip implementation entries here — last-write-wins
+            # would otherwise let the impl's uid shadow the symbol's.
+            if node.get("type") == "ImplementationNode":
+                continue
             qn = node.get("qualified_name", "")
             name = node.get("name", "")
             uid = node.get("uid", "")

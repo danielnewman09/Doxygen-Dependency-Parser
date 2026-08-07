@@ -237,7 +237,7 @@ def cmd_project(args: argparse.Namespace) -> None:
         if args.clear:
             _confirm_destructive(f"source '{source}'", args.yes)
             clear_source(source)
-            neo4j_write(result)
+            neo4j_write(result, source=source)
         else:
             # Incremental is the default — add new, update changed, delete stale
             neo4j_update(result, source=source)
@@ -754,7 +754,7 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         if args.clear:
             _confirm_destructive(f"source '{project_name}'", args.yes)
             clear_source(project_name)
-        neo4j_write(result)
+        neo4j_write(result, source=project_name)
         print(f"  Neo4j ingest complete")
 
     # ── Summary ────────────────────────────────────────────────
@@ -941,7 +941,7 @@ def cmd_cppreference(args: argparse.Namespace) -> None:
         if args.clear:
             _confirm_destructive(f"source '{source}'", args.yes)
             clear_source(source)
-            neo4j_write(result)
+            neo4j_write(result, source=source)
         else:
             neo4j_update(result, source=source)
 

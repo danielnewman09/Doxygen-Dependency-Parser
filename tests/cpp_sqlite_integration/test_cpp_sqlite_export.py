@@ -14,6 +14,19 @@ import pytest
 from pathlib import Path
 
 
+def _file_identity(qn: str, name: str) -> str:
+    """Return the identity used for FileNode endpoints of INCLUDES edges.
+
+    FileNodes carry the relative source path in ``qualified_name`` (and
+    ``path``) with the basename in ``name``.  Tests assert basenames, so
+    a path-looking qualified_name is reduced to its basename — accepts
+    either representation.
+    """
+    if not qn or "/" not in qn:
+        return qn or name or ""
+    return Path(qn).name or name or ""
+
+
 # The shared fixture lives in conftest.py (session scope).
 # No duplicate fixture definition here.
 
@@ -133,10 +146,17 @@ class TestFullGraphExport:
         invokes: set[tuple[str, str, str]] = set()
         for node in uid_map.values():
             from_qn = node.get("qualified_name", "") or node.get("name", "")
+            node_type = node.get("type", "")
             for edge in node.get("edges", []):
                 target = uid_map.get(edge["target_uid"], {})
                 to_qn = target.get("qualified_name", "") or target.get("name", "")
                 to_src = target.get("source", "?")
+                if edge["relation_type"] == "INCLUDES":
+                    # FileNodes carry the relative path in qualified_name;
+                    # normalize to the basename so the assertions match
+                    # either representation.
+                    from_qn = _file_identity(from_qn, node.get("name", ""))
+                    to_qn = _file_identity(to_qn, target.get("name", ""))
                 entry = (from_qn, to_qn, to_src)
                 rt = edge["relation_type"]
                 if rt == "DEPENDS_ON":

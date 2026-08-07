@@ -251,7 +251,12 @@ class TestEnsureDeterministicUid:
             qualified_name="myns::Widget::doSomething",
             source_code="void doSomething() {}",
         )
-        expected = compute_uid(self.SOURCE, "myns::Widget::doSomething")
+        # ImplementationNode identity includes ``kind`` ("implementation")
+        # so its uid differs from the parent node's when both share the
+        # qualified_name (e.g. a TestStepNode and its implementation).
+        expected = compute_uid(
+            self.SOURCE, "myns::Widget::doSomething", "implementation"
+        )
         assert _expected_uid(self.SOURCE, node) == expected
 
     # ── TestNode ───────────────────────────────────────────────────────

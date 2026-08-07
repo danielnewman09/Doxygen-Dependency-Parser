@@ -22,6 +22,8 @@ from pathlib import Path
 
 from doxygen_index.parser.model import ParseResult
 
+from codegraph.models.compound import CompoundNode
+
 
 def merge_parse_results(*results: ParseResult) -> ParseResult:
     """Merge multiple ParseResults into one.
@@ -45,13 +47,29 @@ def merge_parse_results(*results: ParseResult) -> ParseResult:
     return merged
 
 
-def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
+def result_to_graph_json(
+    result: ParseResult,
+    source: str,
+    *,
+    text_scan: bool = True,
+) -> list[dict]:
     """Convert a ParseResult to a list of serialized node dicts.
 
     Args:
         result: The parsed output from ``parse_xml_dir`` or ``parse_python_dir``.
         source: Provenance label (project name) — stored in the node's
             ``source`` field for traceability.
+        text_scan: When True (default), also scan project-node text
+            fields (type_signature, definition, argsstring, brief
+            description, description) for qualified names and emit
+            synthetic DEPENDS_ON edges to matching nodes.  This
+            enriches visualization exports (HTML/JSON).  The graph
+            DATABASE write path passes ``text_scan=False``: the
+            pre-decoupling Neo4j writer created DEPENDS_ON edges only
+            from explicit doxygen ``<ref>`` references, and the
+            synthetic edges (e.g. a ``definition`` field naming the
+            same function in a canonical namespace) are noise in the
+            stored graph.
 
     Returns:
         A list of dicts, each a serialized node with ``type``,
@@ -60,6 +78,48 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
         ``codegraph.viz.export_html_from_json``.
     """
     # Collect all node lists
+    from codegraph import ClassNode  # type_param synthesis below
+
+    # ── type_param ClassNode synthesis (TEMPLATE_PARAM targets) ──
+    # The Cypher writer creates a lightweight ``kind='type_parameter'``
+    # ClassNode per template-param slot (qname ``type_param:<parent>:<pos>``)
+    # and links parent → slot via TEMPLATE_PARAM, slot → concept via
+    # ENFORCES_CONCEPT.  Reproduce those nodes here so they round-trip
+    # through the LayerGraph bridge like any other node.
+    type_param_nodes: list = []
+    type_param_concept_by_qn: dict[str, str] = {}
+    if result.template_param_refs:
+        source_by_refid: dict[str, object] = {}
+        for lst in (result.classes, result.enums, result.unions,
+                    result.interfaces, result.concepts,
+                    result.methods, result.attributes, result.functions):
+            for n in lst:
+                refid = _get_prop(n, "refid")
+                if refid:
+                    source_by_refid.setdefault(refid, n)
+        for tp in result.template_param_refs:
+            parent = source_by_refid.get(tp.from_refid)
+            if parent is None:
+                continue
+            parent_qn = _get_prop(parent, "qualified_name") or ""
+            if not parent_qn:
+                continue
+            parent_source = _get_prop(parent, "source") or source
+            tp_qn = f"type_param:{parent_qn}:{tp.position}"
+            definition = f"position={tp.position}"
+            if tp.defval:
+                definition += f" defval={tp.defval}"
+            type_param_nodes.append(ClassNode(
+                qualified_name=tp_qn,
+                name=tp.declname or tp.defname or "T",
+                kind="type_parameter",
+                source=parent_source,
+                definition=definition,
+                tags=["dependency" if parent_source != source else "as-built"],
+            ))
+            if tp.concept_qualified_name:
+                type_param_concept_by_qn[tp_qn] = tp.concept_qualified_name
+
     node_lists = [
         result.files,
         result.namespaces,
@@ -79,6 +139,8 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
         result.test_steps,
         result.test_fixtures,
         result.literals,
+        result.implementations,
+        type_param_nodes,
     ]
 
     # Build refid → uid mapping for edge target resolution.
@@ -94,30 +156,29 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
     for nodes in node_lists:
         for node in nodes:
             refid = _get_prop(node, "refid")
-            if refid:
-                # Compute deterministic uid from source + identity fields
-                # (e.g. source + qualified_name), not the auto-generated
-                # UUID from UniqueIdProperty.  This ensures edge
-                # target_uids resolve to the same uid used in node
-                # serialization.
-                try:
-                    uid = node._compute_uid()
-                except ValueError:
-                    uid = node._uid_value()
-                if uid:
+            # Compute the deterministic uid for EVERY node — refid-less
+            # types (ParameterNode, ImplementationNode, LiteralNode) need
+            # it for qname_to_uid so edges targeting them resolve.
+            try:
+                uid = node._compute_uid()
+            except ValueError:
+                uid = node._uid_value()
+            if uid:
+                # Set the deterministic uid on the node so that
+                # serialize() emits it instead of the auto-generated
+                # UUID from UniqueIdProperty.
+                uid_prop = type(node)._uid_prop()
+                if uid_prop:
+                    setattr(node, uid_prop, uid)
+                # Build qualified_name → uid mapping for cross-
+                # ParseResult resolution.
+                qn = _get_prop(node, "qualified_name") or ""
+                if qn:
+                    qname_to_uid[qn] = uid
+                    qname_to_type[qn] = type(node).__name__
+                if refid:
                     refid_to_uid[refid] = uid
-                    # Set the deterministic uid on the node so that
-                    # serialize() emits it instead of the auto-generated
-                    # UUID from UniqueIdProperty.
-                    uid_prop = type(node)._uid_prop()
-                    if uid_prop:
-                        setattr(node, uid_prop, uid)
-                    # Build qualified_name → uid mapping for cross-
-                    # ParseResult resolution.
-                    qn = _get_prop(node, "qualified_name") or ""
-                    if qn:
-                        qname_to_uid[qn] = uid
-                        qname_to_type[qn] = type(node).__name__
+            if refid:
                 refid_to_type[refid] = type(node).__name__
 
     # ==================================================================
@@ -126,13 +187,19 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
     # ==================================================================
     from collections import defaultdict
 
-    # compound_refid → [(member_refid, member_type)]
-    members_by_compound: dict[str, list[tuple[str, str]]] = defaultdict(list)
+    # compound_refid → [(member_uid, member_type)]
+    # Uses the member's OWN uid, not a refid→uid lookup: doxygen reuses
+    # one refid for a member declared in BOTH a primary template and its
+    # specialization (different qualified_names ⇒ different uids).  A
+    # refid lookup would collapse both to one uid and COMPOSES both
+    # parents to the same node — multi-parent tree → duplicate edges in
+    # every exporter.  The pre-decoupling writer targeted ``m.uid``.
+    members_by_compound: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
     for member in result.members:
         compound = _get_prop(member, "compound_refid")
-        mrefid = _get_prop(member, "refid")
-        if compound and mrefid:
-            members_by_compound[compound].append((mrefid, type(member).__name__))
+        muid = _get_prop(member, "uid")
+        if compound and muid:
+            members_by_compound[compound].append((muid, type(member).__name__))
 
     # parent_refid → [(child_refid, child_type)] — namespace composes
     composes_by_parent: dict[str, list[tuple[str, str]]] = defaultdict(list)
@@ -210,6 +277,40 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
     for cc in result.concept_constraints:
         concept_constraints_by_from[cc.from_refid].append((cc.to_refid, cc.to_type))
 
+    # member_refid → [param_uid] — HAS_PARAMETER.  Also assigns the
+    # deterministic param uid onto the node so serialize() emits it.
+    param_uids_by_member_refid: dict[str, list[str]] = defaultdict(list)
+    for p in result.parameters:
+        prefid = _get_prop(p, "member_refid") or ""
+        if not prefid:
+            continue
+        try:
+            puid = p._compute_uid()
+        except ValueError:
+            continue
+        uid_prop = type(p)._uid_prop()
+        if uid_prop:
+            setattr(p, uid_prop, puid)
+        param_uids_by_member_refid[prefid].append(puid)
+
+    # file_path → FileNode uid — DEFINED_IN (location-based: compounds/
+    # members/namespaces are "defined in" the file that declares them).
+    #
+    # Use each FileNode's OWN computed uid, NOT refid_to_uid: in Python
+    # parses a FileNode and its module NamespaceNode share the same refid
+    # (e.g. ``samplepkg.backend``), so the refid table resolves to whatever
+    # node won the collision (the namespace) and DEFINED_IN would point at
+    # the namespace instead of the file.
+    file_uid_by_path: dict[str, str] = {}
+    for f in result.files:
+        fp = _get_prop(f, "path") or _get_prop(f, "file_path") or ""
+        try:
+            fuid = f._compute_uid()
+        except ValueError:
+            fuid = None
+        if fp and fuid:
+            file_uid_by_path[fp] = fuid
+
     # Serialize each node and attach edges
     serialized: list[dict] = []
 
@@ -242,9 +343,25 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
             if file_path:
                 entry["file_path"] = file_path
 
+            # ``serialize()`` only emits ``_llm_fields``; the DB round-trip
+            # needs the FULL declared property set (refid, identity fields
+            # like ParameterNode's member_refid/position, is_static,
+            # body_start, ...) or ``save()`` writes defaults and the graph
+            # loses data / collapses distinct nodes onto one uid.
+            from codegraph.models.descriptors import PropertyRegistry
+
+            declared = PropertyRegistry.properties_of(type(node))
+            for pname in declared:
+                if pname in entry:
+                    continue
+                val = _raw_prop(node, pname)
+                if val is None or val == "" or val == [] or val == {}:
+                    continue
+                entry[pname] = val
+
             # Build edges for this node (uses pre-built index maps)
             edges = _build_node_edges(
-                node, refid_to_uid, refid_to_type, qname_to_uid,
+                node, result, refid_to_uid, refid_to_type, qname_to_uid,
                 members_by_compound,
                 composes_by_parent,
                 includes_by_file,
@@ -260,6 +377,9 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
                 fcb_by_from,
                 fdi_by_from,
                 concept_constraints_by_from,
+                param_uids_by_member_refid,
+                file_uid_by_path,
+                type_param_concept_by_qn,
             )
             # Filter out self-references (edge target_uid == this node's uid).
             node_uid = entry.get("uid", "")
@@ -278,7 +398,12 @@ def result_to_graph_json(result: ParseResult, source: str) -> list[dict]:
     # Doxygen didn't link.  Scan project-node text for qualified names
     # (e.g. ``spdlog::logger``, ``std::vector``) and emit synthetic
     # DEPENDS_ON edges to matching nodes from cppreference or dep parses.
-    # ------------------------------------------------------------------
+    #
+    # The DATABASE write path disables this (text_scan=False) to match
+    # the pre-decoupling writer, which emitted DEPENDS_ON only from
+    # explicit references.
+    if not text_scan:
+        return serialized
     import re
     _QNAME_RE = re.compile(r'\b(\w+(?:::\w+)+)\b')
     for entry in serialized:
@@ -339,6 +464,28 @@ def write_graph_json(
 # ---------------------------------------------------------------------------
 
 
+def _raw_prop(node, name: str):
+    """Extract a raw property value (any type) from a codegraph node.
+
+    Like :func:`_get_prop` but does not restrict to str/list — needed
+    for int/bool identity fields (e.g. ParameterNode ``position``).
+    """
+    if not hasattr(node, name):
+        return None
+    val = node.__dict__.get(name, None)
+    if val is None:
+        props = node.__dict__.get("_props", None)
+        if isinstance(props, dict):
+            val = props.get(name)
+    if val is None:
+        val = node.__dict__.get(f"_{name}", None)
+    if val is None:
+        val = getattr(node, name, None)
+        if isinstance(val, type(node)):  # descriptor leaked on unsaved instance
+            return None
+    return val
+
+
 def _get_prop(node, name: str, *, is_list: bool = False) -> str | list | None:
     """Extract a property from a codegraph node safely.
 
@@ -373,11 +520,12 @@ def _get_prop(node, name: str, *, is_list: bool = False) -> str | list | None:
 
 def _build_node_edges(
     node,
+    result: ParseResult,
     refid_to_uid: dict[str, str],
     refid_to_type: dict[str, str],
     qname_to_uid: dict[str, str],
     # Pre-built index maps (from_refid → list of targets)
-    members_by_compound: dict[str, list[tuple[str, str]]],
+    members_by_compound: dict[str, list[tuple[str, str, str]]],
     composes_by_parent: dict[str, list[tuple[str, str]]],
     includes_by_file: dict[str, list[str]],
     ns_includes_by_file: dict[str, list[str]],
@@ -392,6 +540,9 @@ def _build_node_edges(
     fcb_by_from: dict[str, list[str]],
     fdi_by_from: dict[str, list[str]],
     concept_constraints_by_from: dict[str, list[tuple[str, str]]],
+    param_uids_by_member_refid: dict[str, list[str]],
+    file_uid_by_path: dict[str, str],
+    type_param_concept_by_qn: dict[str, str],
 ) -> list[dict]:
     """Build the edge list for a single node using pre-built index maps.
 
@@ -403,12 +554,19 @@ def _build_node_edges(
     node_type = type(node).__name__
 
     # --- COMPOSES (compound → member) ---
-    if node_refid:
-        for mrefid, mtype in members_by_compound.get(node_refid, ()):
-            if mrefid in refid_to_uid:
+    # Only compounds (classes/interfaces/unions/enums/concepts) compose
+    # members.  File-scope members (typedefs like ``sqlite3``, global
+    # variables) carry a *file* compound_refid — composing them under
+    # the FileNode absorbs them into the excluded file in every
+    # exporter (they vanish from views and their incoming edges drop).
+    # The pre-decoupling writer matched ``from_label="CompoundNode"``
+    # and never created file→member COMPOSES.
+    if node_refid and issubclass(type(node), CompoundNode):
+        for muid, mtype in members_by_compound.get(node_refid, ()):
+            if muid:
                 edges.append({
                     "relation_type": "COMPOSES",
-                    "target_uid": refid_to_uid[mrefid],
+                    "target_uid": muid,
                     "target_type": mtype,
                 })
 
@@ -560,5 +718,78 @@ def _build_node_edges(
                     "target_uid": refid_to_uid[to_refid],
                     "target_type": to_type,
                 })
+
+    # --- HAS_PARAMETER (member → parameter) ---
+    if node_refid:
+        for puid in param_uids_by_member_refid.get(node_refid, ()):
+            edges.append({
+                "relation_type": "HAS_PARAMETER",
+                "target_uid": puid,
+                "target_type": "ParameterNode",
+            })
+
+    # --- TEMPLATE_PARAM (compound/member → type_param slot) ---
+    node_qn = _get_prop(node, "qualified_name") or ""
+    if node_refid and node_qn:
+        for tp in result.template_param_refs:
+            if tp.from_refid != node_refid:
+                continue
+            tp_qn = f"type_param:{node_qn}:{tp.position}"
+            tp_uid = qname_to_uid.get(tp_qn)
+            if tp_uid:
+                edges.append({
+                    "relation_type": "TEMPLATE_PARAM",
+                    "target_uid": tp_uid,
+                    "target_type": "ClassNode",
+                })
+
+    # --- ENFORCES_CONCEPT (type_param slot → concept) ---
+    concept_qn = type_param_concept_by_qn.get(node_qn, "")
+    if concept_qn:
+        concept_uid = qname_to_uid.get(concept_qn)
+        if concept_uid:
+            edges.append({
+                "relation_type": "ENFORCES_CONCEPT",
+                "target_uid": concept_uid,
+                "target_type": "ConceptNode",
+            })
+
+    # --- SPECIALIZES (specialization → primary template) ---
+    if node_qn:
+        for sr in result.specializes_refs:
+            if sr.from_qualified_name != node_qn:
+                continue
+            prim_uid = qname_to_uid.get(sr.primary_template_qualified_name)
+            if prim_uid:
+                edges.append({
+                    "relation_type": "SPECIALIZES",
+                    "target_uid": prim_uid,
+                    "target_type": "CompoundNode",
+                })
+
+    # --- HAS_IMPLEMENTATION (member → implementation node) ---
+    if node_refid:
+        for ref in result.implementation_refs:
+            if ref.member_refid != node_refid:
+                continue
+            impl_qn = getattr(ref.implementation, "qualified_name", "") or ""
+            impl_uid = qname_to_uid.get(impl_qn)
+            if impl_uid:
+                edges.append({
+                    "relation_type": "HAS_IMPLEMENTATION",
+                    "target_uid": impl_uid,
+                    "target_type": "ImplementationNode",
+                })
+
+    # --- DEFINED_IN (location-based: node → declaring file) ---
+    fp = _get_prop(node, "file_path") or ""
+    if fp:
+        fuid = file_uid_by_path.get(fp)
+        if fuid:
+            edges.append({
+                "relation_type": "DEFINED_IN",
+                "target_uid": fuid,
+                "target_type": "FileNode",
+            })
 
     return edges

@@ -22,40 +22,42 @@ from pathlib import Path
 
 import pytest
 
-# This suite ingests the design LayerGraph into the backend and exercises
-# Neo4j-only round-trips; its ``_ensure_neo4j`` fixture swaps the global
-# backend, so under the default sqlite backend the whole module is skipped.
-import os as _os
-pytestmark = pytest.mark.skipif(
-    _os.environ.get("CODEGRAPH_BACKEND", "sqlite").lower() != "neo4j",
-    reason="Design-visualization suite requires CODEGRAPH_BACKEND=neo4j "
-           "(ingests the design LayerGraph into Neo4j)",
-)
-
+# This suite ingests the design LayerGraph into the active backend and
+# exercises round-trips; its ``_ensure_backend`` fixture ensures the
+# active backend is configured (sqlite by default, no Docker).
 _HERE = Path(__file__).resolve().parent
 _CODEGRAPH_OUTPUT = _HERE.parent / "codegraph_output"
 _DESIGN_JSON = _HERE.parent / "data" / "design_layergraph.json"
 
 
 @pytest.fixture(scope="session")
-def _ensure_neo4j():
-    """Ensure Neo4j is reachable on the test port (session-scoped)."""
-    from codegraph import get_backend
+def _ensure_backend():
+    """Ensure the ACTIVE backend is configured (session-scoped).
+
+    sqlite (default): a self-contained in-memory database so the design
+    graph stays isolated from the as-built cpp-sqlite index.  neo4j
+    (opt-in): the test container on port 7689.
+    """
+    import os as _os
     from codegraph.backends import set_backend
-    from codegraph.backends.neo4j import Neo4jBackend, Neo4jConfig
+    from codegraph import get_backend
 
-    bolt_uri = "bolt://localhost:7689"
-    set_backend(Neo4jBackend(Neo4jConfig(
-        uri=bolt_uri,
-        user="neo4j",
-        password="doxygen-index-test",
-    )))
-
-    backend = get_backend()
-    try:
-        backend.execute_raw("RETURN 1")
-    except Exception as e:
-        pytest.skip(f"Neo4j not available on {bolt_uri}: {e}")
+    if _os.environ.get("CODEGRAPH_BACKEND", "sqlite").lower() == "neo4j":
+        from codegraph.backends.neo4j import Neo4jBackend, Neo4jConfig
+        bolt_uri = "bolt://localhost:7689"
+        set_backend(Neo4jBackend(Neo4jConfig(
+            uri=bolt_uri,
+            user="neo4j",
+            password="doxygen-index-test",
+        )))
+        backend = get_backend()
+        try:
+            backend.execute_raw("RETURN 1")
+        except Exception as e:
+            pytest.skip(f"Neo4j not available on {bolt_uri}: {e}")
+    else:
+        from codegraph.backends.sqlite import SqliteBackend, SqliteConfig
+        set_backend(SqliteBackend(SqliteConfig(path=":memory:")))
 
 
 class TestDesignLayerVisualization:
@@ -66,8 +68,8 @@ class TestDesignLayerVisualization:
     TestFixtureNode, LiteralNode)."""
 
     @pytest.fixture(scope="class")
-    def design_puml_text(self, _ensure_neo4j):
-        """Ingest design JSON → Neo4j → retrieve design layer →
+    def design_puml_text(self, _ensure_backend):
+        """Ingest design JSON → active backend → retrieve design layer →
         export PlantUML.  Saves the PUML to codegraph_output."""
         from codegraph.graph import LayerGraph
         from codegraph.export.plantuml import export_plantuml, GraphView
@@ -394,7 +396,7 @@ class TestDesignLayerRoundTrip:
     PlantUML import/export without losing structure."""
 
     @pytest.fixture(scope="class")
-    def design_roundtrip_puml(self, _ensure_neo4j):
+    def design_roundtrip_puml(self, _ensure_backend):
         """Ingest design, retrieve, export → import → re-export."""
         import json as _json
         from codegraph.graph import LayerGraph

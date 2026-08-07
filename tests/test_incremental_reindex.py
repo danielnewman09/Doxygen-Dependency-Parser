@@ -3,10 +3,11 @@ captures additions, deletions, renames, and property updates without
 destroying and re-writing the whole database.
 
 These tests use the ``tests/languages/python/samplepkg`` fixture as a
-base, copy it to a temp directory, write it to Neo4j, then modify the
-source files and call :func:`update_result` to incrementally update the
+base, copy it to a temp directory, write it to the active backend
+(Neo4j or SQLite via ``CODEGRAPH_BACKEND``), then modify the source
+files and call :func:`update_result` to incrementally update the
 graph.  After the update, they fetch actual :class:`CodeGraphNode`
-objects from Neo4j and inspect their neomodel relationship managers
+objects from the backend and inspect their relationship managers
 (e.g. ``ns.classes.all()``, ``cls.methods.all()``,
 ``meth.parent_compound.all()``) to verify that:
 
@@ -17,8 +18,9 @@ objects from Neo4j and inspect their neomodel relationship managers
 * **Updated** nodes retain all their edges.
 * **Preservation**: nodes from *other* sources are untouched.
 
-Requires a running Neo4j instance managed by the ``test_neo4j_container``
-and ``setup_neomodel`` session fixtures in ``tests/conftest.py``.
+Backend-agnostic since Phase 2 — all helpers go through the codegraph
+repository API (``find_all_by_source`` / ``delete_by_uid`` /
+``get_all_edges``), never raw Cypher.
 """
 
 from __future__ import annotations
@@ -35,15 +37,6 @@ from codegraph import get_backend
 from doxygen_index.parser import parse_python_dir
 from doxygen_index.graph_json import result_to_graph_json
 
-# The reindex machinery (``doxygen_index.neo4j_backend``) is raw Cypher and
-# Neo4j-only.  It runs only under CODEGRAPH_BACKEND=neo4j until Phase 2 of
-# the backend-decoupling plan ports it to codegraph's repository API.
-pytestmark = pytest.mark.skipif(
-    os.environ.get("CODEGRAPH_BACKEND", "sqlite").lower() != "neo4j",
-    reason="Incremental-reindex suite exercises the raw-Cypher neo4j_backend; "
-           "requires CODEGRAPH_BACKEND=neo4j",
-)
-
 
 #: Root of the language-specific test fixtures.
 LANGUAGES_DIR = Path(__file__).parent / "languages"
@@ -58,50 +51,67 @@ OTHER_SOURCE = "reindex_other"
 
 
 # ---------------------------------------------------------------------------
-# Neo4j helpers — raw Cypher
+# ---------------------------------------------------------------------------
+# Backend helpers — repository API (backend-agnostic, no raw Cypher)
 # ---------------------------------------------------------------------------
 
+def _nodes_by_source(source: str = TEST_SOURCE) -> list:
+    """Fetch all nodes carrying *source* from the active backend."""
+    return get_backend().graph.find_all_by_source(source)
+
+
 def _file_exists(refid: str, source: str = TEST_SOURCE) -> bool:
-    results, _ = get_backend().execute_raw(
-        "MATCH (f:FileNode {refid: $refid, source: $src}) RETURN count(f)",
-        {"refid": refid, "src": source},
+    return any(
+        type(n).__name__ == "FileNode" and getattr(n, "refid", "") == refid
+        for n in _nodes_by_source(source)
     )
-    return results[0][0] > 0
 
 
 def _node_count(label: str, source: str = TEST_SOURCE) -> int:
-    results, _ = get_backend().execute_raw(
-        f"MATCH (n:{label} {{source: $src}}) RETURN count(n)",
-        {"src": source},
+    """Count nodes whose label chain includes *label*."""
+    return sum(
+        1 for n in _nodes_by_source(source)
+        if label in type(n).inherited_labels()
     )
-    return results[0][0]
+
+
+def _count_nodes(
+    label: str | None,
+    qualified_name: str,
+    source: str = TEST_SOURCE,
+) -> int:
+    """Count nodes with *label* (any label when None) and *qualified_name*."""
+    return sum(
+        1 for n in _nodes_by_source(source)
+        if (label is None or type(n).__name__ == label)
+        and getattr(n, "qualified_name", "") == qualified_name
+    )
 
 
 def _node_exists(label: str, qualified_name: str, source: str = TEST_SOURCE) -> bool:
-    results, _ = get_backend().execute_raw(
-        f"MATCH (n:{label} {{qualified_name: $qn, source: $src}}) RETURN count(n)",
-        {"qn": qualified_name, "src": source},
+    return any(
+        type(n).__name__ == label
+        and getattr(n, "qualified_name", "") == qualified_name
+        for n in _nodes_by_source(source)
     )
-    return results[0][0] > 0
 
 
 def _node_property(label: str, qualified_name: str, prop: str, source: str = TEST_SOURCE):
-    results, _ = get_backend().execute_raw(
-        f"MATCH (n:{label} {{qualified_name: $qn, source: $src}}) "
-        f"RETURN n.{prop}",
-        {"qn": qualified_name, "src": source},
-    )
-    if results and results[0]:
-        return results[0][0]
+    for n in _nodes_by_source(source):
+        if type(n).__name__ == label and getattr(n, "qualified_name", "") == qualified_name:
+            return getattr(n, prop, None)
     return None
 
 
 def _total_node_count(source: str = TEST_SOURCE) -> int:
-    results, _ = get_backend().execute_raw(
-        "MATCH (n {source: $src}) RETURN count(n)",
-        {"src": source},
-    )
-    return results[0][0]
+    return len(_nodes_by_source(source))
+
+
+def _find_by_qname(qualified_name: str, source: str = TEST_SOURCE):
+    for n in _nodes_by_source(source):
+        if getattr(n, "qualified_name", "") == qualified_name:
+            return n
+    return None
 
 
 def _incoming_edge_count(qualified_name: str, source: str = TEST_SOURCE) -> int:
@@ -109,38 +119,40 @@ def _incoming_edge_count(qualified_name: str, source: str = TEST_SOURCE) -> int:
 
     Used to verify that a deleted node has zero dangling edges.
     """
-    results, _ = get_backend().execute_raw(
-        "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) "
-        "RETURN count(r)",
-        {"qn": qualified_name, "src": source},
-    )
-    return results[0][0]
+    node = _find_by_qname(qualified_name, source)
+    if node is None:
+        return 0
+    return sum(1 for e in get_backend().get_all_edges(node) if not e.is_outgoing)
 
 
 def _outgoing_edge_count(qualified_name: str, source: str = TEST_SOURCE) -> int:
     """Count ALL outgoing edges from a node, regardless of type."""
-    results, _ = get_backend().execute_raw(
-        "MATCH (n {qualified_name: $qn, source: $src})-[r]->() "
-        "RETURN count(r)",
-        {"qn": qualified_name, "src": source},
-    )
-    return results[0][0]
+    node = _find_by_qname(qualified_name, source)
+    if node is None:
+        return 0
+    return sum(1 for e in get_backend().get_all_edges(node) if e.is_outgoing)
+
+
+def _clear_source(source: str) -> None:
+    """Delete every node carrying *source* via the repository API."""
+    graph = get_backend().graph
+    for node in graph.find_all_by_source(source):
+        uid = node._uid_value()
+        if uid:
+            graph.delete_by_uid(uid)
 
 
 def _clear_test_sources():
     for src in [TEST_SOURCE, OTHER_SOURCE]:
-        get_backend().execute_raw(
-            "MATCH (n {source: $src}) DETACH DELETE n",
-            {"src": src},
-        )
+        _clear_source(src)
 
 
 def _write_file(path: Path, content: str) -> None:
     path.write_text(textwrap.dedent(content).lstrip(), encoding="utf-8")
 
 
-# ---------------------------------------------------------------------------
-# Neo4j helpers — neomodel object fetchers and edge inspectors
+# Node fetchers and edge inspectors — all backend-agnostic via
+# RelationshipManager / ``.nodes`` shims.
 # ---------------------------------------------------------------------------
 
 def _get_node(model_cls, qualified_name: str, source: str = TEST_SOURCE):
@@ -151,13 +163,17 @@ def _get_node(model_cls, qualified_name: str, source: str = TEST_SOURCE):
 
 
 def _node_identity(node) -> str:
-    """Return a string identity for *node*, preferring qualified_name,
-    then refid, then path.
+    """Return a string identity for *node*, preferring ``refid``, then
+    ``qualified_name``, then ``path``.
 
-    FileNode doesn't have ``qualified_name``, so we fall back to ``refid``
-    (the module name) or ``path``.
+    ``refid`` is the primary key for every source-derived node (for
+    Python nodes it equals the qualified name; for FileNode it is the
+    module name).  FileNode's ``qualified_name`` is computed from its
+    path on save, so checking ``refid`` first keeps FileNode targets
+    identified by module name (``samplepkg.backend``) instead of the
+    absolute file path.
     """
-    for attr in ("qualified_name", "refid", "path"):
+    for attr in ("refid", "qualified_name", "path"):
         val = getattr(node, attr, None)
         if val:
             return val
@@ -210,20 +226,14 @@ def initial_index(fixture_copy):
     """Parse the fixture, write it to Neo4j, and return the directory path."""
     from doxygen_index.neo4j_backend import write_result
 
-    get_backend().execute_raw(
-        "MATCH (n {source: $src}) DETACH DELETE n",
-        {"src": TEST_SOURCE},
-    )
+    get_backend().graph.delete_by_source(TEST_SOURCE)
 
     result = parse_python_dir(fixture_copy, source=TEST_SOURCE, progress_interval=0)
     write_result(result)
 
     yield fixture_copy
 
-    get_backend().execute_raw(
-        "MATCH (n {source: $src}) DETACH DELETE n",
-        {"src": TEST_SOURCE},
-    )
+    get_backend().graph.delete_by_source(TEST_SOURCE)
 
 
 # ---------------------------------------------------------------------------
@@ -434,11 +444,9 @@ def assert_close(
 
         # No edges point to the deleted class or its method
         # (the node doesn't exist, so incoming_edge_count should be 0)
-        results, _ = get_backend().execute_raw(
-            "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) RETURN count(r)",
-            {"qn": old_qname, "src": TEST_SOURCE},
+        assert _incoming_edge_count(old_qname, TEST_SOURCE) == 0, (
+            f"Dangling edges point to deleted {old_qname}"
         )
-        assert results[0][0] == 0, f"Dangling edges point to deleted {old_qname}"
 
         # Siblings survive
         assert _node_exists("InterfaceNode", "samplepkg.verify.Verifier")
@@ -488,11 +496,9 @@ def assert_close(
 
         # No edges point to the deleted namespace
         for qn in [ns_qname, func_qname, cls_qname]:
-            results, _ = get_backend().execute_raw(
-                "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) RETURN count(r)",
-                {"qn": qn, "src": TEST_SOURCE},
+            assert _incoming_edge_count(qn, TEST_SOURCE) == 0, (
+                f"Dangling edges point to deleted {qn}"
             )
-            assert results[0][0] == 0, f"Dangling edges point to deleted {qn}"
 
         # Edges: the top-level namespace no longer composes the deleted namespace
         top_ns_after = _get_node(NamespaceNode, "samplepkg")
@@ -557,11 +563,9 @@ class Evaluator:
         assert not _node_exists("MethodNode", deleted_meth_qname)
 
         # No edges point to the deleted method
-        results, _ = get_backend().execute_raw(
-            "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) RETURN count(r)",
-            {"qn": deleted_meth_qname, "src": TEST_SOURCE},
+        assert _incoming_edge_count(deleted_meth_qname, TEST_SOURCE) == 0, (
+            f"Dangling edges point to deleted {deleted_meth_qname}"
         )
-        assert results[0][0] == 0, f"Dangling edges point to deleted {deleted_meth_qname}"
 
         # Edges: the class no longer composes the deleted method
         cls_after = _get_node(ClassNode, cls_qname)
@@ -647,11 +651,9 @@ class TestNodeRenaming:
         assert new_qname in _rel_qnames(new_meth, "parent_compound")
 
         # No edges point to the old node
-        results, _ = get_backend().execute_raw(
-            "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) RETURN count(r)",
-            {"qn": old_qname, "src": TEST_SOURCE},
+        assert _incoming_edge_count(old_qname, TEST_SOURCE) == 0, (
+            f"Dangling edges point to old {old_qname}"
         )
-        assert results[0][0] == 0, f"Dangling edges point to old {old_qname}"
 
     def test_function_renamed(self, initial_index):
         """A renamed function: old gone, new exists with parent_namespace edge."""
@@ -787,11 +789,9 @@ class TestNodeUpdate:
         assert cls_after.brief_description != orig_desc
 
         # No duplicates
-        results, _ = get_backend().execute_raw(
-            "MATCH (n:ClassNode {qualified_name: $qn, source: $src}) RETURN count(n)",
-            {"qn": qname, "src": TEST_SOURCE},
+        assert _count_nodes("ClassNode", qname, TEST_SOURCE) == 1, (
+            "Should have exactly one node (no duplicates)"
         )
-        assert results[0][0] == 1, "Should have exactly one node (no duplicates)"
 
         # Edges are retained — same methods, same parent, same attributes
         assert _rel_qnames(cls_after, "methods") == orig_methods, (
@@ -929,10 +929,7 @@ class TestCrossSourceIsolation:
                                 source=TEST_SOURCE)
 
         # Cleanup
-        get_backend().execute_raw(
-            "MATCH (n {source: $src}) DETACH DELETE n",
-            {"src": OTHER_SOURCE},
-        )
+        get_backend().graph.delete_by_source(OTHER_SOURCE)
         shutil.rmtree(other_dir, ignore_errors=True)
 
 
@@ -997,22 +994,15 @@ class TestRelationshipIntegrity:
             "samplepkg.long_signatures.ReportingService.generate_report",
         ]
         for qn in deleted_qnames:
-            results, _ = get_backend().execute_raw(
-                "MATCH ()-[r]->(n {qualified_name: $qn, source: $src}) RETURN count(r)",
-                {"qn": qn, "src": TEST_SOURCE},
-            )
-            assert results[0][0] == 0, (
-                f"Dangling edge points to deleted node {qn}: {results[0][0]} edges"
+            assert _incoming_edge_count(qn, TEST_SOURCE) == 0, (
+                f"Dangling edge points to deleted node {qn}"
             )
 
-        # Also check no outgoing edges from the deleted nodes exist
-        # (the nodes themselves should be gone)
+        # Also check the deleted nodes themselves are gone
         for qn in deleted_qnames:
-            results, _ = get_backend().execute_raw(
-                "MATCH (n {qualified_name: $qn, source: $src}) RETURN count(n)",
-                {"qn": qn, "src": TEST_SOURCE},
+            assert _count_nodes(None, qn, TEST_SOURCE) == 0, (
+                f"Deleted node {qn} still exists"
             )
-            assert results[0][0] == 0, f"Deleted node {qn} still exists"
 
     def test_verifies_edges_preserved_for_unchanged_tests(self, initial_index):
         """VERIFIES edges for unchanged test nodes are preserved after update."""
@@ -1063,9 +1053,10 @@ class TestRelationshipIntegrity:
 
         # Write a rich description directly on a test child node
         child_qname = f"{test_qname}::evaluator"
-        get_backend().execute_raw(
-            "MATCH (n {qualified_name: $qname}) SET n.description = $desc",
-            {"qname": child_qname, "desc": enriched_desc},
+        child_node = _find_by_qname(child_qname)
+        assert child_node is not None, f"Test child not found: {child_qname}"
+        get_backend().graph.update_properties(
+            child_node._uid_value(), {"description": enriched_desc}
         )
 
         # Re-index without changes
@@ -1073,13 +1064,12 @@ class TestRelationshipIntegrity:
         update_result(result, source=TEST_SOURCE)
 
         # Description must be preserved — not overwritten with placeholder
-        results, _ = get_backend().execute_raw(
-            "MATCH (n {qualified_name: $qname}) RETURN n.description",
-            {"qname": child_qname},
-        )
-        assert results and results[0][0] == enriched_desc, (
+        child_node = _find_by_qname(child_qname)
+        assert child_node is not None
+        assert getattr(child_node, "description", "") == enriched_desc, (
             f"Enriched description was overwritten! "
-            f"Expected '{enriched_desc}', got '{results[0][0] if results else 'N/A'}'"
+            f"Expected '{enriched_desc}', got "
+            f"'{getattr(child_node, 'description', 'N/A')}'"
         )
 
     def test_enriched_assertion_descriptions_preserved(self, initial_index):
@@ -1100,20 +1090,17 @@ class TestRelationshipIntegrity:
         assertion_qname = sorted(assertions)[0]
 
         # Verify the current description IS a placeholder
-        results, _ = get_backend().execute_raw(
-            "MATCH (n {qualified_name: $qname}) RETURN n.description",
-            {"qname": assertion_qname},
-        )
-        current_desc = results[0][0] if results else ""
+        assertion_node = _find_by_qname(assertion_qname)
+        assert assertion_node is not None, f"Assertion not found: {assertion_qname}"
+        current_desc = getattr(assertion_node, "description", "") or ""
         assert _is_placeholder_description(current_desc), (
             f"Expected placeholder, got: {current_desc!r}"
         )
 
         # Write a rich description
         enriched = "LLM: Verifies that the step produces the expected result"
-        get_backend().execute_raw(
-            "MATCH (n {qualified_name: $qname}) SET n.description = $desc",
-            {"qname": assertion_qname, "desc": enriched},
+        get_backend().graph.update_properties(
+            assertion_node._uid_value(), {"description": enriched}
         )
 
         # Re-index
@@ -1121,13 +1108,12 @@ class TestRelationshipIntegrity:
         update_result(result, source=TEST_SOURCE)
 
         # Must be preserved
-        results, _ = get_backend().execute_raw(
-            "MATCH (n {qualified_name: $qname}) RETURN n.description",
-            {"qname": assertion_qname},
-        )
-        assert results and results[0][0] == enriched, (
+        assertion_node = _find_by_qname(assertion_qname)
+        assert assertion_node is not None
+        assert getattr(assertion_node, "description", "") == enriched, (
             f"Enriched assertion overwritten! "
-            f"Expected '{enriched}', got '{results[0][0] if results else 'N/A'}'"
+            f"Expected '{enriched}', got "
+            f"'{getattr(assertion_node, 'description', 'N/A')}'"
         )
 
     def test_inherits_from_edge_preserved_after_update(self, initial_index):
@@ -1259,8 +1245,8 @@ class TestUpdateResultSummary:
         result = parse_python_dir(initial_index, source=TEST_SOURCE, progress_interval=0)
         deleted = update_result(result, source=TEST_SOURCE)
 
-        assert "CompoundNode" in deleted, f"Expected CompoundNode deletions, got: {deleted}"
-        assert "MemberNode" in deleted, f"Expected MemberNode deletions, got: {deleted}"
+        assert "ClassNode" in deleted, f"Expected ClassNode deletions, got: {deleted}"
+        assert "FunctionNode" in deleted, f"Expected FunctionNode deletions, got: {deleted}"
         assert "FileNode" in deleted, f"Expected FileNode deletions, got: {deleted}"
-        assert deleted["CompoundNode"] >= 1  # DataProcessor class
-        assert deleted["MemberNode"] >= 1  # process_data function
+        assert deleted["ClassNode"] >= 1  # ReportingService class
+        assert deleted["FunctionNode"] >= 1  # process_data function
