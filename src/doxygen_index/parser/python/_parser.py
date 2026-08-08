@@ -35,6 +35,7 @@ from pathlib import Path
 from typing import Optional
 
 from codegraph import FileNode, NamespaceNode
+from codegraph.constants import normalize_language
 
 from doxygen_index.parser.base import LanguageParser
 from doxygen_index.parser.model import ParseResult, IncludeEntry
@@ -207,7 +208,7 @@ class PythonParser(LanguageParser):
                 refid=module_name,
                 name=file_path.name,
                 path=str(file_path),
-                language="Python",
+                language=normalize_language("Python"),
                 source=source,
             ))
 

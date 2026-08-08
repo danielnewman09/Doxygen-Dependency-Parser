@@ -28,6 +28,7 @@ from codegraph import (
     ImplementationNode, ParameterNode, FunctionNode,
     FileNode, NamespaceNode,
 )
+from codegraph.constants import normalize_language
 
 from doxygen_index.parser.base import LanguageParser
 from doxygen_index.parser.model import InheritsEntry, DependsOnEntry, CompositionEntry
@@ -206,6 +207,11 @@ def _extract_common_member_fields(
                 type_refs.append({"refid": tr_refid, "kindref": tr_kindref})
     definition = memberdef.findtext("definition", "")
     argsstring = memberdef.findtext("argsstring", "")
+    # Explicit value expression for enum values (e.g. ``1 << 3``).
+    # Captured raw from the ``<initializer>`` element so the value is
+    # preserved for round-trip code generation; rendering (e.g. whether
+    # a leading ``=`` is emitted) is a template concern.
+    initializer = memberdef.findtext("initializer", "")
 
     loc = memberdef.find("location")
     file_path, line_number, body_start, body_end = parse_location(loc)
@@ -224,6 +230,7 @@ def _extract_common_member_fields(
         "type_refs": type_refs,
         "definition": definition,
         "argsstring": argsstring,
+        "initializer": initializer,
         "file_path": file_path,
         "line_number": line_number,
         "body_start": body_start,
@@ -443,7 +450,7 @@ class CppParser(LanguageParser):
             if kind == "file":
                 loc = compounddef.find("location")
                 file_path = loc.get("file") if loc is not None else None
-                language = compounddef.get("language", "")
+                language = normalize_language(compounddef.get("language", ""))
                 result.files.append(FileNode(
                     refid=refid, name=compoundname,
                     path=file_path or "", language=language, source=source,
@@ -958,6 +965,7 @@ class CppParser(LanguageParser):
             line_number=fields["line_number"],
             body_start=fields["body_start"] or 0,
             body_end=fields["body_end"] or 0,
+            initializer=fields.get("initializer") or "",
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
             source=source,

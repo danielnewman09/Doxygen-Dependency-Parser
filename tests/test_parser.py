@@ -1144,3 +1144,119 @@ class TestGraphJson:
         # This should not raise
         graph = LayerGraph.deserialize(graph_data)
         assert len(graph.entries) > 0
+
+
+class TestEnumValueInitializerParsing:
+    """Enum values capture the Doxygen <initializer> (Phase 0 codegen blocker)."""
+
+    @pytest.fixture
+    def enum_xml_dir(self, tmp_path):
+        """A minimal Doxygen XML directory with an enum carrying explicit values."""
+        (tmp_path / "index.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygenindex>
+              <compound refid="enumColor" kind="enum">
+                <name>Color</name>
+              </compound>
+              <compound refid="color_8h" kind="file">
+                <name>color.h</name>
+              </compound>
+            </doxygenindex>
+        """))
+
+        # enumColor.xml
+        (tmp_path / "enumColor.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="enumColor" kind="enum" language="C++">
+                <compoundname>palette::Color</compoundname>
+                <location file="src/color.h" line="5"/>
+                <sectiondef kind="public-type">
+                  <memberdef kind="enumvalue" id="enumColor_1aRed"
+                             prot="public">
+                    <name>Red</name>
+                    <qualifiedname>palette::Color::Red</qualifiedname>
+                    <initializer>= 1</initializer>
+                    <briefdescription><para>Red.</para></briefdescription>
+                    <location file="src/color.h" line="6"/>
+                  </memberdef>
+                  <memberdef kind="enumvalue" id="enumColor_1aGreen"
+                             prot="public">
+                    <name>Green</name>
+                    <qualifiedname>palette::Color::Green</qualifiedname>
+                    <initializer>= 1 &lt;&lt; 2</initializer>
+                    <location file="src/color.h" line="7"/>
+                  </memberdef>
+                  <memberdef kind="enumvalue" id="enumColor_1aBlue"
+                             prot="public">
+                    <name>Blue</name>
+                    <qualifiedname>palette::Color::Blue</qualifiedname>
+                    <location file="src/color.h" line="8"/>
+                  </memberdef>
+                </sectiondef>
+              </compounddef>
+            </doxygen>
+        """))
+
+        # color_8h.xml (file compound — files are created from file
+        # compounddefs, not from <location> elements)
+        (tmp_path / "color_8h.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="color_8h" kind="file" language="C++">
+                <compoundname>color.h</compoundname>
+                <location file="src/color.h"/>
+              </compounddef>
+            </doxygen>
+        """))
+        return tmp_path
+
+    def test_enum_value_initializers_captured(self, enum_xml_dir):
+        result = parse_xml_dir(enum_xml_dir, source="test", progress_interval=0)
+
+        assert len(result.enums) == 1
+        enum = result.enums[0]
+        assert enum.name == "Color"
+        assert enum.qualified_name == "palette::Color"
+
+        assert len(result.enum_values) == 3
+        by_name = {v.name: v for v in result.enum_values}
+        assert by_name["Red"].initializer == "= 1"
+        assert by_name["Green"].initializer == "= 1 << 2"
+        # No <initializer> element → implicit sequential value
+        assert by_name["Blue"].initializer == ""
+
+    def test_enum_values_composed_by_enum(self, enum_xml_dir):
+        """Enum values nest under their EnumNode in the LayerGraph, and the
+        initializer survives the JSON → LayerGraph round-trip (codegen's
+        input path)."""
+        result = parse_xml_dir(enum_xml_dir, source="test", progress_interval=0)
+        from codegraph.graph import LayerGraph
+        from doxygen_index.graph_json import result_to_graph_json
+
+        graph_data = result_to_graph_json(result, source="test")
+        graph = LayerGraph.deserialize(graph_data)
+
+        flat = graph._flat_index()
+        enum_entries = [
+            e for e in flat.values()
+            if type(e.node).__name__ == "EnumNode"
+        ]
+        assert len(enum_entries) == 1
+        enum_entry = enum_entries[0]
+        values = list(enum_entry.children.get("EnumValueNode", {}).values())
+        assert len(values) == 3
+        assert all(
+            type(e.node).__name__ == "EnumValueNode" for e in values
+        )
+        by_name = {e.node.name: e.node for e in values}
+        assert by_name["Red"].initializer == "= 1"
+        assert by_name["Green"].initializer == "= 1 << 2"
+        assert by_name["Blue"].initializer == ""
+
+    def test_file_language_normalized_to_cpp(self, enum_xml_dir):
+        """Doxygen's language="C++" normalizes to the canonical "cpp"."""
+        result = parse_xml_dir(enum_xml_dir, source="test", progress_interval=0)
+        assert len(result.files) == 1
+        assert result.files[0].path == "src/color.h"
+        assert result.files[0].language == "cpp"
