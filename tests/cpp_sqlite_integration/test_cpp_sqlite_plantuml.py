@@ -15,6 +15,7 @@ import pytest
 
 
 _CODEGRAPH_OUTPUT = Path(__file__).resolve().parent.parent / "codegraph_output"
+_UNIT_TEST_DATA = Path(__file__).resolve().parent.parent / "unit_test_data"
 
 
 class TestPlantUMLExport:
@@ -941,7 +942,7 @@ class TestClassScopedView:
         from codegraph.graph import LayerGraph
         from codegraph.export.plantuml import PlantUMLExporter
 
-        json_path = _CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop.json"
+        json_path = _UNIT_TEST_DATA / "cpp_sqlite_one_hop.json"
         data = _json.loads(json_path.read_text(encoding="utf-8"))
         graph = LayerGraph.deserialize(data)
         return PlantUMLExporter(

@@ -153,7 +153,14 @@ class TestDesignLayerVisualization:
     # ------------------------------------------------------------------
 
     def test_has_key_design_classes(self, design_lines):
-        """Core design classes appear in the PlantUML output."""
+        """Core design classes appear in the PlantUML output.
+
+        The design agent output contains the 8 contract classes plus
+        the cpp-sqlite types the design depends on (Database,
+        Transaction).  Library-internal helper classes that the design
+        does not reference (Logger, DataAccessObject, …) are no longer
+        part of the design graph.
+        """
         for cls_name in (
             "MigrationManager",
             "SchemaVersion",
@@ -161,25 +168,43 @@ class TestDesignLayerVisualization:
             "SchemaVerificationResult",
             "SchemaMismatch",
             "MigrationResult",
-            "TransactionError",
             "Transaction",
             "Database",
-            "DataAccessObject",
-            "Logger",
-            "BaseTransferObject",
-            "ForeignKey",
         ):
             assert any(
                 cls_name in L and "class" in L
                 for L in design_lines
             ), f"Missing design class: {cls_name}"
 
-    def test_has_key_design_structs(self, design_lines):
-        """Design structs appear as PlantUML classes."""
-        for struct_name in (
+    def test_library_internal_classes_excluded(self, design_lines):
+        """Unreferenced cpp-sqlite library helpers are NOT in the design.
+
+        The old design graph imported template-helper classes from the
+        as-built (IsVector, ForeignKey, …) that played no role in the
+        design; the agent output no longer includes them.
+        """
+        for cls_name in (
             "IsVector",
             "IsForeignKeyT",
             "RepeatedFieldTransferObject",
+            "GetRepeatedFieldParams",
+            "ForeignKeyTypeT",
+            "ForeignKey",
+            "DataAccessObject",
+            "BaseTransferObject",
+            "Logger",
+            "TransactionError",
+        ):
+            assert not any(
+                f'class "{cls_name}' in L
+                for L in design_lines
+            ), f"Library helper {cls_name} should be excluded from design"
+
+    def test_has_key_design_structs(self, design_lines):
+        """Design value types (kind=struct) appear as PlantUML classes."""
+        for struct_name in (
+            "MigrationResult",
+            "SchemaMismatch",
         ):
             assert any(
                 struct_name in L and "class" in L
@@ -211,13 +236,18 @@ class TestDesignLayerVisualization:
     # ------------------------------------------------------------------
 
     def test_migration_manager_has_methods(self, design_lines):
-        """MigrationManager exposes key methods with signatures."""
+        """MigrationManager exposes key methods with signatures.
+
+        The agent output renders the full signature ``name(args):
+        return_type full_declaration``, so assertions match on the
+        method name + argument list (present in the name prefix).
+        """
         methods = [
-            "+MigrationManager(Database& db)",
-            "+verify()",
-            "+rollback(int target_version)",
-            "+apply()",
-            "+register_migration(",
+            "+MigrationManager():",
+            "+verify():",
+            "+rollback(int target_version):",
+            "+apply():",
+            "+register_migration(std::unique_ptr<Migration>):",
         ]
         for method in methods:
             assert any(method in L for L in design_lines), (

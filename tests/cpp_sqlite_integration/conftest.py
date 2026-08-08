@@ -21,6 +21,11 @@ _PARENT_TESTS = _HERE.parent
 _FIXTURE_DIR = _PARENT_TESTS / "fixtures" / "cpp-sqlite"
 _CODEGRAPH_OUTPUT = _PARENT_TESTS / "codegraph_output"
 
+#: Gitignored directory for generated test data (serialized JSON, …).
+#: Kept out of git — the serialization is large and fully reproducible
+#: from the fixture sources.
+_UNIT_TEST_DATA = _PARENT_TESTS / "unit_test_data"
+
 # Mirror the credentials from tests/conftest.py (via docker-compose.yml).
 _TEST_BOLT_PORT = 7689
 _TEST_USER = "neo4j"
@@ -138,6 +143,7 @@ def codegraph_graph():
         pytest.skip("conan deps not installed")
 
     _CODEGRAPH_OUTPUT.mkdir(parents=True, exist_ok=True)
+    _UNIT_TEST_DATA.mkdir(parents=True, exist_ok=True)
 
     # ── Step 1: Index into the active backend (--clear handles stale data) ──
     # The subprocess is a separate process — it cannot use set_backend();
@@ -232,7 +238,7 @@ def codegraph_graph():
 
     # ── Step 3: Save serialization ─────────────────────────
     _dbg("writing json...")
-    json_output = _CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop.json"
+    json_output = _UNIT_TEST_DATA / "cpp_sqlite_one_hop.json"
     json_output.write_text(
         _json.dumps(serialized, indent=2, default=str),
         encoding="utf-8",
