@@ -39,6 +39,120 @@ class TestParseDescription:
         assert "brief description" in parse_description(elem)
 
 
+class TestParseDescriptionLineFidelity:
+    """Descriptions must preserve line endings so they can be re-emitted."""
+
+    def test_paragraphs_separated_by_blank_line(self):
+        elem = ET.fromstring(
+            "<detaileddescription>"
+            "<para>First paragraph.</para>"
+            "<para>Second paragraph.</para>"
+            "</detaileddescription>"
+        )
+        assert parse_description(elem) == "First paragraph.\n\nSecond paragraph."
+
+    def test_param_return_throws_directives(self):
+        elem = ET.fromstring(
+            "<detaileddescription>"
+            "<para><parameterlist kind=\"param\">"
+            "<parameteritem><parameternamelist><parametername>db</parametername>"
+            "</parameternamelist><parameterdescription><para>Reference to the database</para>"
+            "</parameterdescription></parameteritem>"
+            "</parameterlist>"
+            "<simplesect kind=\"return\"><para>Optional containing the object, or empty if not found</para>"
+            "</simplesect>"
+            "<parameterlist kind=\"exception\">"
+            "<parameteritem><parameternamelist><parametername>TransactionError</parametername>"
+            "</parameternamelist><parameterdescription><para>if BEGIN fails</para>"
+            "</parameterdescription></parameteritem>"
+            "</parameterlist>"
+            "</para>"
+            "</detaileddescription>"
+        )
+        assert parse_description(elem) == (
+            "\\param db Reference to the database\n"
+            "\\return Optional containing the object, or empty if not found\n"
+            "\\throws TransactionError if BEGIN fails"
+        )
+
+    def test_note_and_warning_simplesect(self):
+        elem = ET.fromstring(
+            "<detaileddescription>"
+            "<para>Prose line.</para>"
+            "<para><simplesect kind=\"note\"><para>Use this carefully.</para></simplesect></para>"
+            "<para><simplesect kind=\"warning\"><para>Danger.</para></simplesect></para>"
+            "</detaileddescription>"
+        )
+        assert parse_description(elem) == (
+            "Prose line.\n\n"
+            "\\note Use this carefully.\n\n"
+            "\\warning Danger."
+        )
+
+    def test_returns_mapped_to_return(self):
+        elem = ET.fromstring(
+            "<detaileddescription><para><simplesect kind=\"returns\">"
+            "<para>true if active</para></simplesect></para></detaileddescription>"
+        )
+        assert parse_description(elem) == "\\return true if active"
+
+    def test_programlisting_lines_preserved(self):
+        elem = ET.fromstring(
+            "<detaileddescription><para><programlisting><codeline>"
+            "<highlight class=\"keywordtype\">int</highlight><highlight class=\"normal\"> x = 1;</highlight>"
+            "</codeline><codeline><highlight class=\"normal\">int y = 2;</highlight></codeline>"
+            "</programlisting></para></detaileddescription>"
+        )
+        assert parse_description(elem) == "int x = 1;\nint y = 2;"
+
+    def test_verbatim_preserved(self):
+        elem = ET.fromstring(
+            "<detaileddescription><para><verbatim>line one\nline two</verbatim></para></detaileddescription>"
+        )
+        assert parse_description(elem) == "line one\nline two"
+
+    def test_linebreak_element(self):
+        elem = ET.fromstring(
+            "<detaileddescription><para>first<linebreak/>second</para></detaileddescription>"
+        )
+        assert parse_description(elem) == "first\nsecond"
+
+    def test_inline_refs_flattened(self):
+        elem = ET.fromstring(
+            "<detaileddescription><para>See <ref refid=\"x\">Foo</ref> for details.</para></detaileddescription>"
+        )
+        assert parse_description(elem) == "See Foo for details."
+
+    def test_itemized_and_ordered_lists(self):
+        elem = ET.fromstring(
+            "<detaileddescription><para><itemizedlist>"
+            "<listitem><para>First feature</para></listitem>"
+            "<listitem><para>Second feature</para></listitem>"
+            "</itemizedlist></para>"
+            "<para><orderedlist>"
+            "<listitem><para>ordered one</para></listitem>"
+            "<listitem><para>ordered two</para></listitem>"
+            "</orderedlist></para></detaileddescription>"
+        )
+        assert parse_description(elem) == (
+            "- First feature\n- Second feature\n\n"
+            "1. ordered one\n2. ordered two"
+        )
+
+    def test_section_title_and_content(self):
+        elem = ET.fromstring(
+            "<detaileddescription><sect1><title>A heading</title>"
+            "<para>Content paragraph.</para></sect1></detaileddescription>"
+        )
+        assert parse_description(elem) == "A heading\n\nContent paragraph."
+
+    def test_brief_multiline_newline_preserved(self):
+        elem = ET.fromstring(
+            "<briefdescription><para>Multi-line brief:\ncontinues here.</para></briefdescription>"
+        )
+        assert parse_description(elem) == "Multi-line brief:\ncontinues here."
+
+
 class TestParseXmlDir:
     """Integration tests using a minimal Doxygen XML fixture."""
 
