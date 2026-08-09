@@ -386,7 +386,17 @@ def tag_nodes_by_source(
     for node in all_nodes:
         fp = getattr(node, "file_path", "") or getattr(node, "path", "") or ""
         qn = getattr(node, "qualified_name", "") or ""
-        rid = getattr(node, "refid", "") or ""
+        # ParameterNode carries no file_path/qualified_name/refid of its own
+        # (its identity is ``member_refid`` + position), so fall back to its
+        # parent member's refid — without this, every parameter of an
+        # external (boost/spdlog/sqlite3) function fell through to
+        # ``project_source`` and got tagged ``as-built``, dragging whole
+        # dependency-function islands into the as-built one-hop graph.
+        rid = (
+            getattr(node, "refid", "")
+            or getattr(node, "member_refid", "")
+            or ""
+        )
         source = _classify(fp, qn, rid)
         if hasattr(node, "source"):
             node.source = source
