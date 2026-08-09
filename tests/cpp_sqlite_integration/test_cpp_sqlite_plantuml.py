@@ -964,30 +964,28 @@ class TestClassScopedView:
     # ------------------------------------------------------------------
 
     def test_database_shows_all_members(self, scoped_database_puml):
-        """Database is rendered as a package with each member as a
-        standalone ``class <<method>>`` or ``class <<attribute>>`` node."""
-        assert 'package "Database" as cpp_sqlite__Database' in scoped_database_puml
-        for member_name in (
-            "select", "withTransaction", "getDAO", "getRawDB",
-            "flushAllDAOs", "insert", "isInTransaction",
-            "Database",  # constructor
-            "daos_", "daoCreationOrder_", "pLogger_", "db_",
-        ):
-            # The alias uses _sanitize_alias which strips trailing _
-            from codegraph.export.plantuml import _sanitize_alias
-            safe = _sanitize_alias(member_name)
-            assert f'class "{member_name}" as cpp_sqlite__Database__{safe}' in scoped_database_puml, (
-                f"Database member {member_name} missing from scoped view"
+        """Database renders as a normal class with all members
+        (including private) inline — signatures and parameters in the
+        class body, not as standalone nodes."""
+        assert 'class "Database" as cpp_sqlite__Database {' in scoped_database_puml
+        for name in ("getDAO", "flushAllDAOs", "select", "insert",
+                     "getRawDB", "isInTransaction", "withTransaction",
+                     "daos_", "daoCreationOrder_", "pLogger_", "db_"):
+            assert name in scoped_database_puml, (
+                f"Database member {name} missing from class body"
             )
-            # Verify stereotype: methods get <<method>>, attributes get <<attribute>>
-            if member_name in ("daos_", "daoCreationOrder_", "pLogger_", "db_"):
-                assert "<<attribute>>" in scoped_database_puml
-            else:
-                assert "<<method>>" in scoped_database_puml
+        # Full signatures with parameters render in the member lines.
+        assert "+getDAO(): DataAccessObject < T > &" in scoped_database_puml
+        assert "+withTransaction(Func &&func): void" in scoped_database_puml
+        assert "+Database(std::string url, bool allowWrite" in scoped_database_puml
+        # Private attributes marked with '-'
+        assert "-db_: std::unique_ptr< sqlite3" in scoped_database_puml
 
-    def test_database_rendered_as_package(self, scoped_database_puml):
-        """The scoped class is a ``package`` container, not a ``class``."""
-        assert 'package "Database" as cpp_sqlite__Database {' in scoped_database_puml
+    def test_database_rendered_as_class(self, scoped_database_puml):
+        """The scoped class is a normal ``class`` element, not the
+        atomic package-of-member-nodes style."""
+        assert 'class "Database" as cpp_sqlite__Database {' in scoped_database_puml
+        assert 'package "Database"' not in scoped_database_puml
 
     def test_transaction_only_shows_commit(self, scoped_database_puml):
         """Transaction class only exposes ``commit()`` — the only
@@ -1042,21 +1040,23 @@ class TestClassScopedView:
                         )
 
     def test_external_edges_are_to_packages(self, scoped_database_puml):
-        """Edges redirect to package aliases from individual member nodes."""
-        assert "cpp_sqlite__Database__daos ..> boost : depends_on" in scoped_database_puml
-        assert "cpp_sqlite__Database__pLogger ..> spdlog : depends_on" in scoped_database_puml
-        assert "..> sqlite3 :" in scoped_database_puml
-        assert "..> std :" in scoped_database_puml
+        """Edges redirect to package aliases, aggregated to the Database
+        class (members render inline, so edges originate from the class)."""
+        assert "cpp_sqlite__Database ..> boost : depends_on" in scoped_database_puml
+        assert "cpp_sqlite__Database ..> spdlog : depends_on" in scoped_database_puml
+        assert "cpp_sqlite__Database ..> sqlite3 : depends_on" in scoped_database_puml
+        assert "cpp_sqlite__Database ..> std : depends_on" in scoped_database_puml
 
     # ------------------------------------------------------------------
     # Edge assertions
     # ------------------------------------------------------------------
 
     def test_database_edges_are_present(self, scoped_database_puml):
-        """Edges originate from individual Database member nodes."""
+        """Edges originate from the Database class (members are inline)."""
         edges = [
-            "cpp_sqlite__Database__withTransaction ..> cpp_sqlite__Transaction : invokes",
-            "cpp_sqlite__Database__getDAO ..> cpp_sqlite__DataAccessObject : depends_on",
+            "cpp_sqlite__Database ..> cpp_sqlite__Transaction : invokes",
+            "cpp_sqlite__Database ..> cpp_sqlite__DataAccessObject : depends_on",
+            "cpp_sqlite__Database ..> DAOBase : depends_on",
         ]
         for edge in edges:
             assert edge in scoped_database_puml, (
