@@ -4,6 +4,11 @@ Session-scoped ``codegraph_graph`` fixture indexes cpp-sqlite into the
 active backend (sqlite by default — no Docker; ``CODEGRAPH_BACKEND=neo4j``
 opt-in) once, then returns ``(serialized, uid_map)``.  All test modules
 in this directory share the same indexing run.
+
+The generated backend database (sqlite backend only) is archived to
+``tests/unit_test_data/cpp_sqlite_integration.sqlite3`` alongside the
+serialized JSON so external tooling can validate against the exact
+database the suite exercised.
 """
 
 from __future__ import annotations
@@ -21,9 +26,9 @@ _PARENT_TESTS = _HERE.parent
 _FIXTURE_DIR = _PARENT_TESTS / "fixtures" / "cpp-sqlite"
 _CODEGRAPH_OUTPUT = _PARENT_TESTS / "codegraph_output"
 
-#: Gitignored directory for generated test data (serialized JSON, …).
-#: Kept out of git — the serialization is large and fully reproducible
-#: from the fixture sources.
+#: Gitignored directory for generated test data (serialized JSON,
+#: archived sqlite database, …).  Kept out of git — the artifacts are
+#: large and fully reproducible from the fixture sources.
 _UNIT_TEST_DATA = _PARENT_TESTS / "unit_test_data"
 
 # Mirror the credentials from tests/conftest.py (via docker-compose.yml).
@@ -37,8 +42,68 @@ _TEST_PASSWORD = "doxygen-index-test"
 # ---------------------------------------------------------------------------
 
 
+def _refresh_fixture_report(
+    json_path: Path,
+    db_path: Path,
+    out_path: Path,
+    title: str,
+    test_cpp: Path | None = None,
+) -> None:
+    """Regenerate the markdown fixture report from the archived artifacts.
+
+    Loads ``scripts/export_fixture_report.py`` (repo-relative) and runs
+    it against the just-archived JSON + sqlite db.  Best-effort: a
+    failure prints a warning rather than failing the suite.
+    """
+    try:
+        import importlib.util
+
+        scripts_dir = _PARENT_TESTS.parent / "scripts"
+        spec = importlib.util.spec_from_file_location(
+            "export_fixture_report", scripts_dir / "export_fixture_report.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        report = mod.build_report(
+            json_path, db_path, test_cpp, title,
+        )
+        out_path.write_text(report + "\n", encoding="utf-8")
+        print(f"  [report] {out_path.name} refreshed "
+              f"({out_path.stat().st_size:,} bytes)")
+    except Exception as e:  # noqa: BLE001 — best-effort artifact refresh
+        print(f"  [report] fixture report not refreshed: {e}")
+
+
 def _doxygen_available() -> bool:
     return shutil.which("doxygen") is not None
+
+
+def _archive_sqlite(source_path: Path, dest_path: Path) -> None:
+    """Snapshot a live WAL-mode sqlite database into *dest_path*.
+
+    The backend keeps the database open in WAL journal mode, so a plain
+    ``shutil.copy2`` races the ``-wal`` sidecar and can silently drop
+    committed-but-uncheckpointed frames.  SQLite's online backup API
+    merges WAL content into the snapshot.  The destination is switched
+    to rollback-journal mode so the archived file is fully
+    self-contained (no ``-wal``/``-shm`` sidecars for external tools).
+    """
+    import sqlite3
+
+    for sidecar in (dest_path,
+                    Path(str(dest_path) + "-wal"),
+                    Path(str(dest_path) + "-shm")):
+        sidecar.unlink(missing_ok=True)
+    src = sqlite3.connect(str(source_path), timeout=30)
+    try:
+        dst = sqlite3.connect(str(dest_path))
+        try:
+            src.backup(dst)
+            dst.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            dst.close()
+    finally:
+        src.close()
 
 
 def _conan_deps_available() -> bool:
@@ -245,6 +310,31 @@ def codegraph_graph():
     )
     _dbg("json written")
 
+    # ── Step 3b: Save sqlite reference artifact ─────────────
+    # The generated backend database is archived into unit_test_data
+    # alongside the serialized JSON so external tooling can open the
+    # exact database the integration suite validated against.
+    # (sqlite backend only — Neo4j has no single file to archive.)
+    if backend_name == "sqlite":
+        _dbg("archiving sqlite reference artifact...")
+        sqlite_output = _UNIT_TEST_DATA / "cpp_sqlite_integration.sqlite3"
+        _archive_sqlite(_SQLITE_PATH, sqlite_output)
+        _dbg("sqlite reference artifact archived")
+
+        # ── Step 3c: Refresh the markdown fixture report ─────
+        # Keep the human-readable completeness report (tests,
+        # assertions, steps, VERIFIES) in sync with the archived
+        # artifacts.
+        _dbg("refreshing markdown fixture report...")
+        _refresh_fixture_report(
+            json_path=json_output,
+            db_path=sqlite_output,
+            test_cpp=(_FIXTURE_DIR
+                      / "cpp_sqlite" / "test" / "testDatabase.cpp"),
+            out_path=_UNIT_TEST_DATA / "cpp_sqlite_fixture_report.md",
+            title="cpp-sqlite as-built fixture report",
+        )
+
     # ── Step 4: Export self-contained HTML ─────────────────
     from codegraph.export.viz import export_html_from_json
     _dbg("export_html_from_json...")
@@ -307,6 +397,8 @@ def codegraph_graph():
     uid_map = _flat_uid_map(serialized)
     print(f"\n  LayerGraph as-built: {len(uid_map)} nodes")
     print(f"  JSON: {json_output} ({json_output.stat().st_size:,} bytes)")
+    if backend_name == "sqlite":
+        print(f"  SQLite: {sqlite_output} ({sqlite_output.stat().st_size:,} bytes)")
     print(f"  HTML: {html_output} ({html_output.stat().st_size:,} bytes)")
     print(f"  PUML: {puml_output} ({puml_output.stat().st_size:,} bytes)")
     print(f"  SVG:  {'✓' if svg_ok else '✗ (plantuml not found)'}")

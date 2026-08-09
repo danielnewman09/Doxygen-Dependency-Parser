@@ -331,6 +331,18 @@ def _parse_cpp_project(
     from doxygen_index.doxygen import run_doxygen
     from doxygen_index.parser import parse_xml_dir, ParseResult
 
+    # Test dirs: CLI flag overrides config.  Added to the Doxygen INPUT
+    # (blanket ``*/test/*`` excludes are lifted for them) so gtest
+    # TEST_F/TEST macros become TestNode elements; symbols defined in
+    # test dirs are then reduced to test nodes only during parsing.
+    test_paths = None
+    if getattr(args, 'test_paths', None):
+        test_paths = [Path(p).resolve() for p in args.test_paths]
+    elif config.test_paths:
+        test_paths = [Path(p).resolve() for p in config.test_paths]
+    if test_paths:
+        print(f"Test paths: {', '.join(str(p) for p in test_paths)}")
+
     # Phase 1: Generate Doxygen XML (unless --parse-only)
     if not args.parse_only:
         print(f"\nFile patterns: {config.file_patterns}")
@@ -338,7 +350,6 @@ def _parse_cpp_project(
             print(f"Exclude: {config.exclude_patterns}")
         if config.predefined:
             print(f"Predefined: {config.predefined}")
-        print()
 
         xml_dir = run_doxygen(
             name=config.name,
@@ -348,6 +359,7 @@ def _parse_cpp_project(
             file_patterns=config.file_patterns,
             exclude_patterns=config.exclude_patterns,
             xml_subdir="xml",
+            test_source_dirs=test_paths,
         )
         if xml_dir is None:
             print("Doxygen generation failed.", file=sys.stderr)
@@ -364,7 +376,10 @@ def _parse_cpp_project(
         return ParseResult(), xml_dir
 
     print(f"\nParsing XML...")
-    result = parse_xml_dir(xml_dir, source=config.name, layer="codebase")
+    result = parse_xml_dir(
+        xml_dir, source=config.name, layer="codebase",
+        test_source_dirs=test_paths,
+    )
     return result, xml_dir
 
 
@@ -646,6 +661,7 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
     exclude_patterns = None
     predefined = None
     toml_input_paths: list[str] | None = None
+    toml_test_paths: list[str] | None = None
     config_path = project_dir / ".doxygen-index.toml"
     if config_path.exists():
         try:
@@ -660,6 +676,9 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         raw_paths = proj.get("input_paths")
         if raw_paths:
             toml_input_paths = raw_paths
+        raw_test_paths = proj.get("test_paths")
+        if raw_test_paths:
+            toml_test_paths = raw_test_paths
 
     # ── Phase 2b: Resolve project source dirs ─────────────────
     if toml_input_paths:
@@ -676,6 +695,16 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         project_sources = _find_project_source_dirs(project_dir)
     print(f"Project source dirs: {[str(d) for d in project_sources]}")
 
+    # ── Phase 2c: Resolve test dirs (explicitly-requested test files) ──
+    test_source_dirs: list[Path] = []
+    if toml_test_paths:
+        for tp in toml_test_paths:
+            d = (project_dir / tp).resolve()
+            if d.is_dir() and d not in test_source_dirs:
+                test_source_dirs.append(d)
+    if test_source_dirs:
+        print(f"Test source dirs: {[str(d) for d in test_source_dirs]}")
+
     # ── Phase 3: Unified Doxygen run ────────────────────────
     print(f"\n--- Unified Doxygen: {project_name} + {len(dep_include_dirs)} deps ---")
     xml_dir = run_unified_doxygen(
@@ -686,6 +715,7 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         file_patterns=file_patterns,
         exclude_patterns=exclude_patterns,
         predefined=predefined,
+        test_source_dirs=test_source_dirs or None,
     )
     if not xml_dir:
         print("Doxygen failed.", file=sys.stderr)
@@ -693,7 +723,10 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
 
     # ── Phase 4: Parse unified XML ────────────────────────────
     print(f"\n--- Parsing unified XML ---")
-    result = parse_xml_dir(xml_dir, source=project_name, layer="dependency")
+    result = parse_xml_dir(
+        xml_dir, source=project_name, layer="dependency",
+        test_source_dirs=test_source_dirs or None,
+    )
 
     # ── Phase 5: Tag nodes by source ──────────────────────────
     from doxygen_index.doxygen import tag_nodes_by_source

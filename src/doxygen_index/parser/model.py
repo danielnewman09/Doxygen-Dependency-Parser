@@ -256,6 +256,23 @@ class FixtureDefinedInEntry:
     to_refid: str     # TestStepNode refid
 
 
+@dataclass
+class PendingTestCall:
+    """A call site inside a C++ test body, resolved during post-processing.
+
+    The C++ parser records call sites while parsing, but the full set of
+    parsed methods is not known yet (Doxygen XML files are parsed in
+    parallel, so class files may come after the test file).
+    ``CppParser.post_process`` resolves each entry against the fully-
+    populated result and emits :class:`CalleeEntry` /
+    :class:`VerifiesEntry` items.
+    """
+    from_refid: str      # TestStepNode refid (or TestNode refid for assert bodies)
+    test_refid: str      # owning TestNode refid
+    callee_text: str     # name / qualified name of the called symbol
+    is_assert: bool      # True → came from an assertion body (VERIFIES only)
+
+
 # ---------------------------------------------------------------------------
 # Aggregate result
 # ---------------------------------------------------------------------------
@@ -312,6 +329,15 @@ class ParseResult:
     fixture_of_types: list[FixtureOfTypeEntry] = field(default_factory=list)
     fixture_checked_by: list[FixtureCheckedByEntry] = field(default_factory=list)
     fixture_defined_in: list[FixtureDefinedInEntry] = field(default_factory=list)
+    pending_test_calls: list[PendingTestCall] = field(default_factory=list)
+    """Raw call sites inside C++ test bodies, resolved in post-processing.
+
+    Populated by the C++ test parser (:mod:`~doxygen_index.parser.cpp_tests`)
+    for every call found in a test step/assertion while parsing.  Consumed
+    by :meth:`~doxygen_index.parser.cpp_parser.CppParser.post_process` which
+    resolves the callee text against the fully-populated result and emits
+    :class:`CalleeEntry` / :class:`VerifiesEntry` entries.
+    """
     pending_calls: list[tuple[str, str, int]] = field(default_factory=list)
     """Raw call data collected during AST walk: ``(caller_refid, callee_text, lineno)``.
 

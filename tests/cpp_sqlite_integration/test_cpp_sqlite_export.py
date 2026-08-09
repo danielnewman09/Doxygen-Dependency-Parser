@@ -479,3 +479,76 @@ class TestFullGraphExport:
         )
 
         print(f"\n  TransactionError INHERITS_FROM: {sorted(inherits_targets)}")
+
+
+class TestArchivedSqliteReference:
+    """The generated sqlite database is archived for external validation.
+
+    The session ``codegraph_graph`` fixture copies the backend database
+    to ``tests/unit_test_data/cpp_sqlite_integration.sqlite3`` so
+    external tooling can open the exact database the suite validated.
+    These tests pin that artifact: it must exist, be a valid sqlite
+    database, and contain every node of the retrieved as-built graph.
+    """
+
+    @pytest.fixture(scope="class")
+    def archived_db(self):
+        import sqlite3
+        from pathlib import Path
+
+        db_path = (
+            Path(__file__).resolve().parent.parent
+            / "unit_test_data" / "cpp_sqlite_integration.sqlite3"
+        )
+        assert db_path.exists(), (
+            f"archived sqlite artifact missing: {db_path}"
+        )
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        yield con, db_path
+        con.close()
+
+    def test_artifact_is_valid_database(self, archived_db):
+        """The artifact is a queryable sqlite db with node rows."""
+        con, db_path = archived_db
+        tables = {
+            r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "nodes" in tables, f"nodes table missing in {db_path}"
+        assert "node_tags" in tables
+        n_nodes = con.execute("SELECT count(*) FROM nodes").fetchone()[0]
+        assert n_nodes > 0, "archived database has no nodes"
+        n_as_built = con.execute(
+            "SELECT count(*) FROM node_tags WHERE tag='as-built'"
+        ).fetchone()[0]
+        assert n_as_built > 0, "archived database has no as-built nodes"
+
+    def test_artifact_contains_validated_graph(self, codegraph_graph, archived_db):
+        """Every node uid the suite validated exists in the archived db.
+
+        The retrieved as-built LayerGraph (serialized to
+        ``cpp_sqlite_one_hop.json``) must be exactly reproducible from
+        the archived database — any uid missing from the archive means
+        external consumers cannot trust it.
+        """
+        serialized, uid_map = codegraph_graph
+        con, _ = archived_db
+
+        uids = {n["uid"] for n in uid_map.values()}
+        assert uids
+
+        # Read archived uids in chunks (72MB db / 47k nodes — one IN
+        # query with thousands of placeholders is fine in sqlite).
+        placeholders = ",".join("?" * len(uids))
+        archived = {
+            row[0] for row in con.execute(
+                f"SELECT uid FROM nodes WHERE uid IN ({placeholders})",
+                list(uids),
+            )
+        }
+        missing = uids - archived
+        assert not missing, (
+            f"{len(missing)} of {len(uids)} validated node uids missing "
+            f"from archived sqlite database: {sorted(missing)[:5]}"
+        )

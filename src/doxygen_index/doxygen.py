@@ -200,6 +200,46 @@ def _merge_exclude_patterns(exclude_patterns: str | None) -> str:
     return " ".join(merged)
 
 
+def _drop_exclude_patterns_for_paths(
+    exclude_patterns: str | None,
+    keep_dirs: list[Path] | None,
+) -> str:
+    """Remove EXCLUDE_PATTERNS entries that would exclude files under *keep_dirs*.
+
+    A project that explicitly lists test directories (``test_paths`` in
+    ``.doxygen-index.toml``) wants those parsed even when a blanket
+    pattern like ``*/test/*`` would otherwise exclude them.  Each pattern
+    is dropped only if it matches at least one file under a keep dir, so
+    unrelated excludes (e.g. ``*/build/*``) are preserved.
+
+    Doxygen's wildcard semantics are emulated: ``*`` matches any
+    character sequence *including* directory separators (so ``*/test/*``
+    matches a deeply nested ``.../test/...`` path).
+    """
+    import re
+    if not exclude_patterns or not keep_dirs:
+        return exclude_patterns or ""
+    keep_dirs = [Path(d).resolve() for d in keep_dirs]
+
+    def _pattern_matches_any_file(pattern: str) -> bool:
+        regex = re.escape(pattern).replace(r"\*", ".*").replace(r"\?", ".")
+        compiled = re.compile(regex)
+        for d in keep_dirs:
+            try:
+                for f in d.rglob("*"):
+                    if f.is_file() and compiled.fullmatch(str(f)):
+                        return True
+            except OSError:
+                continue
+        return False
+
+    kept = [
+        p for p in exclude_patterns.split()
+        if not _pattern_matches_any_file(p)
+    ]
+    return " ".join(kept)
+
+
 def run_doxygen(
     name: str,
     input_paths: Path | list[Path],
@@ -210,6 +250,7 @@ def run_doxygen(
     exclude_patterns: str = "",
     xml_subdir: Optional[str] = None,
     include_paths: list[Path] | None = None,
+    test_source_dirs: list[Path] | None = None,
 ) -> Path | None:
     """Run Doxygen on source directories.
 
@@ -227,11 +268,24 @@ def run_doxygen(
                    Defaults to ``{name}/xml/``.
         include_paths: Directories added to Doxygen's INCLUDE_PATH for
             ``#include`` resolution without parsing their contents.
+        test_source_dirs: Directories containing test files to parse as
+            part of the project.  Added to the Doxygen INPUT, and
+            EXCLUDE_PATTERNS entries that would exclude them (e.g. a
+            blanket ``*/test/*``) are dropped so the listed test paths
+            always win.
 
     Returns:
         Path to the XML output directory, or None on failure.
     """
     exclude_patterns = _merge_exclude_patterns(exclude_patterns)
+    if test_source_dirs:
+        # Explicitly-requested test dirs always win over blanket excludes
+        # (e.g. ``*/test/*``) and are added to the Doxygen INPUT.
+        exclude_patterns = _drop_exclude_patterns_for_paths(
+            exclude_patterns, test_source_dirs)
+        if isinstance(input_paths, Path):
+            input_paths = [input_paths]
+        input_paths = list(input_paths) + list(test_source_dirs)
     if xml_subdir is None:
         xml_dir = output_base / name / "xml"
     else:
@@ -381,6 +435,8 @@ def tag_nodes_by_source(
         result.methods + result.attributes +
         result.enum_values + result.defines +
         result.functions + result.parameters +
+        result.tests + result.assertions +
+        result.test_steps + result.test_fixtures +
         result.implementations
     )
     for node in all_nodes:
@@ -549,6 +605,7 @@ def run_unified_doxygen(
     predefined: str = "",
     file_patterns: str | None = None,
     exclude_patterns: str | None = None,
+    test_source_dirs: list[Path] | None = None,
 ) -> Path | None:
     """Run a single Doxygen parse covering both project source AND all
     dependency include directories.
@@ -568,6 +625,8 @@ def run_unified_doxygen(
         dep_include_dirs: ``{dep_name: include_dir}`` for each dependency.
         output_base: Base directory for Doxygen XML output.
         predefined: Optional preprocessor defines.
+        test_source_dirs: Directories containing test files to parse as
+            part of the project (see :func:`run_doxygen`).
 
     Returns:
         Path to the XML output directory, or None on failure.
@@ -587,6 +646,7 @@ def run_unified_doxygen(
     # run_doxygen merges the parse-hygiene EXCLUDE_PATTERNS defaults
     # (``*/detail/*`` etc.) with any config-provided patterns, so internal
     # implementation trees never leak into the graph regardless of config.
+    # Explicitly-listed test dirs are exempted from blanket excludes.
     return run_doxygen(
         project_name,
         all_inputs,
@@ -595,6 +655,7 @@ def run_unified_doxygen(
         file_patterns=file_patterns or _DEFAULT_FILE_PATTERNS,
         exclude_patterns=exclude_patterns or "",
         xml_subdir=f"{project_name}_unified/xml",
+        test_source_dirs=test_source_dirs,
     )
 
 

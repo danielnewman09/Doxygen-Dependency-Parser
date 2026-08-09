@@ -71,6 +71,7 @@ def parse_xml_dir(
     progress_interval: int = 50,
     layer: str = "dependency",
     language_parser: LanguageParser | None = None,
+    test_source_dirs: list[Path] | None = None,
 ) -> ParseResult:
     """Parse all Doxygen XML in a directory and return a ParseResult.
 
@@ -82,6 +83,11 @@ def parse_xml_dir(
         language_parser: Language-specific parser to use. Defaults to
             :class:`CppParser` for C/C++ Doxygen output. Pass a custom
             :class:`LanguageParser` subclass to handle other languages.
+        test_source_dirs: Directories containing the project's test files
+            (C++).  Symbols defined in these files are reduced to their
+            test nodes: gtest macros become TestNode elements, while the
+            files' non-test symbols (test-local structs, helper functions,
+            macro noise) stay out of the project API graph.
 
     Returns:
         ParseResult with all parsed data.
@@ -90,7 +96,10 @@ def parse_xml_dir(
         language_parser = CppParser()
 
     result = ParseResult()
-    language_parser.parse_source_dir(xml_dir, source, result, layer, progress_interval)
+    language_parser.parse_source_dir(
+        xml_dir, source, result, layer, progress_interval,
+        test_source_dirs=test_source_dirs,
+    )
     language_parser.post_process(result)
     return result
 

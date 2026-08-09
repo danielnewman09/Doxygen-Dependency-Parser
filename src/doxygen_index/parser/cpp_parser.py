@@ -39,6 +39,10 @@ from doxygen_index.parser.helpers import (
     parse_location,
     parse_template_params,
 )
+from doxygen_index.parser.cpp_tests import (
+    is_gtest_test_member,
+    parse_gtest_test,
+)
 from doxygen_index.parser.model import (
     ParseResult,
     TemplateParamRef,
@@ -48,6 +52,8 @@ from doxygen_index.parser.model import (
     InvokeEntry,
     ImplementationRef,
     IncludeEntry,
+    CalleeEntry,
+    VerifiesEntry,
 )
 
 
@@ -178,6 +184,24 @@ def detect_template_specialization(qualified_name: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 # Common field extraction
 # ---------------------------------------------------------------------------
+
+
+def _is_under_test_dir(loc_file: str | None, test_dirs: list[Path] | None) -> bool:
+    """Return True if *loc_file* lives under one of the resolved test dirs.
+
+    Doxygen records ``location file`` attributes relative to its run
+    directory (or absolute); both forms are checked against the
+    (absolute) test dirs.
+    """
+    if not loc_file or not test_dirs:
+        return False
+    try:
+        p = Path(loc_file).resolve()
+    except OSError:
+        return False
+    return any(
+        td in p.parents or p == td for td in test_dirs
+    )
 
 
 def _extract_common_member_fields(
@@ -372,12 +396,19 @@ class CppParser(LanguageParser):
         result: ParseResult,
         layer: str = "dependency",
         progress_interval: int = 0,
+        test_source_dirs: list[Path] | None = None,
     ) -> None:
         """Parse all Doxygen XML in *source_dir* and populate *result*.
 
         *source_dir* must contain a ``index.xml`` file produced by
         Doxygen.  Each compound XML file is parsed to extract classes,
         functions, etc.
+
+        ``test_source_dirs`` marks the project's test directories (from
+        ``test_paths`` in ``.doxygen-index.toml``): compounds defined in
+        those files contribute test nodes only — their non-test symbols
+        are skipped so test scaffolding never pollutes the project API
+        graph.
         """
         source_dir = Path(source_dir)
         index_path = source_dir / "index.xml"
@@ -397,13 +428,19 @@ class CppParser(LanguageParser):
         if not xml_files:
             return
 
+        # Resolve test dirs once so per-file membership checks are cheap.
+        test_dirs = [Path(d).resolve() for d in (test_source_dirs or [])]
+
         # Parse in parallel — each file is independent and list.append
         # is GIL-atomic in CPython, so concurrent mutation of *result*
         # is safe.
         max_workers = min(32, (len(xml_files) // 10) + 1)
         with ThreadPoolExecutor(max_workers=max_workers) as ex:
             futures = {
-                ex.submit(self.parse_compound_file, f, source, result, layer): f
+                ex.submit(
+                    self.parse_compound_file, f, source, result, layer,
+                    test_dirs,
+                ): f
                 for f in xml_files
             }
             completed = 0
@@ -424,6 +461,7 @@ class CppParser(LanguageParser):
         source: str,
         result: ParseResult,
         layer: str = "dependency",
+        test_dirs: list[Path] | None = None,
     ) -> None:
         """Parse a single Doxygen compound XML file.
 
@@ -434,6 +472,12 @@ class CppParser(LanguageParser):
           If it returns a qualified name, members within
           ``<sectiondef>`` elements are then processed via
           :meth:`parse_member`.
+
+        Compounds defined in a test directory (``test_dirs``) contribute
+        test nodes only: gtest macros become TestNode elements and the
+        file/FileNode is kept for DEFINED_IN edges, but the file's
+        non-test symbols (test-local structs, helper functions, macro
+        noise) are skipped entirely.
         """
         try:
             tree = ET.parse(xml_path)
@@ -446,6 +490,11 @@ class CppParser(LanguageParser):
             refid = compounddef.get("id", "")
             kind = compounddef.get("kind", "")
             compoundname = compounddef.findtext("compoundname", "")
+
+            # Whether this compound is defined in a test source file.
+            loc = compounddef.find("location")
+            loc_file = loc.get("file") if loc is not None else None
+            is_test_file = _is_under_test_dir(loc_file, test_dirs)
 
             # --- Files (language-agnostic) ---
             if kind == "file":
@@ -464,16 +513,34 @@ class CppParser(LanguageParser):
                         is_local=inc.get("local") == "yes",
                     ))
                 # Parse file-level members: typedefs, functions, variables.
+                # Test files contribute only their gtest TestNodes —
+                # everything else (helper functions, BOOST_DESCRIBE_STRUCT
+                # macro noise, test-local variables) is skipped.
                 for sectiondef in compounddef.findall("sectiondef"):
                     for memberdef in sectiondef.findall("memberdef"):
                         fields = _extract_common_member_fields(memberdef)
                         member_kind = memberdef.get("kind", "")
+                        if is_test_file and member_kind != "function":
+                            continue
                         if member_kind in ("typedef", "variable"):
                             self._parse_variable_member(
                                 memberdef, fields, refid, "", source, result, layer)
                         elif member_kind == "function":
-                            self._parse_file_function(
-                                memberdef, fields, refid, source, result, layer)
+                            if is_gtest_test_member(memberdef, fields):
+                                # GoogleTest TEST_F/TEST/TEST_P macros —
+                                # Doxygen records them as file-level
+                                # functions named after the macro.  Convert
+                                # to TestNode + assertions/steps.
+                                file_stem = Path(
+                                    fields.get("file_path") or ""
+                                ).stem
+                                parse_gtest_test(
+                                    memberdef, fields, file_stem,
+                                    source, result, layer,
+                                )
+                            elif not is_test_file:
+                                self._parse_file_function(
+                                    memberdef, fields, refid, source, result, layer)
                         elif member_kind == "define":
                             pass
                         for tr in fields.get("type_refs", []):
@@ -482,16 +549,17 @@ class CppParser(LanguageParser):
                                 to_refid=tr["refid"],
                                 to_type=tr["kindref"],
                             ))
-                # Scan the file's source listing for catch clauses.  Doxygen
-                # does not expose caught exception types structurally — they
-                # only appear in ``<programlisting>`` — so this is the only
-                # place a ``catch (const SomeException &e)`` reference can be
-                # recovered and turned into a DEPENDS_ON edge.
-                _scan_file_catch_clauses(compounddef, result)
+                # Skip catch-clause scanning for test files — test-local
+                # exception usage is not part of the project's dependency
+                # surface.
+                if not is_test_file:
+                    _scan_file_catch_clauses(compounddef, result)
                 continue
 
             # --- Namespaces (language-agnostic) ---
             if kind == "namespace":
+                if is_test_file:
+                    continue  # test-local namespaces (e.g. my_app) are skipped
                 name = compoundname.split("::")[-1] if "::" in compoundname else compoundname
                 result.namespaces.append(NamespaceNode(
                     refid=refid, name=name,
@@ -500,6 +568,11 @@ class CppParser(LanguageParser):
                 continue
 
             # --- Language-specific type compound ---
+            if is_test_file:
+                # Test-local structs/classes (Vertex3D, RigidBody, the
+                # DatabaseTest gtest fixture, ...) stay out of the graph.
+                continue
+
             qualified_name = self.parse_compound(compounddef, source, result, layer)
             if qualified_name is None:
                 print(
@@ -1023,11 +1096,55 @@ class CppParser(LanguageParser):
         _derive_namespace_compositions(result)
         _resolve_catch_clauses(result)
         extract_implementations(result)
+        _resolve_test_calls(result)
 
 
 # ---------------------------------------------------------------------------
 # Post-processing helpers (C++-specific)
 # ---------------------------------------------------------------------------
+
+
+def _resolve_test_calls(result: ParseResult) -> None:
+    """Resolve deferred C++ test-body call sites into CALLEE / VERIFIES.
+
+    The test parser records every call site inside a step/assertion body
+    as a :class:`PendingTestCall` while parsing (file parse order is
+    nondeterministic — the class files may not be parsed yet).  Here,
+    against the fully-populated result:
+
+    * step calls → ``CALLEE`` (step → code) + ``VERIFIES`` (test → code)
+    * assertion-body calls → ``VERIFIES`` only (assertions are not steps)
+
+    Unresolved names (lambdas, local helpers, unparsed symbols) are
+    silently dropped so no dangling edges are emitted.
+    """
+    from doxygen_index.parser.cpp_tests import _resolve_callee
+
+    if not result.pending_test_calls:
+        return
+
+    resolved = 0
+    dropped = 0
+    for pc in result.pending_test_calls:
+        hit = _resolve_callee(result, pc.callee_text)
+        if hit is None:
+            dropped += 1
+            continue
+        callee_refid, callee_type = hit
+        if not pc.is_assert:
+            result.callees.append(CalleeEntry(
+                from_refid=pc.from_refid,
+                to_refid=callee_refid,
+                to_type=callee_type,
+            ))
+        result.verifies.append(VerifiesEntry(
+            from_refid=pc.test_refid,
+            to_refid=callee_refid,
+            to_type=callee_type,
+        ))
+        resolved += 1
+
+    print(f"  Test call resolution: {resolved} resolved, {dropped} dropped")
 
 
 def _resolve_concept_constraints(result: ParseResult) -> None:
