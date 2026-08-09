@@ -78,6 +78,32 @@ class DependsOnEntry:
 
 
 @dataclass
+class CatchClauseEntry:
+    """A catch-clause exception type reference from a function/method body.
+
+    Doxygen does not expose caught exception types structurally — a ``catch``
+    clause's type never appears as a ``<ref>`` in the member definition.  The
+    C++ parser instead scans each file compound's ``<programlisting>``,
+    attributes catch clauses to the enclosing member (via brace matching
+    anchored at definition lines), and records the caught type here.
+
+    ``to_refid`` is set when Doxygen emitted a ``<ref>`` for the caught type
+    in the programlisting (the common case for project/dependency classes).
+    Ref-less types (mostly standard-library exceptions) are stored as
+    ``type_text`` and resolved by name in post-processing; types that still
+    don't resolve (e.g. merged in later by the cppreference phase) are
+    silently skipped, so they never produce dangling edges.
+
+    Consumed by ``graph_json`` (via ``DependsOnEntry``) to emit
+    ``DEPENDS_ON`` edges from the owning member to the exception class.
+    """
+    from_refid: str
+    type_text: str = ""
+    to_refid: str = ""
+    to_type: str = "ClassNode"
+
+
+@dataclass
 class ConceptConstraintEntry:
     """A ``CONSTRAINS`` relationship from a referenced type/concept to
     the concept that references it.
@@ -255,6 +281,13 @@ class ParseResult:
     compositions: list[CompositionEntry] = field(default_factory=list)
     inherits: list[InheritsEntry] = field(default_factory=list)
     depends_on: list[DependsOnEntry] = field(default_factory=list)
+    catch_clauses: list[CatchClauseEntry] = field(default_factory=list)
+    """Catch-clause exception type references from function bodies.
+
+    Populated by :meth:`~doxygen_index.parser.cpp_parser.CppParser` while
+    scanning file ``<programlisting>`` elements; resolved to
+    ``DependsOnEntry`` entries by post-processing.
+    """
     concept_constraints: list[ConceptConstraintEntry] = field(default_factory=list)
     # Resolved namespace-level imports: namespace → imported compound.
     # Derived from ``result.includes`` by resolving relative import names

@@ -227,9 +227,9 @@ def codegraph_graph():
     print(f"\n  [diag] as-built nodes in backend: {as_built_count}")
 
     from codegraph.graph import LayerGraph
-    _dbg("LayerGraph.from_neo4j('as-built')...")
-    graph = LayerGraph.from_neo4j("as-built")
-    _dbg(f"from_neo4j done")
+    _dbg("LayerGraph.from_backend('as-built')...")
+    graph = LayerGraph.from_backend(backend, "as-built")
+    _dbg("from_backend done")
     serialized = graph.serialize(fields="all")
     _dbg(f"serialize done: {len(serialized)} entries")
 

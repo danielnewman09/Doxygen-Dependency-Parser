@@ -44,6 +44,7 @@ from doxygen_index.parser.model import (
     TemplateParamRef,
     SpecializesRef,
     ConceptConstraintEntry,
+    CatchClauseEntry,
     InvokeEntry,
     ImplementationRef,
     IncludeEntry,
@@ -481,6 +482,12 @@ class CppParser(LanguageParser):
                                 to_refid=tr["refid"],
                                 to_type=tr["kindref"],
                             ))
+                # Scan the file's source listing for catch clauses.  Doxygen
+                # does not expose caught exception types structurally — they
+                # only appear in ``<programlisting>`` — so this is the only
+                # place a ``catch (const SomeException &e)`` reference can be
+                # recovered and turned into a DEPENDS_ON edge.
+                _scan_file_catch_clauses(compounddef, result)
                 continue
 
             # --- Namespaces (language-agnostic) ---
@@ -1014,6 +1021,7 @@ class CppParser(LanguageParser):
         """
         _resolve_concept_constraints(result)
         _derive_namespace_compositions(result)
+        _resolve_catch_clauses(result)
         extract_implementations(result)
 
 
@@ -1313,6 +1321,249 @@ def _derive_namespace_compositions(result: ParseResult) -> None:
             parent_refid=parent_refid,
             child_refid=child_refid,
             child_type=type(child).__name__,
+        ))
+
+
+# ---------------------------------------------------------------------------
+# Catch-clause exception type extraction
+# ---------------------------------------------------------------------------
+
+#: Matches a catch statement: the ``catch`` keyword followed by ``(``.
+#: Doxygen collapses inter-token whitespace in ``<programlisting>`` text,
+#: so ``catch (...`` always appears as ``catch(...``.
+_CATCH_CLAUSE_RE = re.compile(r"\bcatch\s*\(")
+
+#: Doxygen ``<ref>`` kindref values that denote a caught exception type
+#: (a compound/class/struct/enum/union).  ``member`` refs on a catch line
+#: would be calls inside the handler — not the caught type.
+_CATCH_TYPE_KINDREFS = ("compound", "class", "struct", "enum", "union")
+
+
+def _strip_strings_comments(text: str) -> str:
+    """Remove comments and string/char literals from a source line.
+
+    ``<programlisting>`` codelines are single lines, so ``//`` comments
+    run to the end of the line.  Used for brace counting so format strings
+    like ``"{} {{}}"`` and comments cannot skew body-range detection.
+    """
+    out: list[str] = []
+    i, n = 0, len(text)
+    while i < n:
+        c = text[i]
+        if c == "/" and i + 1 < n and text[i + 1] == "/":
+            break
+        if c == "/" and i + 1 < n and text[i + 1] == "*":
+            i += 2
+            while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                i += 1
+            i += 2
+            continue
+        if c in ('"', "'"):
+            quote = c
+            i += 1
+            while i < n:
+                if text[i] == "\\":
+                    i += 2
+                    continue
+                if text[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
+def _brace_delta(clean: str) -> int:
+    """Net brace depth change of a comment/string-stripped line."""
+    return clean.count("{") - clean.count("}")
+
+
+def _scan_file_catch_clauses(
+    compounddef: ET.Element,
+    result: ParseResult,
+) -> None:
+    """Scan a file compound's ``<programlisting>`` for catch clauses.
+
+    Doxygen puts the full source of every indexed file (headers *and*
+    ``.cpp`` files) in the file compound's ``<programlisting>``, with one
+    ``<codeline>`` per line (carrying a ``lineno``) and ``<ref>`` elements
+    for referenced symbols.  Function *definition* lines carry a
+    ``kindref="member"`` ref pointing at the member being defined — which
+    is the only reliable way to attribute a ``.cpp``-defined method body
+    (Doxygen's ``<location>`` for those points at the header declaration).
+
+    This walks the listing with brace matching, tracks the enclosing member
+    via definition lines, and records a :class:`CatchClauseEntry` for every
+    catch clause found.  Catches inside macros or unreferenced internal
+    functions end up with a refid that resolves to no parsed member — the
+    downstream edge builder drops those, so no spurious edges are created.
+    """
+    pl = compounddef.find("programlisting")
+    if pl is None:
+        return
+
+    owner_refid: str | None = None    # member whose body we are inside
+    pending_refid: str | None = None  # signature seen, awaiting its '{'
+    depth = 0
+
+    for codeline in pl.findall("codeline"):
+        raw = "".join(codeline.itertext())
+        stripped = raw.strip()
+        if stripped.startswith("#"):
+            # Preprocessor lines (and macro bodies) open no source blocks.
+            continue
+        clean = _strip_strings_comments(raw)
+        refs = [
+            (r.get("refid", ""), r.get("kindref", ""), "".join(r.itertext()))
+            for r in codeline.findall(".//ref")
+        ]
+        member_refs = [r for r in refs if r[1] == "member"]
+        braces = _brace_delta(clean)
+
+        if owner_refid is not None:
+            depth += braces
+            if _CATCH_CLAUSE_RE.search(clean):
+                _record_catch_clause(codeline, refs, owner_refid, result)
+            if depth <= 0:
+                owner_refid = None
+        elif pending_refid is not None:
+            depth += braces
+            if depth > 0:
+                owner_refid = pending_refid
+                pending_refid = None
+            elif stripped.endswith(";"):
+                # Signature ended without a body (declaration or call).
+                pending_refid = None
+            elif "{" in clean:
+                # Multi-line signature whose body opens on this line (or a
+                # one-liner body with net-zero braces, e.g. ``void f() { x(); }``).
+                owner_refid = pending_refid
+                pending_refid = None
+        elif (
+            member_refs
+            and "(" in raw
+            and "->" not in raw
+            and not stripped.endswith(";")
+        ):
+            # Definition/signature candidate: a member ref on a line that
+            # opens a function call but is not itself a call (no ``->``, no
+            # trailing ``;``).  Multi-line signatures stay pending until the
+            # opening brace appears.
+            pending_refid = member_refs[0][0]
+            depth = braces
+            if depth > 0 or "{" in clean:
+                owner_refid = pending_refid
+                pending_refid = None
+
+
+def _record_catch_clause(
+    codeline: ET.Element,
+    refs: list[tuple[str, str, str]],
+    owner_refid: str,
+    result: ParseResult,
+) -> None:
+    """Record one catch clause under its owning member."""
+    type_ref = next(
+        (r for r in refs if r[1] in _CATCH_TYPE_KINDREFS),
+        None,
+    )
+    result.catch_clauses.append(CatchClauseEntry(
+        from_refid=owner_refid,
+        type_text=_catch_type_text("".join(codeline.itertext())),
+        to_refid=type_ref[0] if type_ref else "",
+        to_type=type_ref[1] if type_ref else "ClassNode",
+    ))
+
+
+def _catch_type_text(raw: str) -> str:
+    """Extract the caught type text from a catch line.
+
+    Handles doxygen's whitespace-collapsed text (``catch(conststd::exception&ex)``)
+    and returns the type as written (``conststd::exception&``).  Returns
+    ``""`` for catch-all clauses (``catch(...)``).
+    """
+    m = _CATCH_CLAUSE_RE.search(raw)
+    if not m:
+        return ""
+    inner = raw[m.end():]
+    depth = 0
+    end = len(inner)
+    for i, ch in enumerate(inner):
+        if ch == "(":
+            depth += 1
+        elif ch == ")":
+            if depth == 0:
+                end = i
+                break
+            depth -= 1
+    inner = inner[:end].strip()
+    if not inner or "..." in inner:
+        return ""
+    return inner
+
+
+def _normalize_catch_type(text: str) -> str:
+    """Normalize a caught-type string to a qualified name for resolution.
+
+    Strips qualifiers and the exception parameter name from doxygen's
+    whitespace-collapsed text, e.g. ``conststd::exception&ex`` →
+    ``std::exception``.  Returns ``""`` when the text is not a resolvable
+    type name (catch-all, function pointers, ambiguous bare names).
+    """
+    name = text.strip()
+    name = re.sub(r"^(const|volatile|struct|class|enum)", "", name).strip()
+    # Trim a trailing reference/pointer suffix plus the parameter name
+    # (``&ex`` / ``*err``).  After this the remainder is the type itself.
+    name = re.sub(r"[&*][^&*]*$", "", name).strip()
+    if not name:
+        return ""
+    # A bare ``catch(MyErr err)`` (no ``&``/``*``) collapses to
+    # ``MyErrerr`` — ambiguous without whitespace, so leave it
+    # unresolved rather than guess (resolution fails closed).
+    return name
+
+
+def _resolve_catch_clauses(result: ParseResult) -> None:
+    """Resolve catch-clause entries to ``DEPENDS_ON`` edges.
+
+    Types carrying a programlisting ``<ref>`` are used directly.  Ref-less
+    types are resolved by qualified name (then short name) against the
+    parsed compounds; standard-library exceptions merged in by a later
+    phase (e.g. cppreference) don't resolve here and are silently skipped,
+    so unresolved catches never produce dangling edges.
+    """
+    compounds_by_qn: dict[str, object] = {}
+    short_to_qn: dict[str, str] = {}
+    for compound in result.compounds:
+        qn = getattr(compound, "qualified_name", "") or ""
+        if not qn:
+            continue
+        compounds_by_qn.setdefault(qn, compound)
+        short = qn.rsplit("::", 1)[-1]
+        short_to_qn.setdefault(short, qn)
+
+    for cc in result.catch_clauses:
+        if cc.to_refid:
+            result.depends_on.append(DependsOnEntry(
+                from_refid=cc.from_refid,
+                to_refid=cc.to_refid,
+                to_type=cc.to_type,
+            ))
+            continue
+        name = _normalize_catch_type(cc.type_text)
+        if not name:
+            continue
+        target = compounds_by_qn.get(name)
+        if target is None and name in short_to_qn:
+            target = compounds_by_qn.get(short_to_qn[name])
+        if target is None:
+            continue
+        result.depends_on.append(DependsOnEntry(
+            from_refid=cc.from_refid,
+            to_refid=target.refid,
+            to_type="ClassNode",
         ))
 
 

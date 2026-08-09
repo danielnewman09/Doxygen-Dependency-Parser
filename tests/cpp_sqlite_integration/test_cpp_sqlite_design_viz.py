@@ -1,16 +1,16 @@
 """Design-layer visualisation tests for the cpp-sqlite project.
 
 Verifies that a design layergraph (from a JSON file) can be ingested
-into Neo4j, retrieved as a "design"-tagged LayerGraph, exported to
-PlantUML, and rendered to SVG — with expected elements and structure.
+into the active backend, retrieved as a "design"-tagged LayerGraph,
+exported to PlantUML, and rendered to SVG — with expected elements
+and structure.
 
 The design graph represents a version-migration system built on top
 of cpp-sqlite (MigrationManager, SchemaVersion, Migration, etc.).
 
-Uses a direct Neo4j connection (same credentials as the
-``codegraph_graph`` fixture) to ingest and retrieve the design
-graph.  Does not require the cpp-sqlite as-built data to be
-pre-indexed.
+Backend-agnostic: runs against the active backend (sqlite by
+default, no Docker) via ``to_backend``/``from_backend``.  Does not
+require the cpp-sqlite as-built data to be pre-indexed.
 """
 
 from __future__ import annotations
@@ -61,8 +61,9 @@ def _ensure_backend():
 
 
 class TestDesignLayerVisualization:
-    """Ingest the design layergraph JSON into Neo4j, retrieve the
-    "design" LayerGraph, and export PlantUML.  Verify the DESIGN_API
+    """Ingest the design layergraph JSON into the active backend,
+    retrieve the "design" LayerGraph, and export PlantUML.
+    Verifies the DESIGN_API
     output: architecture classes, packages, enums, members — but NOT
     test scaffolding (TestNode, AssertionNode, TestStepNode,
     TestFixtureNode, LiteralNode)."""
@@ -73,15 +74,16 @@ class TestDesignLayerVisualization:
         export PlantUML.  Saves the PUML to codegraph_output."""
         from codegraph.graph import LayerGraph
         from codegraph.export.plantuml import export_plantuml, GraphView
+        from codegraph import get_backend
 
-        # ── Step 1: Ingest design JSON into Neo4j ────────────
+        # ── Step 1: Ingest design JSON into the active backend ──
         assert _DESIGN_JSON.exists(), f"Design JSON not found at {_DESIGN_JSON}"
         data = _json.loads(_DESIGN_JSON.read_text(encoding="utf-8"))
         graph = LayerGraph.deserialize(data)
-        graph.to_neo4j()
+        graph.to_backend(get_backend())
 
         # ── Step 2: Retrieve the "design" LayerGraph ─────────
-        design_graph = LayerGraph.from_neo4j("design")
+        design_graph = LayerGraph.from_backend(get_backend(), "design")
 
         # ── Step 3: Export design API view (architecture only,
         #            no test scaffolding) ────────────────────
@@ -157,9 +159,10 @@ class TestDesignLayerVisualization:
 
         The design agent output contains the 8 contract classes plus
         the cpp-sqlite types the design depends on (Database,
-        Transaction).  Library-internal helper classes that the design
-        does not reference (Logger, DataAccessObject, …) are no longer
-        part of the design graph.
+        Transaction).  The regenerated fixture (pipeline dump) also
+        carries the as-built/dependency footprint of the design;
+        see ``test_design_depends_on_as_built_types`` for the edge
+        assertions.
         """
         for cls_name in (
             "MigrationManager",
@@ -176,29 +179,25 @@ class TestDesignLayerVisualization:
                 for L in design_lines
             ), f"Missing design class: {cls_name}"
 
-    def test_library_internal_classes_excluded(self, design_lines):
-        """Unreferenced cpp-sqlite library helpers are NOT in the design.
+    def test_design_depends_on_as_built_types(self, design_puml_text):
+        """The design layer carries DEPENDS_ON edges to the as-built and
+        dependency types it uses.
 
-        The old design graph imported template-helper classes from the
-        as-built (IsVector, ForeignKey, …) that played no role in the
-        design; the agent output no longer includes them.
+        The regenerated design graph is the authoritative pipeline
+        output: the design's MigrationManager takes a Database, its
+        Migration contract operates on a Transaction, and the manager
+        stores std::unique_ptr<Migration> / std::vector<int>.  These
+        references surface as labelled ``..>`` arrows in the export.
         """
-        for cls_name in (
-            "IsVector",
-            "IsForeignKeyT",
-            "RepeatedFieldTransferObject",
-            "GetRepeatedFieldParams",
-            "ForeignKeyTypeT",
-            "ForeignKey",
-            "DataAccessObject",
-            "BaseTransferObject",
-            "Logger",
-            "TransactionError",
+        for arrow in (
+            "cpp_sqlite__Migration ..> cpp_sqlite__Transaction : depends_on",
+            "cpp_sqlite__MigrationManager ..> cpp_sqlite__Database : depends_on",
+            "cpp_sqlite__MigrationManager ..> std__unique_ptr : depends_on",
+            "cpp_sqlite__MigrationManager ..> std__vector : depends_on",
         ):
-            assert not any(
-                f'class "{cls_name}' in L
-                for L in design_lines
-            ), f"Library helper {cls_name} should be excluded from design"
+            assert arrow in design_puml_text, (
+                f"Missing design dependency edge: {arrow}"
+            )
 
     def test_has_key_design_structs(self, design_lines):
         """Design value types (kind=struct) appear as PlantUML classes."""
@@ -243,7 +242,6 @@ class TestDesignLayerVisualization:
         method name + argument list (present in the name prefix).
         """
         methods = [
-            "+MigrationManager():",
             "+verify():",
             "+rollback(int target_version):",
             "+apply():",
@@ -253,6 +251,14 @@ class TestDesignLayerVisualization:
             assert any(method in L for L in design_lines), (
                 f"Missing MigrationManager method: {method}"
             )
+        # The constructor's argsstring is the full declaration
+        # ``MigrationManager(Database &db)``, so the rendered line is
+        # the method name prepended to it.
+        assert any(
+            L.lstrip().startswith("+MigrationManager")
+            and "Database &db" in L
+            for L in design_lines
+        ), "Missing MigrationManager constructor (Database &db)"
 
     def test_migration_manager_has_private_members(self, design_lines):
         """MigrationManager's private members (migrations_, db_) appear
@@ -431,14 +437,15 @@ class TestDesignLayerRoundTrip:
         import json as _json
         from codegraph.graph import LayerGraph
         from codegraph.export.plantuml import import_plantuml, export_plantuml
+        from codegraph import get_backend
 
         # Ingest
         data = _json.loads(_DESIGN_JSON.read_text(encoding="utf-8"))
         graph = LayerGraph.deserialize(data)
-        graph.to_neo4j()
+        graph.to_backend(get_backend())
 
         # Retrieve and export
-        design_graph = LayerGraph.from_neo4j("design")
+        design_graph = LayerGraph.from_backend(get_backend(), "design")
         puml1 = export_plantuml(design_graph, fields="all")
 
         # Import → re-export

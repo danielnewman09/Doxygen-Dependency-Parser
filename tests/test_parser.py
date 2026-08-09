@@ -1260,3 +1260,121 @@ class TestEnumValueInitializerParsing:
         assert len(result.files) == 1
         assert result.files[0].path == "src/color.h"
         assert result.files[0].language == "cpp"
+
+
+
+
+class TestCatchClauseDeps:
+    """Catch-clause exception types become DEPENDS_ON edges."""
+
+    #: <codeline> lines shared across fixture variants
+    TRY_OPEN = '                  <codeline lineno="12"><highlight class="normal"><sp />try</highlight></codeline>'
+    TRY_BODY = '                  <codeline lineno="13"><highlight class="normal"><sp />{</highlight></codeline>\n'                '                  <codeline lineno="14"><highlight class="normal"><sp /><sp />work();</highlight></codeline>\n'                '                  <codeline lineno="15"><highlight class="normal"><sp />}</highlight></codeline>'
+    FUNC_HEAD = '                  <codeline lineno="10"><highlight class="keywordtype">int</highlight><highlight class="normal"><sp /><ref refid="app_8h_1aRun" kindref="member">app::run</ref>()</highlight></codeline>\n'                 '                  <codeline lineno="11"><highlight class="normal">{</highlight></codeline>'
+
+    @pytest.fixture
+    def xml_dir(self, tmp_path):
+        (tmp_path / "index.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygenindex>
+              <compound refid="app_8h" kind="file"><name>app.h</name></compound>
+              <compound refid="classapp_1_1AppError" kind="class"><name>AppError</name></compound>
+            </doxygenindex>
+        """))
+        (tmp_path / "classapp_1_1AppError.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="classapp_1_1AppError" kind="class" language="C++">
+                <compoundname>app::AppError</compoundname>
+                <location file="src/app.h" line="5"/>
+              </compounddef>
+            </doxygen>
+        """))
+        return tmp_path
+
+    def _write_file(self, xml_dir, body):
+        (Path(xml_dir) / "app_8h.xml").write_text(textwrap.dedent("""\
+            <?xml version="1.0"?>
+            <doxygen>
+              <compounddef id="app_8h" kind="file" language="C++">
+                <compoundname>app.h</compoundname>
+                <location file="src/app.h"/>
+                <sectiondef kind="func">
+                  <memberdef kind="function" id="app_8h_1aRun"
+                             prot="public" static="no" const="no"
+                             explicit="no" inline="no" virt="non-virtual">
+                    <name>run</name>
+                    <qualifiedname>app::run</qualifiedname>
+                    <type>int</type>
+                    <definition>int app::run</definition>
+                    <argsstring>()</argsstring>
+                    <location file="src/app.h" line="10"
+                              bodystart="10" bodyend="30"/>
+                  </memberdef>
+                </sectiondef>
+                <programlisting>
+        """) + body + "\n                </programlisting>\n              </compounddef>\n            </doxygen>\n        ")
+
+    def _body(self, catch_lines, extra=None):
+        lines = [self.FUNC_HEAD, self.TRY_OPEN, self.TRY_BODY]
+        if extra:
+            lines.extend(extra)
+        lines.extend(catch_lines)
+        lines.append('                  <codeline lineno="90"><highlight class="normal">}</highlight></codeline>')
+        return "\n".join(lines)
+
+    def test_catch_with_ref_produces_depends_on(self, xml_dir):
+        self._write_file(xml_dir, self._body([
+            '                  <codeline lineno="16"><highlight class="normal"><sp />catch(const<ref refid="classapp_1_1AppError" kindref="compound">app::AppError</ref>&amp;e)</highlight></codeline>',
+            '                  <codeline lineno="17"><highlight class="normal"><sp />{</highlight></codeline>',
+            '                  <codeline lineno="18"><highlight class="normal"><sp /><sp />handle(e);</highlight></codeline>',
+            '                  <codeline lineno="19"><highlight class="normal"><sp />}</highlight></codeline>',
+        ]))
+        result = parse_xml_dir(xml_dir, source="test", progress_interval=0)
+        deps = [d for d in result.depends_on if d.to_refid == "classapp_1_1AppError"]
+        assert len(deps) == 1, deps
+        assert deps[0].from_refid == "app_8h_1aRun"
+
+    def test_macro_catch_ignored(self, xml_dir):
+        self._write_file(xml_dir, self._body([
+            '                  <codeline lineno="16"><highlight class="normal"><sp />catch(const<ref refid="classapp_1_1AppError" kindref="compound">app::AppError</ref>&amp;e)</highlight></codeline>',
+            '                  <codeline lineno="17"><highlight class="normal"><sp />{</highlight></codeline>',
+            '                  <codeline lineno="18"><highlight class="normal"><sp /><sp />handle(e);</highlight></codeline>',
+            '                  <codeline lineno="19"><highlight class="normal"><sp />}</highlight></codeline>',
+        ], extra=[
+            '                  <codeline lineno="7"><highlight class="normal">#define TRY_MACRO catch(app::AppError&amp;)</highlight></codeline>',
+        ]))
+        result = parse_xml_dir(xml_dir, source="test", progress_interval=0)
+        clauses = [c for c in result.catch_clauses]
+        # The macro catch (line 7) is skipped; only the real one remains.
+        assert len(clauses) == 1, clauses
+        assert clauses[0].from_refid == "app_8h_1aRun"
+        assert clauses[0].to_refid == "classapp_1_1AppError"
+
+    def test_ref_less_catch_of_parsed_class_resolves_by_name(self, xml_dir):
+        self._write_file(xml_dir, self._body([
+            '                  <codeline lineno="16"><highlight class="normal"><sp />catch(constapp::AppError&amp;e)</highlight></codeline>',
+            '                  <codeline lineno="17"><highlight class="normal"><sp />{</highlight></codeline>',
+            '                  <codeline lineno="18"><highlight class="normal"><sp /><sp />handle(e);</highlight></codeline>',
+            '                  <codeline lineno="19"><highlight class="normal"><sp />}</highlight></codeline>',
+        ]))
+        result = parse_xml_dir(xml_dir, source="test", progress_interval=0)
+        deps = [d for d in result.depends_on if d.to_refid == "classapp_1_1AppError"]
+        assert len(deps) == 1, deps
+        assert deps[0].from_refid == "app_8h_1aRun"
+        assert deps[0].to_type == "ClassNode"
+
+    def test_unresolvable_and_catch_all_produce_no_edges(self, xml_dir):
+        self._write_file(xml_dir, self._body([
+            '                  <codeline lineno="16"><highlight class="normal"><sp />catch(conststd::exception&amp;e)</highlight></codeline>',
+            '                  <codeline lineno="17"><highlight class="normal"><sp />{</highlight></codeline>',
+            '                  <codeline lineno="18"><highlight class="normal"><sp /><sp />report(e);</highlight></codeline>',
+            '                  <codeline lineno="19"><highlight class="normal"><sp />}</highlight></codeline>',
+            '                  <codeline lineno="20"><highlight class="normal"><sp />catch(...)</highlight></codeline>',
+            '                  <codeline lineno="21"><highlight class="normal"><sp />{</highlight></codeline>',
+            '                  <codeline lineno="22"><highlight class="normal"><sp /><sp />abort();</highlight></codeline>',
+            '                  <codeline lineno="23"><highlight class="normal"><sp />}</highlight></codeline>',
+        ]))
+        result = parse_xml_dir(xml_dir, source="test", progress_interval=0)
+        assert len(result.catch_clauses) == 2
+        assert all(d.to_refid != "classapp_1_1AppError" for d in result.depends_on)
