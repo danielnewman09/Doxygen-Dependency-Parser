@@ -170,21 +170,31 @@ class TestPlantUMLExport:
     # ------------------------------------------------------------------
 
     def test_puml_svg_generated(self, codegraph_graph):
-        """The PlantUML file was rendered to an SVG.  SVG is preferred
-        for large diagrams because it has no 4096px clipping limit
-        that affects PNG output."""
+        """The PlantUML file was rendered to a *valid* SVG.  SVG is
+        preferred for large diagrams because it has no 4096px clipping
+        limit that affects PNG output.
+
+        Validation goes beyond "file exists": PlantUML exits 0 even on
+        syntax errors and emits an error-page SVG (the source echoed as
+        text plus a red ``Syntax Error?`` footer) instead of failing, so
+        ``<svg>`` tags + size checks all pass on a broken diagram.
+        ``validate_plantuml_svg`` rejects error pages, so this test
+        fails loudly when the exporter produces PlantUML that cannot
+        render."""
+        from codegraph.export.plantuml import validate_plantuml_svg
+
         svg_path = _CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop.svg"
         assert svg_path.exists(), (
             f"SVG not generated at {svg_path} — plantuml CLI may be missing"
         )
-        # SVG must be well-formed: has opening/closing <svg> tags
+        # SVG must be well-formed XML and NOT a PlantUML error page.
         svg_text = svg_path.read_text(encoding="utf-8")
-        assert "<svg" in svg_text, "SVG file missing <svg> root element"
-        assert "</svg>" in svg_text, "SVG file missing closing </svg> tag"
-        assert svg_path.stat().st_size > 5000, (
-            f"SVG too small ({svg_path.stat().st_size} bytes)"
+        problems = validate_plantuml_svg(svg_text)
+        assert not problems, (
+            "SVG is not a valid rendered diagram:\n  "
+            + "\n  ".join(problems)
         )
-        print(f"\n  SVG: {svg_path.stat().st_size:,} bytes")
+        print(f"\n  SVG: {svg_path.stat().st_size:,} bytes (validated)")
 
 
 class TestPlantUMLRoundTrip:
@@ -1071,34 +1081,25 @@ class TestClassScopedView:
     # ------------------------------------------------------------------
 
     def test_scoped_svg_renders(self, scoped_database_puml):
-        """The scoped PlantUML can be rendered to SVG."""
+        """The scoped PlantUML can be rendered to a valid SVG.
+
+        Uses ``render_plantuml_to_svg``, which validates the output —
+        PlantUML exits 0 even on syntax errors and emits an error-page
+        SVG instead, so a plain subprocess + ``<svg>`` checks would
+        pass on a broken diagram."""
         import shutil
-        import subprocess
         import tempfile
         from pathlib import Path
 
-        plantuml_bin = shutil.which("plantuml")
-        if not plantuml_bin:
+        from codegraph.export.plantuml import render_plantuml_to_svg
+
+        if not shutil.which("plantuml"):
             pytest.skip("plantuml CLI not found on PATH")
 
         with tempfile.TemporaryDirectory() as tmpdir:
             puml_path = Path(tmpdir) / "scoped_database.puml"
             puml_path.write_text(scoped_database_puml, encoding="utf-8")
-            result = subprocess.run(
-                [plantuml_bin, "-tsvg", str(puml_path)],
-                timeout=120,
-            )
-            assert result.returncode == 0, (
-                f"plantuml failed with rc={result.returncode}"
-            )
-            svg_path = Path(tmpdir) / "scoped_database.svg"
-            assert svg_path.exists(), "SVG not generated"
-            svg_text = svg_path.read_text(encoding="utf-8")
-            assert "<svg" in svg_text
-            assert "</svg>" in svg_text
-            assert svg_path.stat().st_size > 3000, (
-                f"SVG too small ({svg_path.stat().st_size} bytes)"
-            )
+            svg_path = render_plantuml_to_svg(puml_path, timeout=120)
             # Copy to output dir for inspection
             output_svg = _CODEGRAPH_OUTPUT / "scoped_database.svg"
             shutil.copy(str(svg_path), str(output_svg))

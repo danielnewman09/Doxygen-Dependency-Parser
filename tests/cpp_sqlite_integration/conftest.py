@@ -283,16 +283,20 @@ def codegraph_graph():
     puml_public_output = _CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop_public.puml"
     puml_public_output.write_text(puml_public, encoding="utf-8")
 
-    # Render all to SVG
+    # Render all to SVG — each render is validated.  PlantUML exits 0
+    # even on syntax errors (it emits an error-page SVG instead of
+    # failing), so a broken diagram would otherwise ship silently as
+    # a ``<svg>`` file that renders nothing.
     plantuml_bin = shutil.which("plantuml")
     if plantuml_bin:
-        _dbg("plantuml SVG renders (3x)...")
+        from codegraph.export.plantuml import render_plantuml_to_svg
+        _dbg("plantuml SVG renders (3x, validated)...")
         for puml_name in ("cpp_sqlite_one_hop.puml",
                           "cpp_sqlite_one_hop_collapsed.puml",
                           "cpp_sqlite_one_hop_public.puml"):
-            subprocess.run(
-                [plantuml_bin, "-tsvg", puml_name],
-                cwd=str(_CODEGRAPH_OUTPUT),
+            render_plantuml_to_svg(
+                _CODEGRAPH_OUTPUT / puml_name,
+                plantuml_bin=plantuml_bin,
                 env=env, timeout=120,
             )
         _dbg("plantuml SVG renders done")
