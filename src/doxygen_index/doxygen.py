@@ -170,6 +170,36 @@ HAVE_DOT               = NO
 """
 
 
+def _merge_exclude_patterns(exclude_patterns: str | None) -> str:
+    """Return the effective ``EXCLUDE_PATTERNS`` for a Doxygen run.
+
+    The parse-hygiene defaults (internal implementation directories:
+    ``*/detail/*``, ``*/impl/*``, ``*/internal/*``, ``*/aux_/*``,
+    ``*/experimental/*``) always apply, so Doxygen never documents
+    implementation internals.  Project config patterns (e.g.
+    ``*/test/*``) are added on top and deduplicated — a config that
+    replaces the defaults (as ``exclude_patterns`` in
+    ``.doxygen-index.toml`` does today) would otherwise silently pull
+    entire internal implementation trees (e.g. ``boost/detail/*``) into
+    the graph.
+
+    Args:
+        exclude_patterns: User-supplied EXCLUDE_PATTERNS (may be empty or
+            ``None`` when the config has no ``exclude_patterns`` setting).
+
+    Returns:
+        The combined, deduplicated pattern string.
+    """
+    seen: set[str] = set()
+    merged: list[str] = []
+    all_patterns = f"{_DEFAULT_EXCLUDE_PATTERNS} {exclude_patterns or ''}"
+    for pattern in all_patterns.split():
+        if pattern not in seen:
+            seen.add(pattern)
+            merged.append(pattern)
+    return " ".join(merged)
+
+
 def run_doxygen(
     name: str,
     input_paths: Path | list[Path],
@@ -177,7 +207,7 @@ def run_doxygen(
     *,
     predefined: str = "",
     file_patterns: str = _DEFAULT_FILE_PATTERNS,
-    exclude_patterns: str = _DEFAULT_EXCLUDE_PATTERNS,
+    exclude_patterns: str = "",
     xml_subdir: Optional[str] = None,
     include_paths: list[Path] | None = None,
 ) -> Path | None:
@@ -190,7 +220,9 @@ def run_doxygen(
         output_base: Base directory for output.
         predefined: Preprocessor defines.
         file_patterns: Doxygen FILE_PATTERNS value.
-        exclude_patterns: Doxygen EXCLUDE_PATTERNS value.
+        exclude_patterns: User-supplied EXCLUDE_PATTERNS; the parse-hygiene
+            defaults (``*/detail/*`` etc.) are always merged in — see
+            :func:`_merge_exclude_patterns`.
         xml_subdir: Subdirectory under output_base for XML output.
                    Defaults to ``{name}/xml/``.
         include_paths: Directories added to Doxygen's INCLUDE_PATH for
@@ -199,6 +231,7 @@ def run_doxygen(
     Returns:
         Path to the XML output directory, or None on failure.
     """
+    exclude_patterns = _merge_exclude_patterns(exclude_patterns)
     if xml_subdir is None:
         xml_dir = output_base / name / "xml"
     else:
@@ -274,7 +307,7 @@ def generate_xml(
             dep_name, include_path, output_dir,
             predefined=opts.get("predefined", ""),
             file_patterns=opts.get("file_patterns", _DEFAULT_FILE_PATTERNS),
-            exclude_patterns=opts.get("exclude_patterns", _DEFAULT_EXCLUDE_PATTERNS),
+            exclude_patterns=opts.get("exclude_patterns", ""),
         )
         if xml_dir:
             xml_dirs[dep_name] = xml_dir
@@ -541,13 +574,16 @@ def run_unified_doxygen(
                 continue
         all_inputs.append(inc_dir)
 
+    # run_doxygen merges the parse-hygiene EXCLUDE_PATTERNS defaults
+    # (``*/detail/*`` etc.) with any config-provided patterns, so internal
+    # implementation trees never leak into the graph regardless of config.
     return run_doxygen(
         project_name,
         all_inputs,
         output_base,
         predefined=predefined,
         file_patterns=file_patterns or _DEFAULT_FILE_PATTERNS,
-        exclude_patterns=exclude_patterns or _DEFAULT_EXCLUDE_PATTERNS,
+        exclude_patterns=exclude_patterns or "",
         xml_subdir=f"{project_name}_unified/xml",
     )
 
