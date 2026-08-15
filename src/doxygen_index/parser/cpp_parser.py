@@ -62,6 +62,111 @@ from doxygen_index.parser.model import (
 # ---------------------------------------------------------------------------
 
 
+def extract_include_guard(file_path: str | Path | None) -> str:
+    """Return a header's conventional ``#ifndef``/``#define`` macro.
+
+    Doxygen does not reliably retain include guards in its XML because they
+    are preprocessing structure rather than semantic declarations. Reading
+    this small, typed file attribute at the source boundary keeps codegen from
+    inventing a path-derived guard during an as-built round trip.
+    """
+    if not file_path:
+        return ""
+    try:
+        lines = Path(file_path).read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except (OSError, UnicodeError):
+        return ""
+    ifndef: str | None = None
+    for line in lines[:100]:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("//"):
+            continue
+        match = re.fullmatch(r"#\s*ifndef\s+([A-Za-z_]\w*)", stripped)
+        if match:
+            ifndef = match.group(1)
+            continue
+        if ifndef is not None:
+            match = re.fullmatch(r"#\s*define\s+([A-Za-z_]\w*)", stripped)
+            return ifndef if match and match.group(1) == ifndef else ""
+        if not stripped.startswith(("/*", "*", "*/", "#pragma")):
+            return ""
+    return ""
+
+
+def extract_include_directives(file_path: str | Path | None) -> list[str]:
+    """Return ordered include operands and their blank-line groups.
+
+    Empty strings represent a separator after an include group. This is source
+    structure, not decoration: clang-format with ``IncludeBlocks: Preserve``
+    retains it when canonicalizing generated files.
+    """
+    if not file_path:
+        return []
+    try:
+        lines = Path(file_path).read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except (OSError, UnicodeError):
+        return []
+    includes: list[str] = []
+    pending_separator = False
+    for line in lines:
+        match = re.match(r"^\s*#\s*include\s*([<\"].*[>\"])\s*(?://.*)?$", line)
+        if match:
+            if pending_separator and includes:
+                includes.append("")
+            includes.append(match.group(1))
+            pending_separator = False
+        elif includes and not line.strip():
+            pending_separator = True
+        elif line.strip() and not line.lstrip().startswith("//"):
+            pending_separator = False
+    return includes
+
+
+def extract_namespace_padding(file_path: str | Path | None) -> tuple[int, int]:
+    """Return blank-line counts just inside a simple top-level namespace."""
+    if not file_path:
+        return 0, 0
+    try:
+        lines = Path(file_path).read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except (OSError, UnicodeError):
+        return 0, 0
+    open_index = next(
+        (index for index, line in enumerate(lines) if re.match(r"^\s*namespace\s+\w+\s*$", line)),
+        None,
+    )
+    if open_index is None or open_index + 1 >= len(lines):
+        return 0, 0
+    brace_index = open_index + 1
+    if lines[brace_index].strip() != "{":
+        return 0, 0
+    leading = 0
+    for line in lines[brace_index + 1:]:
+        if line.strip():
+            break
+        leading += 1
+    close_index = next(
+        (
+            index for index in range(len(lines) - 1, brace_index, -1)
+            if re.match(r"^\s*}\s*(?://\s*namespace.*)?$", lines[index])
+        ),
+        None,
+    )
+    if close_index is None:
+        return leading, 0
+    trailing = 0
+    for line in reversed(lines[brace_index + 1:close_index]):
+        if line.strip():
+            break
+        trailing += 1
+    return leading, trailing
+
+
 def normalize_argsstring(argsstring: str) -> str:
     """Strip parameter names from argsstring, keeping types only.
 
@@ -186,6 +291,29 @@ def detect_template_specialization(qualified_name: str) -> tuple[bool, str]:
 # ---------------------------------------------------------------------------
 
 
+def _read_body(body_file: str | None, body_start: int | None, body_end: int | None) -> str:
+    """Extract a member's implementation body text from its source file.
+
+    Doxygen reports the body's line range (``bodystart``/``bodyend`` on
+    ``<location>`` — 1-indexed, inclusive, and including the signature
+    line for out-of-line definitions).  The body is read from the
+    source file so the implementation survives into the graph as
+    structured data (the codegen raw material for out-of-line and
+    inline definitions).
+
+    Returns ``""`` when there is no body or the file cannot be read.
+    """
+    if not body_file or not body_start or not body_end:
+        return ""
+    try:
+        lines = Path(body_file).read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return ""
+    if body_start < 1 or body_end > len(lines):
+        return ""
+    return "\n".join(lines[body_start - 1: body_end])
+
+
 def _is_under_test_dir(loc_file: str | None, test_dirs: list[Path] | None) -> bool:
     """Return True if *loc_file* lives under one of the resolved test dirs.
 
@@ -240,6 +368,7 @@ def _extract_common_member_fields(
 
     loc = memberdef.find("location")
     file_path, line_number, body_start, body_end = parse_location(loc)
+    body_file = loc.get("bodyfile") if loc is not None else None
 
     brief = parse_description(memberdef.find("briefdescription"))
     detailed = parse_description(memberdef.find("detaileddescription"))
@@ -256,6 +385,8 @@ def _extract_common_member_fields(
         "definition": definition,
         "argsstring": argsstring,
         "initializer": initializer,
+        "body": _read_body(body_file, body_start, body_end),
+        "body_file": body_file or "",
         "file_path": file_path,
         "line_number": line_number,
         "body_start": body_start,
@@ -501,9 +632,14 @@ class CppParser(LanguageParser):
                 loc = compounddef.find("location")
                 file_path = loc.get("file") if loc is not None else None
                 language = normalize_language(compounddef.get("language", ""))
+                namespace_leading, namespace_trailing = extract_namespace_padding(file_path)
                 result.files.append(FileNode(
                     refid=refid, name=compoundname,
                     path=file_path or "", language=language, source=source,
+                    include_guard=extract_include_guard(file_path),
+                    include_directives=extract_include_directives(file_path),
+                    namespace_leading_blank_lines=namespace_leading,
+                    namespace_trailing_blank_lines=namespace_trailing,
                 ))
                 for inc in compounddef.findall("includes"):
                     result.includes.append(IncludeEntry(
@@ -933,6 +1069,8 @@ class CppParser(LanguageParser):
             line_number=fields["line_number"],
             body_start=fields["body_start"] or 0,
             body_end=fields["body_end"] or 0,
+            body=fields.get("body", "") or "",
+            body_file=fields.get("body_file", "") or "",
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
             protection=fields["prot"],
@@ -1012,6 +1150,8 @@ class CppParser(LanguageParser):
             line_number=fields["line_number"],
             body_start=fields["body_start"] or 0,
             body_end=fields["body_end"] or 0,
+            body=fields.get("body", "") or "",
+            body_file=fields.get("body_file", "") or "",
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
             protection=fields["prot"],

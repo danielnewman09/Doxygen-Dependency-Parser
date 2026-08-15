@@ -206,11 +206,12 @@ def result_to_graph_json(
     for comp in result.compositions:
         composes_by_parent[comp.parent_refid].append((comp.child_refid, comp.child_type))
 
-    # file_refid → [(included_refid)] — file includes
-    includes_by_file: dict[str, list[str]] = defaultdict(list)
+    # file_refid → [(included_refid, spelling, is_local)] — file includes
+    includes_by_file: dict[str, list[tuple[str, str, bool]]] = defaultdict(list)
     for inc in result.includes:
-        if inc.included_refid:
-            includes_by_file[inc.file_refid].append(inc.included_refid)
+        includes_by_file[inc.file_refid].append(
+            (inc.included_refid, inc.included_file, inc.is_local)
+        )
 
     # file_refid → [(included_refid)] — namespace includes
     ns_includes_by_file: dict[str, list[str]] = defaultdict(list)
@@ -527,7 +528,7 @@ def _build_node_edges(
     # Pre-built index maps (from_refid → list of targets)
     members_by_compound: dict[str, list[tuple[str, str, str]]],
     composes_by_parent: dict[str, list[tuple[str, str]]],
-    includes_by_file: dict[str, list[str]],
+    includes_by_file: dict[str, list[tuple[str, str, bool]]],
     ns_includes_by_file: dict[str, list[str]],
     invokes_by_from: dict[str, list[tuple[str, str, str]]],
     inherits_by_from: dict[str, list[tuple[str, str, str]]],  # (to_refid, to_name, to_type)
@@ -582,13 +583,21 @@ def _build_node_edges(
 
     # --- INCLUDES (file → included file) ---
     if node_type == "FileNode" and node_refid:
-        for inc_refid in includes_by_file.get(node_refid, ()):
+        for inc_refid, inc_spelling, inc_local in includes_by_file.get(node_refid, ()):
             target_uid = refid_to_uid.get(inc_refid, inc_refid)
-            edges.append({
+            edge = {
                 "relation_type": "INCLUDES",
                 "target_uid": target_uid,
                 "target_type": "FileNode",
-            })
+            }
+            # Carry the include spelling as written in the source (the
+            # ``<includes>`` element text, sans quotes/brackets) plus the
+            # local/system flag — the relationship metadata codegen needs
+            # to re-emit ``#include`` lines.
+            if inc_spelling:
+                edge["include"] = inc_spelling
+                edge["local"] = inc_local
+            edges.append(edge)
 
     # --- INCLUDES (namespace → imported compound) ---
     if node_type == "NamespaceNode" and node_refid:
