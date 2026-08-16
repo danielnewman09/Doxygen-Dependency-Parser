@@ -310,6 +310,23 @@ def codegraph_graph():
     )
     _dbg("json written")
 
+    # ── Step 3a: Implementation-bearing export ─────────────
+    # The same graph exported with ``export_implementation=True``:
+    # MethodNodes carry their implementation ``body``/``body_file`` and
+    # INCLUDES edges carry the include spelling, so codegen can rebuild
+    # out-of-line/inline definitions from the graph (the codegraph
+    # semantic-reconstruction suite's input).
+    _dbg("writing implementation export...")
+    impl_output = _UNIT_TEST_DATA / "cpp_sqlite_one_hop_impl.json"
+    impl_output.write_text(
+        _json.dumps(
+            graph.serialize(fields="all", export_implementation=True),
+            indent=2, default=str,
+        ),
+        encoding="utf-8",
+    )
+    _dbg("implementation export written")
+
     # ── Step 3b: Save sqlite reference artifact ─────────────
     # The generated backend database is archived into unit_test_data
     # alongside the serialized JSON so external tooling can open the

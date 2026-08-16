@@ -723,6 +723,35 @@ class CppParser(LanguageParser):
                     print(f"  Parsed {completed}/{total} XML files...")
                 # Re-raise any exceptions from workers
                 future.result()
+        self._extract_residual_fragments(result, source=source, layer=layer)
+
+    @staticmethod
+    def _extract_residual_fragments(
+        result: ParseResult,
+        *,
+        source: str,
+        layer: str,
+    ) -> None:
+        """Populate generic residuals after all Doxygen-owned spans are known."""
+        indexed_nodes = (
+            result.classes + result.enums + result.unions + result.interfaces
+            + result.concepts + result.methods + result.attributes
+            + result.enum_values + result.defines + result.functions
+        )
+        for file_node in result.files:
+            path = file_node.path
+            owned_spans = []
+            for node in indexed_nodes:
+                if getattr(node, "file_path", "") != path:
+                    continue
+                start = int(getattr(node, "line_number", 0) or 0)
+                if not start:
+                    continue
+                end = max(start, int(getattr(node, "body_end", 0) or 0))
+                owned_spans.append((start, end))
+            result.source_fragments.extend(extract_residual_source_fragments(
+                path, owned_spans, source=source, layer=layer,
+            ))
 
     # ------------------------------------------------------------------
     # Doxygen XML compound file parsing

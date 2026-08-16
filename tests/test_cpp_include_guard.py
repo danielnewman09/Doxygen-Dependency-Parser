@@ -1,12 +1,14 @@
 from pathlib import Path
 
 from doxygen_index.parser.cpp_parser import (
+    CppParser,
     extract_include_directives,
     extract_include_guard,
     extract_namespace_padding,
     extract_preceding_doc_comment,
     extract_residual_source_fragments,
 )
+from doxygen_index.parser.model import ParseResult
 
 
 def test_extract_include_guard_preserves_exact_macro(tmp_path: Path):
@@ -95,3 +97,35 @@ def test_residual_fragments_capture_non_macro_pragma(tmp_path: Path):
     assert [(f.start_line, f.end_line, f.text) for f in fragments] == [
         (2, 2, "#pragma clang diagnostic push\n"),
     ]
+
+
+def test_parse_source_dir_populates_residual_fragment_metadata(tmp_path: Path, monkeypatch):
+    """The parser attaches residuals to real file ingestion, not only helpers."""
+    source = tmp_path / "src" / "Widget.hpp"
+    source.parent.mkdir()
+    source.write_text(
+        "namespace sample\n{\n#pragma clang diagnostic push\n}\n",
+        encoding="utf-8",
+    )
+    xml_dir = tmp_path / "xml"
+    xml_dir.mkdir()
+    (xml_dir / "index.xml").write_text(
+        '<doxygenindex><compound refid="_widget_8hpp" kind="file">'
+        '<name>Widget.hpp</name></compound></doxygenindex>',
+        encoding="utf-8",
+    )
+    (xml_dir / "_widget_8hpp.xml").write_text(
+        '<doxygen><compounddef id="_widget_8hpp" kind="file" language="C++">'
+        '<compoundname>Widget.hpp</compoundname>'
+        '<location file="src/Widget.hpp"/>'
+        '</compounddef></doxygen>',
+        encoding="utf-8",
+    )
+    monkeypatch.chdir(tmp_path)
+    result = ParseResult()
+    CppParser().parse_source_dir(xml_dir, source="demo", result=result, layer="as-built")
+    assert len(result.source_fragments) == 1
+    fragment = result.source_fragments[0]
+    assert fragment.text == "#pragma clang diagnostic push\n"
+    assert fragment.placement == "sample"
+    assert fragment.source == "demo"
