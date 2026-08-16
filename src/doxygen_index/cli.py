@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 
@@ -121,9 +122,15 @@ def cmd_project(args: argparse.Namespace) -> None:
 
     xml_dir: Path | None = None  # only set for C++
 
-    # --neo4j is a shorthand for --format neo4j
+    # --neo4j is a deprecated shorthand for the legacy Neo4j backend.
     if getattr(args, 'neo4j', False):
         args.format = "neo4j"
+
+    # Database output formats select their backend explicitly.  SQLite is
+    # the default; Neo4j remains available only as a legacy compatibility
+    # path.  JSON is a file export and does not select a graph backend.
+    if args.format in ("sqlite", "neo4j"):
+        os.environ["CODEGRAPH_BACKEND"] = args.format
 
     if config.language == "python":
         result = _parse_python_project(args, config)
@@ -226,12 +233,13 @@ def cmd_project(args: argparse.Namespace) -> None:
     source = args.source or config.name
     json_path = output_dir / f"{config.name}.json"
 
-    if args.format == "neo4j":
+    if args.format in ("sqlite", "neo4j"):
         from doxygen_index.neo4j_backend import (
             ensure_schema, clear_source,
             write_result as neo4j_write, update_result as neo4j_update,
         )
-        print(f"\n--- {config.name} → Neo4j ---")
+        backend_label = "SQLite" if args.format == "sqlite" else "Neo4j (legacy)"
+        print(f"\n--- {config.name} → {backend_label} ---")
         get_backend().health_check()
         ensure_schema()
         if args.clear:
@@ -267,7 +275,7 @@ def cmd_project(args: argparse.Namespace) -> None:
         print(f"  Test fixtures:{len(result.test_fixtures)}")
         print(f"  Assertions:   {len(result.assertions)}")
         print(f"  Test steps:   {len(result.test_steps)}")
-    if args.format != "neo4j":
+    if args.format == "json":
         print(f"\nOutput: {json_path}")
 
 
@@ -1015,8 +1023,8 @@ def main() -> None:
                     help="Path to project directory containing .doxygen-index.toml (default: .)")
     sp.add_argument("--output-dir", default=None,
                     help="Base directory for output (default: <project>/build/docs/doxygen-<name>/)")
-    sp.add_argument("--format", choices=["json", "neo4j"], default="json",
-                    help="Output format (default: json)")
+    sp.add_argument("--format", choices=["sqlite", "json", "neo4j"], default="sqlite",
+                    help="Output target (default: sqlite; neo4j is legacy)")
     sp.add_argument("--source", default=None,
                     help="Source label for provenance (default: project name from config)")
     sp.add_argument("--generate-only", action="store_true",

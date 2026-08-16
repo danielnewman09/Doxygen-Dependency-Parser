@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
@@ -193,79 +194,513 @@ def extract_guard_padding(file_path: str | Path | None) -> int:
     return padding
 
 
+# ---------------------------------------------------------------------------
+# Source-span ownership — lossless residual subtraction
+#
+# After structured nodes are indexed, every remaining meaningful source span
+# in a file must be represented either by a structured node or by a
+# ``SourceFragmentNode``.  The pipeline below is deliberately generic: it has
+# no macro-name, casing, or library-specific rules.  ``build_owned_spans``
+# assembles the complete ordered ownership map for a file, and
+# ``extract_residual_source_fragments`` subtracts that map from the raw
+# source text and emits one fragment per remaining non-whitespace run.
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class OwnedSpan:
+    """An inclusive, 1-based source span claimed by a structured owner.
+
+    Attributes:
+        start: First line (1-based, inclusive).
+        end: Last line (1-based, inclusive).
+        owner: Qualified name of the owning entity (node qualified name or
+            file path for boilerplate spans).
+        owner_type: Node type name (``"ClassNode"``, ``"MethodNode"``, ...)
+            or ``"FileNode"``/``"NamespaceNode"`` for boilerplate spans.
+        kind: ``"node"`` for structured-node spans; ``"boilerplate"`` for
+            includes/guards; ``"ns-open"``/``"ns-close"`` for namespace
+            boundary lines.
+    """
+
+    start: int
+    end: int
+    owner: str = ""
+    owner_type: str = ""
+    kind: str = "node"
+
+    def __post_init__(self) -> None:
+        if self.end < self.start:
+            self.end = self.start
+
+
+_NS_OPEN_RE = re.compile(r"^\s*namespace\s+([\w:]+)\s*\{?\s*(?://.*)?$")
+
+
+def _read_source_lines(file_path: str | Path | None) -> list[str] | None:
+    """Return source lines (with endings) or None when unreadable."""
+    if not file_path:
+        return None
+    try:
+        return Path(file_path).read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines(keepends=True)
+    except (OSError, UnicodeError):
+        return None
+
+
+def _strip_for_scan(line: str, in_block_comment: bool) -> tuple[str, bool]:
+    """Strip strings, char literals, ``//`` and ``/* */`` comments from a line.
+
+    Block-comment state is threaded across lines so braces inside multi-line
+    comments never skew span-end derivation.  Returns ``(clean, state)``.
+    """
+    out: list[str] = []
+    i, n = 0, len(line)
+    while i < n:
+        c = line[i]
+        if in_block_comment:
+            if c == "*" and i + 1 < n and line[i + 1] == "/":
+                in_block_comment = False
+                i += 2
+                continue
+            i += 1
+            continue
+        if c == "/" and i + 1 < n and line[i + 1] == "/":
+            break
+        if c == "/" and i + 1 < n and line[i + 1] == "*":
+            in_block_comment = True
+            i += 2
+            continue
+        if c in ('"', "'"):
+            quote = c
+            i += 1
+            while i < n:
+                if line[i] == "\\":
+                    i += 2
+                    continue
+                if line[i] == quote:
+                    i += 1
+                    break
+                i += 1
+            continue
+        out.append(c)
+        i += 1
+    return "".join(out), in_block_comment
+
+
+def _derive_span_end(lines: list[str], start_line: int) -> int:
+    """Derive the inclusive end line of the construct opening at *start_line*.
+
+    1-based.  Walks forward tracking brace/paren depth (ignoring strings and
+    comments) until a line whose stripped content terminates the construct:
+    a ``;`` or ``}`` at net zero depth, the end of a preprocessor block, or
+    EOF.  Only returns when the boundary is unambiguous — an unterminated
+    construct ends at EOF rather than guessing.
+    """
+    n = len(lines)
+    if n == 0:
+        return start_line
+    start = max(1, start_line)
+    if start - 1 >= n:
+        return start_line
+    first_clean, _state = _strip_for_scan(lines[start - 1], False)
+    if first_clean.strip().startswith("#"):
+        # Preprocessor line: owns its ``\`` continuations and nothing else.
+        end = start
+        while end < n and lines[end - 1].rstrip().endswith("\\"):
+            end += 1
+        return end
+    paren = brace = 0
+    in_block = False
+    for idx in range(start - 1, n):
+        clean, in_block = _strip_for_scan(lines[idx], in_block)
+        stripped = clean.strip()
+        if not stripped:
+            continue
+        if stripped.startswith("#"):
+            continue  # preprocessor lines open/close no source blocks
+        paren += stripped.count("(") - stripped.count(")")
+        brace += stripped.count("{") - stripped.count("}")
+        if paren == 0 and brace == 0 and stripped.endswith((";", "}")):
+            return idx + 1
+    return n
+
+
+def _doc_comment_span(
+    lines: list[str], doc_text: str, decl_line: int
+) -> tuple[int, int] | None:
+    """Locate *doc_text* (byte-exact) in the source region above *decl_line*.
+
+    Returns the inclusive 1-based line span of the comment block, or None
+    when the text cannot be found unambiguously.
+    """
+    if not doc_text:
+        return None
+    target = doc_text[:-1] if doc_text.endswith("\n") else doc_text
+    if not target:
+        return None
+    prefix = "".join(lines[: decl_line - 1])
+    offset = prefix.find(target)
+    if offset < 0:
+        return None
+    start_line = prefix[:offset].count("\n") + 1
+    end_line = start_line + target.count("\n")
+    return start_line, end_line
+
+
+def _template_prefix_start(lines: list[str], decl_line: int) -> int:
+    """Extend an owned span start up to the first ``template<...>`` line.
+
+    The template parameter list is part of the compound/member declaration;
+    without owning it, the ``template<...>`` line would be re-emitted as a
+    fragment alongside the rendered declaration.  Handles single- and
+    multi-line template lists.  Returns the (1-based) start line.
+    """
+    start = decl_line
+    j = decl_line - 2  # 0-based line above the declaration
+    open_template = False
+    while j >= 0:
+        stripped = lines[j].strip()
+        if not stripped:
+            break
+        is_template = open_template or stripped.startswith("template")
+        if not is_template:
+            break
+        start = j + 1
+        if not stripped.endswith(">"):
+            open_template = True
+            j -= 1
+            continue
+        # Completed template list — keep walking up only if the line above
+        # is itself another template list (``template <...> template<...>``).
+        j -= 1
+        if j >= 0 and lines[j].strip().startswith("template"):
+            open_template = True
+            continue
+        break
+    return start
+
+
+def _source_span(
+    file_path: str | Path | None,
+    decl_line: int | None,
+    *,
+    body_file: str = "",
+    body_start: int = 0,
+    body_end: int = 0,
+    doc_comment: str = "",
+) -> tuple[int, int] | None:
+    """Return the inclusive (start_line, end_line) span a node owns.
+
+    The span runs from the node's doc comment (or template prefix, or the
+    declaration line) through its declaration end — or its body end when
+    the body lives in the same file.  Returns None when the span cannot be
+    determined unambiguously.
+    """
+    if not file_path or not decl_line:
+        return None
+    lines = _read_source_lines(file_path)
+    if lines is None:
+        return None
+    if decl_line < 1 or decl_line > len(lines):
+        return None
+    start = decl_line
+    if doc_comment:
+        span = _doc_comment_span(lines, doc_comment, decl_line)
+        if span is not None:
+            start = span[0]
+    else:
+        template_start = _template_prefix_start(lines, decl_line)
+        if template_start < start:
+            start = template_start
+    if body_end and body_file in ("", str(file_path)) and body_start:
+        end = max(start, body_end)
+    else:
+        end = max(start, _derive_span_end(lines, start))
+    return start, end
+
+
+def _file_boilerplate_spans(
+    file_path: str | Path, lines: list[str]
+) -> list[OwnedSpan]:
+    """Structural boilerplate spans: includes, guard lines, namespace lines.
+
+    These spans classify source lines by their preprocessor/namespace
+    structure, never by identifier spelling.  Include directives and the
+    include-guard lines are owned by the file; namespace open/close lines are
+    owned by the namespace (by name from the source line).
+    """
+    spans: list[OwnedSpan] = []
+    path = str(file_path)
+    guard = extract_include_guard(file_path)
+    endif_idx: int | None = None
+    for idx, line in enumerate(lines):
+        lineno = idx + 1
+        stripped = line.strip()
+        if re.match(r"^#\s*include\b", stripped):
+            spans.append(OwnedSpan(
+                lineno, lineno, owner=path, owner_type="FileNode",
+                kind="boilerplate",
+            ))
+            continue
+        if guard:
+            match = re.match(r"^#\s*(ifndef|define)\s+([A-Za-z_]\w*)", stripped)
+            if match and match.group(2) == guard:
+                spans.append(OwnedSpan(
+                    lineno, lineno, owner=path, owner_type="FileNode",
+                    kind="boilerplate",
+                ))
+                continue
+            if re.match(r"^#\s*endif\b", stripped):
+                endif_idx = idx
+    if guard and endif_idx is not None:
+        spans.append(OwnedSpan(
+            endif_idx + 1, endif_idx + 1, owner=path, owner_type="FileNode",
+            kind="boilerplate",
+        ))
+
+    for open_idx, name in _namespace_open_lines(lines):
+        spans.append(OwnedSpan(
+            open_idx + 1, open_idx + 1, owner=name, owner_type="NamespaceNode",
+            kind="ns-open",
+        ))
+        if open_idx + 1 < len(lines) and lines[open_idx + 1].strip() == "{":
+            spans.append(OwnedSpan(
+                open_idx + 2, open_idx + 2, owner=name, owner_type="NamespaceNode",
+                kind="boilerplate",
+            ))
+        close_idx = _namespace_close_line(lines, open_idx)
+        if close_idx is not None:
+            spans.append(OwnedSpan(
+                close_idx + 1, close_idx + 1, owner=name,
+                owner_type="NamespaceNode", kind="ns-close",
+            ))
+    return spans
+
+
+def _namespace_open_lines(lines: list[str]) -> list[tuple[int, str]]:
+    """Return ``(0-based index, name)`` for every ``namespace`` open line."""
+    result: list[tuple[int, str]] = []
+    for idx, line in enumerate(lines):
+        match = _NS_OPEN_RE.match(line)
+        if match:
+            result.append((idx, match.group(1)))
+    return result
+
+
+def _namespace_close_line(lines: list[str], open_idx: int) -> int | None:
+    """Brace-match from a namespace open line to its closing ``}`` line.
+
+    Returns the 0-based index of the close line, or None when the braces do
+    not balance (source error or exotic construct).
+    """
+    depth = 0
+    in_block = False
+    for idx in range(open_idx, len(lines)):
+        raw = lines[idx]
+        clean, in_block = _strip_for_scan(raw, in_block)
+        opens = clean.count("{")
+        closes = clean.count("}")
+        if idx == open_idx and not opens:
+            # ``namespace x`` on its own line; the ``{`` is on the next line.
+            continue
+        depth += opens - closes
+        if depth <= 0 and closes:
+            return idx
+    return None
+
+
+def _namespace_ranges(spans: list[OwnedSpan]) -> list[tuple[int, int, str]]:
+    """Pair ns-open/ns-close boundary spans into ``(open, close, name)``."""
+    markers = sorted(
+        (s.start, s.kind, s.owner)
+        for s in spans
+        if s.owner_type == "NamespaceNode" and s.kind in ("ns-open", "ns-close")
+    )
+    ranges: list[tuple[int, int, str]] = []
+    stack: list[tuple[int, str]] = []
+    for line, kind, name in markers:
+        if kind == "ns-open":
+            stack.append((line, name))
+        elif stack:
+            open_line, open_name = stack.pop()
+            ranges.append((open_line, line, open_name))
+    return ranges
+
+
+def _placement_for(ranges: list[tuple[int, int, str]], line: int) -> str:
+    """Innermost namespace range containing *line*, else ""."""
+    best: tuple[int, str] | None = None
+    for open_line, close_line, name in ranges:
+        if open_line <= line <= close_line:
+            if best is None or open_line > best[0]:
+                best = (open_line, name)
+    return best[1] if best else ""
+
+
+def _legacy_placement(lines: list[str], start_0based: int) -> str:
+    """Fallback placement from source lines (namespace open above the run)."""
+    namespace = ""
+    for prefix in lines[:start_0based]:
+        match = re.match(r"^\s*namespace\s+([\w:]+)\s*$", prefix)
+        if match:
+            namespace = match.group(1)
+    return namespace
+
+
+def build_owned_spans(
+    file_path: str | Path | None,
+    result: ParseResult,
+) -> tuple[list[OwnedSpan], list[str]]:
+    """Return the complete ordered source-ownership map for *file_path*.
+
+    The map includes:
+
+    * structured node spans for that file — compounds, members, and the
+      bodies of members whose implementation lives in this file;
+    * file boilerplate spans — include directives, include-guard lines, and
+      namespace open/closing lines;
+
+    Identical and nested spans are merged safely; overlapping non-nested
+    spans are REPORTED (second return value) rather than silently resolved.
+    No identifier-spelling or macro-name heuristics are used.
+    """
+    spans: list[OwnedSpan] = []
+    lines = _read_source_lines(file_path)
+    if lines is not None:
+        spans.extend(_file_boilerplate_spans(file_path, lines))
+
+    path = str(file_path) if file_path else ""
+    compound_nodes = (
+        result.classes + result.enums + result.unions
+        + result.interfaces + result.concepts
+    )
+    member_nodes = (
+        result.methods + result.attributes + result.enum_values
+        + result.defines + result.functions
+    )
+    for node in compound_nodes + member_nodes:
+        qualified_name = getattr(node, "qualified_name", "") or ""
+        node_type = type(node).__name__
+        if getattr(node, "file_path", "") == path:
+            start = int(getattr(node, "start_line", 0) or 0)
+            end = int(getattr(node, "end_line", 0) or 0)
+            if start and end:
+                spans.append(OwnedSpan(
+                    start, end, owner=qualified_name, owner_type=node_type,
+                ))
+        # Implementation body declared elsewhere, defined in this file.
+        body_file = getattr(node, "body_file", "") or ""
+        body_start = int(getattr(node, "body_start", 0) or 0)
+        body_end = int(getattr(node, "body_end", 0) or 0)
+        if body_file == path and body_start and body_end:
+            spans.append(OwnedSpan(
+                body_start, body_end, owner=qualified_name, owner_type=node_type,
+            ))
+    return _normalize_ownership(spans)
+
+
+def _normalize_ownership(
+    spans: list[OwnedSpan],
+) -> tuple[list[OwnedSpan], list[str]]:
+    """Sort, merge identical spans, and report overlapping non-nested spans."""
+    ordered = sorted(spans, key=lambda s: (s.start, s.end))
+    merged: list[OwnedSpan] = []
+    for span in ordered:
+        if merged and merged[-1].start == span.start and merged[-1].end == span.end:
+            continue
+        merged.append(span)
+    problems: list[str] = []
+    for index in range(1, len(merged)):
+        prev, cur = merged[index - 1], merged[index]
+        if cur.start > prev.end:
+            continue
+        if cur.start >= prev.start and cur.end <= prev.end:
+            continue  # nested — safe
+        problems.append(
+            f"{cur.owner_type} '{cur.owner}' [{cur.start}-{cur.end}] overlaps "
+            f"{prev.owner_type} '{prev.owner}' [{prev.start}-{prev.end}]"
+        )
+    return merged, problems
+
+
 def extract_residual_source_fragments(
     file_path: str | Path | None,
-    owned_spans: list[tuple[int, int]],
+    owned_spans: list[tuple[int, int] | OwnedSpan],
     *,
     source: str = "",
     layer: str = "as-built",
 ) -> list[SourceFragmentNode]:
-    """Return non-boilerplate source spans not claimed by structured nodes.
+    """Return source spans not claimed by any structured owner.
 
-    ``owned_spans`` use inclusive, one-based line numbers.  This deliberately
-    has no knowledge of macro names or libraries: after structured ownership
-    is subtracted, every remaining meaningful run is a residual fragment.
+    ``owned_spans`` is the complete ownership map (from
+    :func:`build_owned_spans`) — 1-based inclusive spans, either as
+    ``(start, end)`` tuples or :class:`OwnedSpan` instances.  The map's spans
+    are subtracted from the raw source text and the remaining runs are
+    coalesced (attaching adjacent plain comments and whitespace) into one
+    :class:`SourceFragmentNode` per non-whitespace span.
+
+    This is pure subtraction: it never inspects macro names, casing, or
+    library families.  Fragments are emitted in source order.
     """
-    if not file_path:
+    lines = _read_source_lines(file_path)
+    if lines is None:
         return []
-    try:
-        lines = Path(file_path).read_text(
-            encoding="utf-8", errors="replace"
-        ).splitlines(keepends=True)
-    except (OSError, UnicodeError):
-        return []
-    owned = {
-        line
-        for start, end in owned_spans
-        for line in range(max(1, start), max(start, end) + 1)
-    }
-
-    def boilerplate(line: str) -> bool:
-        stripped = line.strip()
-        return (
-            not stripped
-            or stripped.startswith("#include")
-            or re.match(r"^#\s*(if|ifdef|ifndef|define|endif)\b", stripped) is not None
-            or re.match(r"^namespace\s+[\w:]+\s*$", stripped) is not None
-            or stripped in {"{", "}"}
-            or re.match(r"^}\s*//\s*namespace", stripped) is not None
-        )
+    spans = [
+        s if isinstance(s, OwnedSpan) else OwnedSpan(start=s[0], end=s[1])
+        for s in owned_spans
+    ]
+    owned: set[int] = set()
+    for span in spans:
+        for line in range(max(1, span.start), span.end + 1):
+            owned.add(line)
+    ns_ranges = _namespace_ranges(spans)
 
     fragments: list[SourceFragmentNode] = []
+    total = len(lines)
     index = 0
-    while index < len(lines):
+    while index < total:
         line_number = index + 1
-        if line_number in owned or boilerplate(lines[index]):
+        if line_number in owned:
             index += 1
             continue
+        # Start of an unowned run: extend upward over adjacent plain ``//``
+        # comments, then at most one blank line.
         start = index
-        body: list[str] = []
-        while index < len(lines):
-            current_line = index + 1
-            if current_line in owned or boilerplate(lines[index]):
+        while start > 0:
+            lineno = start  # 1-based line number of lines[start - 1]
+            if lineno in owned:
                 break
-            body.append(lines[index])
-            index += 1
-        end = index
-        namespace = ""
-        for prefix in lines[:start]:
-            match = re.match(r"^\s*namespace\s+([\w:]+)\s*$", prefix)
-            if match:
-                namespace = match.group(1)
-        qualified_name = f"{file_path}#{start + 1}-{end}"
-        fragments.append(SourceFragmentNode(
-            qualified_name=qualified_name,
-            file_path=str(file_path),
-            start_line=start + 1,
-            end_line=end,
-            placement=namespace,
-            text="".join(body),
-            source=source,
-            layer=layer,
-            tags=[layer],
-        ))
+            if not lines[start - 1].lstrip().startswith("//"):
+                break
+            start -= 1
+        if start > 0:
+            lineno = start
+            if lineno not in owned and not lines[start - 1].strip():
+                start -= 1
+        # Extend downward over every unowned line.
+        end = start
+        while end < total and (end + 1) not in owned:
+            end += 1
+        body = "".join(lines[start:end])
+        if body.strip():
+            placement = _placement_for(ns_ranges, start + 1)
+            if not placement:
+                placement = _legacy_placement(lines, start)
+            fragments.append(SourceFragmentNode(
+                qualified_name=f"{file_path}#{start + 1}-{end}",
+                file_path=str(file_path),
+                start_line=start + 1,
+                end_line=end,
+                placement=placement,
+                text=body,
+                source=source,
+                layer=layer,
+                tags=[layer],
+            ))
+        index = end
     return fragments
-
 
 def extract_preceding_doc_comment(
     file_path: str | Path | None, line_number: int | None
@@ -732,25 +1167,24 @@ class CppParser(LanguageParser):
         source: str,
         layer: str,
     ) -> None:
-        """Populate generic residuals after all Doxygen-owned spans are known."""
-        indexed_nodes = (
-            result.classes + result.enums + result.unions + result.interfaces
-            + result.concepts + result.methods + result.attributes
-            + result.enum_values + result.defines + result.functions
-        )
+        """Populate generic residuals after all Doxygen-owned spans are known.
+
+        For every indexed file, the complete source-ownership map
+        (:func:`build_owned_spans`) is subtracted from the raw source text;
+        every remaining meaningful span becomes a :class:`SourceFragmentNode`.
+        """
         for file_node in result.files:
             path = file_node.path
-            owned_spans = []
-            for node in indexed_nodes:
-                if getattr(node, "file_path", "") != path:
-                    continue
-                start = int(getattr(node, "line_number", 0) or 0)
-                if not start:
-                    continue
-                end = max(start, int(getattr(node, "body_end", 0) or 0))
-                owned_spans.append((start, end))
+            if not path:
+                continue
+            spans, problems = build_owned_spans(path, result)
+            for problem in problems:
+                print(
+                    f"  Warning: ownership overlap in {path}: {problem}",
+                    file=sys.stderr,
+                )
             result.source_fragments.extend(extract_residual_source_fragments(
-                path, owned_spans, source=source, layer=layer,
+                path, spans, source=source, layer=layer,
             ))
 
     # ------------------------------------------------------------------
@@ -804,6 +1238,7 @@ class CppParser(LanguageParser):
                 file_path = loc.get("file") if loc is not None else None
                 language = normalize_language(compounddef.get("language", ""))
                 namespace_leading, namespace_trailing = extract_namespace_padding(file_path)
+                file_lines = _read_source_lines(file_path)
                 result.files.append(FileNode(
                     refid=refid, name=compoundname,
                     path=file_path or "", language=language, source=source,
@@ -812,6 +1247,8 @@ class CppParser(LanguageParser):
                     namespace_leading_blank_lines=namespace_leading,
                     namespace_trailing_blank_lines=namespace_trailing,
                     guard_leading_blank_lines=extract_guard_padding(file_path),
+                    start_line=1 if file_lines else 0,
+                    end_line=len(file_lines) if file_lines else 0,
                 ))
                 for inc in compounddef.findall("includes"):
                     result.includes.append(IncludeEntry(
@@ -869,9 +1306,19 @@ class CppParser(LanguageParser):
                 if is_test_file:
                     continue  # test-local namespaces (e.g. my_app) are skipped
                 name = compoundname.split("::")[-1] if "::" in compoundname else compoundname
+                ns_loc = compounddef.find("location")
+                ns_file = ns_loc.get("file") if ns_loc is not None else None
+                ns_line = (
+                    int(ns_loc.get("line") or 0)
+                    if ns_loc is not None else 0
+                )
+                ns_span = _source_span(ns_file, ns_line) if ns_line else None
                 result.namespaces.append(NamespaceNode(
                     refid=refid, name=name,
                     qualified_name=compoundname, source=source, layer=layer,
+                    file_path=ns_file or "",
+                    start_line=ns_span[0] if ns_span else 0,
+                    end_line=ns_span[1] if ns_span else 0,
                 ))
                 continue
 
@@ -1005,6 +1452,14 @@ class CppParser(LanguageParser):
         is_final = compounddef.get("final") == "yes"
         is_abstract = compounddef.get("abstract") == "yes"
 
+        source_documentation = extract_preceding_doc_comment(
+            fields["file_path"], fields["line_number"]
+        )
+        span = _source_span(
+            fields["file_path"], fields["line_number"],
+            doc_comment=source_documentation,
+        )
+
         result.classes.append(ClassNode(
             refid=fields["refid"],
             kind=fields["kind"],
@@ -1012,11 +1467,11 @@ class CppParser(LanguageParser):
             qualified_name=fields["qualified_name"],
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],
+            start_line=span[0] if span else 0,
+            end_line=span[1] if span else 0,
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
-            source_documentation=extract_preceding_doc_comment(
-                fields["file_path"], fields["line_number"]
-            ),
+            source_documentation=source_documentation,
             definition=fields["definition"],
             template_declarations=fields.get("template_declarations", []),
             module=fields["module"],
@@ -1058,6 +1513,7 @@ class CppParser(LanguageParser):
                         to_type=to_type,
                     ))
 
+        span = _source_span(fields["file_path"], fields["line_number"])
         result.concepts.append(ConceptNode(
             refid=fields["refid"],
             kind=fields["kind"],
@@ -1065,6 +1521,8 @@ class CppParser(LanguageParser):
             qualified_name=fields["qualified_name"],
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],
+            start_line=span[0] if span else 0,
+            end_line=span[1] if span else 0,
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
             definition=fields["definition"],
@@ -1084,6 +1542,7 @@ class CppParser(LanguageParser):
         layer: str,
     ) -> None:
         """Handle enum compounds."""
+        span = _source_span(fields["file_path"], fields["line_number"])
         result.enums.append(EnumNode(
             refid=fields["refid"],
             kind=fields["kind"],
@@ -1091,6 +1550,8 @@ class CppParser(LanguageParser):
             qualified_name=fields["qualified_name"],
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],
+            start_line=span[0] if span else 0,
+            end_line=span[1] if span else 0,
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
             definition=fields["definition"],
@@ -1109,6 +1570,7 @@ class CppParser(LanguageParser):
         layer: str,
     ) -> None:
         """Handle union compounds."""
+        span = _source_span(fields["file_path"], fields["line_number"])
         result.unions.append(UnionNode(
             refid=fields["refid"],
             kind=fields["kind"],
@@ -1116,6 +1578,8 @@ class CppParser(LanguageParser):
             qualified_name=fields["qualified_name"],
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],
+            start_line=span[0] if span else 0,
+            end_line=span[1] if span else 0,
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
             definition=fields["definition"],
@@ -1134,6 +1598,7 @@ class CppParser(LanguageParser):
         layer: str,
     ) -> None:
         """Handle interface compounds."""
+        span = _source_span(fields["file_path"], fields["line_number"])
         result.interfaces.append(InterfaceNode(
             refid=fields["refid"],
             kind=fields["kind"],
@@ -1141,6 +1606,8 @@ class CppParser(LanguageParser):
             qualified_name=fields["qualified_name"],
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],
+            start_line=span[0] if span else 0,
+            end_line=span[1] if span else 0,
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
             definition=fields["definition"],
@@ -1248,6 +1715,17 @@ class CppParser(LanguageParser):
         is_inline = memberdef.get("inline") == "yes"
         is_explicit = memberdef.get("explicit") == "yes"
 
+        source_documentation = extract_preceding_doc_comment(
+            fields["file_path"], fields["line_number"]
+        )
+        span = _source_span(
+            fields["file_path"], fields["line_number"],
+            body_file=fields.get("body_file", "") or "",
+            body_start=fields["body_start"] or 0,
+            body_end=fields["body_end"] or 0,
+            doc_comment=source_documentation,
+        )
+
         result.methods.append(MethodNode(
             refid=fields["refid"],
             compound_refid=compound_refid,
@@ -1259,15 +1737,15 @@ class CppParser(LanguageParser):
             argsstring=fields["argsstring"],
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],
+            start_line=span[0] if span else 0,
+            end_line=span[1] if span else 0,
             body_start=fields["body_start"] or 0,
             body_end=fields["body_end"] or 0,
             body=fields.get("body", "") or "",
             body_file=fields.get("body_file", "") or "",
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
-            source_documentation=extract_preceding_doc_comment(
-                fields["file_path"], fields["line_number"]
-            ),
+            source_documentation=source_documentation,
             protection=fields["prot"],
             visibility=fields["prot"],
             is_static=is_static,
@@ -1298,6 +1776,17 @@ class CppParser(LanguageParser):
         is_static = memberdef.get("static") == "yes"
         is_const = memberdef.get("const") == "yes"
 
+        source_documentation = extract_preceding_doc_comment(
+            fields["file_path"], fields["line_number"]
+        )
+        span = _source_span(
+            fields["file_path"], fields["line_number"],
+            body_file=fields.get("body_file", "") or "",
+            body_start=fields["body_start"] or 0,
+            body_end=fields["body_end"] or 0,
+            doc_comment=source_documentation,
+        )
+
         result.attributes.append(AttributeNode(
             refid=fields["refid"],
             compound_refid=compound_refid,
@@ -1309,13 +1798,13 @@ class CppParser(LanguageParser):
             definition=fields["definition"],
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],
+            start_line=span[0] if span else 0,
+            end_line=span[1] if span else 0,
             body_start=fields["body_start"] or 0,
             body_end=fields["body_end"] or 0,
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
-            source_documentation=extract_preceding_doc_comment(
-                fields["file_path"], fields["line_number"]
-            ),
+            source_documentation=source_documentation,
             protection=fields["prot"],
             visibility=fields["prot"],
             is_static=is_static,
@@ -1337,6 +1826,17 @@ class CppParser(LanguageParser):
         name = fields["name"]
         qname = name  # file-level, no enclosing class/namespace
 
+        source_documentation = extract_preceding_doc_comment(
+            fields["file_path"], fields["line_number"]
+        )
+        span = _source_span(
+            fields["file_path"], fields["line_number"],
+            body_file=fields.get("body_file", "") or "",
+            body_start=fields["body_start"] or 0,
+            body_end=fields["body_end"] or 0,
+            doc_comment=source_documentation,
+        )
+
         result.functions.append(FunctionNode(
             refid=fields["refid"],
             kind=fields["kind"],
@@ -1347,12 +1847,15 @@ class CppParser(LanguageParser):
             argsstring=fields["argsstring"],
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],
+            start_line=span[0] if span else 0,
+            end_line=span[1] if span else 0,
             body_start=fields["body_start"] or 0,
             body_end=fields["body_end"] or 0,
             body=fields.get("body", "") or "",
             body_file=fields.get("body_file", "") or "",
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
+            source_documentation=source_documentation,
             protection=fields["prot"],
             visibility=fields["prot"],
             source=source,
@@ -1374,6 +1877,13 @@ class CppParser(LanguageParser):
         name = fields["name"]
         qname = f"{parent_qualified_name}::{name}" if parent_qualified_name else name
 
+        span = _source_span(
+            fields["file_path"], fields["line_number"],
+            doc_comment=extract_preceding_doc_comment(
+                fields["file_path"], fields["line_number"]
+            ),
+        )
+
         result.enum_values.append(EnumValueNode(
             refid=fields["refid"],
             compound_refid=compound_refid,
@@ -1382,6 +1892,8 @@ class CppParser(LanguageParser):
             qualified_name=qname,
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],
+            start_line=span[0] if span else 0,
+            end_line=span[1] if span else 0,
             body_start=fields["body_start"] or 0,
             body_end=fields["body_end"] or 0,
             initializer=fields.get("initializer") or "",
@@ -1404,6 +1916,16 @@ class CppParser(LanguageParser):
         """Handle a #define macro member."""
         name = fields["name"]
 
+        span = _source_span(
+            fields["file_path"], fields["line_number"],
+            body_file=fields.get("body_file", "") or "",
+            body_start=fields["body_start"] or 0,
+            body_end=fields["body_end"] or 0,
+            doc_comment=extract_preceding_doc_comment(
+                fields["file_path"], fields["line_number"]
+            ),
+        )
+
         result.defines.append(DefineNode(
             refid=fields["refid"],
             kind=fields["kind"],
@@ -1412,6 +1934,8 @@ class CppParser(LanguageParser):
             definition=fields["definition"],
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],
+            start_line=span[0] if span else 0,
+            end_line=span[1] if span else 0,
             body_start=fields["body_start"] or 0,
             body_end=fields["body_end"] or 0,
             brief_description=fields["brief"],

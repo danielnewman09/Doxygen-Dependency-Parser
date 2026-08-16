@@ -2,6 +2,7 @@ from pathlib import Path
 
 from doxygen_index.parser.cpp_parser import (
     CppParser,
+    build_owned_spans,
     extract_include_directives,
     extract_include_guard,
     extract_namespace_padding,
@@ -11,6 +12,41 @@ from doxygen_index.parser.cpp_parser import (
 from doxygen_index.parser.model import ParseResult
 from doxygen_index.graph_json import result_to_graph_json
 from codegraph import SourceFragmentNode
+
+
+def _fragment_owned(header, source, result=None):
+    """Build the complete ownership map and extract residuals for *header*."""
+    spans, _problems = build_owned_spans(header, result or ParseResult())
+    return extract_residual_source_fragments(header, spans, source=source)
+
+
+def _struct_result(path: Path, line: int) -> ParseResult:
+    """ParseResult whose only structured owner is a struct at *line*."""
+    from codegraph import ClassNode
+
+    result = ParseResult()
+    result.classes.append(ClassNode(
+        refid="r1", kind="struct", name="Widget",
+        qualified_name="sample::Widget",
+        file_path=str(path), line_number=line,
+        start_line=line, end_line=line,
+        source="demo",
+    ))
+    return result
+
+
+def _function_result(path: Path, line: int) -> ParseResult:
+    """ParseResult whose only structured owner is a free function at *line*."""
+    from codegraph import FunctionNode
+
+    result = ParseResult()
+    result.functions.append(FunctionNode(
+        refid="r1", kind="function", name="f", qualified_name="f",
+        file_path=str(path), line_number=line,
+        start_line=line, end_line=line,
+        source="demo",
+    ))
+    return result
 
 
 def test_extract_include_guard_preserves_exact_macro(tmp_path: Path):
@@ -83,19 +119,19 @@ def test_residual_fragments_capture_unowned_multiline_macro_with_metadata(tmp_pa
         "// registration\nREGISTER_WIDGET(Widget,\n                option);\n}\n",
         encoding="utf-8",
     )
-    fragments = extract_residual_source_fragments(header, [(3, 3)], source="demo")
+    fragments = _fragment_owned(header, "demo", _struct_result(header, 3))
     assert len(fragments) == 1
     fragment = fragments[0]
     assert fragment.file_path == str(header)
-    assert (fragment.start_line, fragment.end_line) == (5, 7)
+    assert (fragment.start_line, fragment.end_line) == (4, 7)
     assert fragment.placement == "sample"
-    assert fragment.text == "// registration\nREGISTER_WIDGET(Widget,\n                option);\n"
+    assert fragment.text == "\n// registration\nREGISTER_WIDGET(Widget,\n                option);\n"
 
 
 def test_residual_fragments_capture_non_macro_pragma(tmp_path: Path):
     source = tmp_path / "Widget.cpp"
     source.write_text("#include <vector>\n#pragma clang diagnostic push\nvoid f() {}\n", encoding="utf-8")
-    fragments = extract_residual_source_fragments(source, [(3, 3)])
+    fragments = _fragment_owned(source, "demo", _function_result(source, 3))
     assert [(f.start_line, f.end_line, f.text) for f in fragments] == [
         (2, 2, "#pragma clang diagnostic push\n"),
     ]
