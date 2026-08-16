@@ -27,6 +27,7 @@ from codegraph import (
     MethodNode, AttributeNode, EnumValueNode, DefineNode,
     ImplementationNode, ParameterNode, FunctionNode,
     FileNode, NamespaceNode,
+    SourceFragmentNode,
 )
 from codegraph.constants import normalize_language
 
@@ -165,6 +166,105 @@ def extract_namespace_padding(file_path: str | Path | None) -> tuple[int, int]:
             break
         trailing += 1
     return leading, trailing
+
+
+def extract_guard_padding(file_path: str | Path | None) -> int:
+    """Return blank lines immediately preceding a conventional ``#endif``."""
+    if not file_path:
+        return 0
+    try:
+        lines = Path(file_path).read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except (OSError, UnicodeError):
+        return 0
+    endif_index = next(
+        (index for index in range(len(lines) - 1, -1, -1)
+         if re.match(r"^\s*#\s*endif\b", lines[index])),
+        None,
+    )
+    if endif_index is None:
+        return 0
+    padding = 0
+    for line in reversed(lines[:endif_index]):
+        if line.strip():
+            break
+        padding += 1
+    return padding
+
+
+def extract_residual_source_fragments(
+    file_path: str | Path | None,
+    owned_spans: list[tuple[int, int]],
+    *,
+    source: str = "",
+    layer: str = "as-built",
+) -> list[SourceFragmentNode]:
+    """Return non-boilerplate source spans not claimed by structured nodes.
+
+    ``owned_spans`` use inclusive, one-based line numbers.  This deliberately
+    has no knowledge of macro names or libraries: after structured ownership
+    is subtracted, every remaining meaningful run is a residual fragment.
+    """
+    if not file_path:
+        return []
+    try:
+        lines = Path(file_path).read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines(keepends=True)
+    except (OSError, UnicodeError):
+        return []
+    owned = {
+        line
+        for start, end in owned_spans
+        for line in range(max(1, start), max(start, end) + 1)
+    }
+
+    def boilerplate(line: str) -> bool:
+        stripped = line.strip()
+        return (
+            not stripped
+            or stripped.startswith("#include")
+            or re.match(r"^#\s*(if|ifdef|ifndef|define|endif)\b", stripped) is not None
+            or re.match(r"^namespace\s+[\w:]+\s*$", stripped) is not None
+            or stripped in {"{", "}"}
+            or re.match(r"^}\s*//\s*namespace", stripped) is not None
+        )
+
+    fragments: list[SourceFragmentNode] = []
+    index = 0
+    while index < len(lines):
+        line_number = index + 1
+        if line_number in owned or boilerplate(lines[index]):
+            index += 1
+            continue
+        start = index
+        body: list[str] = []
+        while index < len(lines):
+            current_line = index + 1
+            if current_line in owned or boilerplate(lines[index]):
+                break
+            body.append(lines[index])
+            index += 1
+        end = index
+        namespace = ""
+        for prefix in lines[:start]:
+            match = re.match(r"^\s*namespace\s+([\w:]+)\s*$", prefix)
+            if match:
+                namespace = match.group(1)
+        qualified_name = f"{file_path}#{start + 1}-{end}"
+        fragments.append(SourceFragmentNode(
+            qualified_name=qualified_name,
+            file_path=str(file_path),
+            start_line=start + 1,
+            end_line=end,
+            placement=namespace,
+            text="".join(body),
+            source=source,
+            layer=layer,
+            tags=[layer],
+        ))
+    return fragments
 
 
 def extract_preceding_doc_comment(
@@ -682,6 +782,7 @@ class CppParser(LanguageParser):
                     include_directives=extract_include_directives(file_path),
                     namespace_leading_blank_lines=namespace_leading,
                     namespace_trailing_blank_lines=namespace_trailing,
+                    guard_leading_blank_lines=extract_guard_padding(file_path),
                 ))
                 for inc in compounddef.findall("includes"):
                     result.includes.append(IncludeEntry(
@@ -1175,6 +1276,7 @@ class CppParser(LanguageParser):
             name=name,
             qualified_name=qname,
             type_signature=fields["type_str"],
+            initializer=fields.get("initializer") or "",
             definition=fields["definition"],
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],

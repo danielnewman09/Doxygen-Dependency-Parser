@@ -16,6 +16,7 @@ from codegraph import (
     MethodNode, AttributeNode, EnumValueNode, FunctionNode, DefineNode,
     FileNode, NamespaceNode, ParameterNode,
     ImplementationNode,
+    SourceFragmentNode,
 )
 from codegraph.models.test import TestNode, AssertionNode, TestStepNode, TestFixtureNode
 from codegraph.models.literal import LiteralNode
@@ -292,6 +293,7 @@ class ParseResult:
     attributes: list[AttributeNode] = field(default_factory=list)
     enum_values: list[EnumValueNode] = field(default_factory=list)
     defines: list[DefineNode] = field(default_factory=list)
+    source_fragments: list[SourceFragmentNode] = field(default_factory=list)
     functions: list[FunctionNode] = field(default_factory=list)
     parameters: list[ParameterNode] = field(default_factory=list)
     includes: list[IncludeEntry] = field(default_factory=list)
