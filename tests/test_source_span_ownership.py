@@ -18,6 +18,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from codegraph import (
+    AttributeNode,
     ClassNode,
     SourceFragmentNode,
 )
@@ -29,6 +30,7 @@ from doxygen_index.parser.cpp_parser import (
     extract_residual_source_fragments,
     _source_span,
     _derive_span_end,
+    _normalize_ownership,
 )
 from doxygen_index.parser.model import ParseResult
 from doxygen_index.graph_json import result_to_graph_json
@@ -233,6 +235,52 @@ class TestSourceSpanMetadata:
         assert _derive_span_end(lines, 1) == 4
 
 
+class TestDocCommentAssociation:
+    """Review fix 1: identical doc comments must attach to the declaration
+    they precede, never to an earlier copy of the same text."""
+
+    def test_identical_doc_comments_attach_to_nearest_declaration(self, tmp_path: Path):
+        source = tmp_path / "identical.hpp"
+        source.write_text(
+            "/** Same. */\n"
+            "int first;\n"
+            "\n"
+            "/** Same. */\n"
+            "int second;\n",
+            encoding="utf-8",
+        )
+        doc = "/** Same. */\n"
+        assert _source_span(str(source), 2, doc_comment=doc) == (1, 2)
+        assert _source_span(str(source), 5, doc_comment=doc) == (4, 5)
+
+    def test_identical_docs_do_not_leak_declarations_into_fragments(self, tmp_path: Path):
+        source = tmp_path / "identical.hpp"
+        source.write_text(
+            "/** Same. */\n"
+            "int first;\n"
+            "\n"
+            "/** Same. */\n"
+            "int second;\n",
+            encoding="utf-8",
+        )
+        result = ParseResult()
+        doc = "/** Same. */\n"
+        for line, name in ((2, "first"), (5, "second")):
+            span = _source_span(str(source), line, doc_comment=doc)
+            assert span is not None
+            result.attributes.append(AttributeNode(
+                refid=f"r:{name}", compound_refid="", kind="variable",
+                name=name, qualified_name=f"sample::{name}",
+                file_path=str(source), line_number=line,
+                start_line=span[0], end_line=span[1],
+                source="demo",
+            ))
+        fragments = _extract(source, result)
+        assert fragments == []
+        assert "int first" not in "".join(f.text or "" for f in fragments)
+        assert "int second" not in "".join(f.text or "" for f in fragments)
+
+
 # ---------------------------------------------------------------------------
 # Phase 2 — ownership maps
 # ---------------------------------------------------------------------------
@@ -287,6 +335,39 @@ class TestOwnershipMap:
         spans, problems = build_owned_spans("x.hpp", result)
         assert problems == []
         assert [(s.start, s.end) for s in spans] == [(1, 20), (5, 10)]
+
+    def test_crossing_overlap_hidden_by_nested_span_is_reported(self):
+        """Review fix 3: a nested span must not hide a crossing overlap
+        between two non-adjacent spans."""
+        spans = [
+            OwnedSpan(1, 100, owner="A", owner_type="ClassNode"),
+            OwnedSpan(2, 3, owner="B", owner_type="ClassNode"),
+            OwnedSpan(50, 110, owner="C", owner_type="ClassNode"),
+        ]
+        merged, problems = _normalize_ownership(spans)
+        assert [(s.start, s.end) for s in merged] == [(1, 100), (2, 3), (50, 110)]
+        assert len(problems) == 1
+        assert "ClassNode 'C' [50-110]" in problems[0]
+        assert "ClassNode 'A' [1-100]" in problems[0]
+        assert "overlaps" in problems[0]
+
+    def test_identical_spans_merge_and_stay_silent(self):
+        spans = [
+            OwnedSpan(2, 5, owner="A", owner_type="ClassNode"),
+            OwnedSpan(2, 5, owner="A", owner_type="ClassNode"),
+        ]
+        merged, problems = _normalize_ownership(spans)
+        assert [(s.start, s.end) for s in merged] == [(2, 5)]
+        assert problems == []
+
+    def test_simple_crossing_overlap_still_reported(self):
+        spans = [
+            OwnedSpan(1, 10, owner="A", owner_type="ClassNode"),
+            OwnedSpan(8, 20, owner="B", owner_type="ClassNode"),
+        ]
+        _merged, problems = _normalize_ownership(spans)
+        assert len(problems) == 1
+        assert "B" in problems[0] and "A" in problems[0]
 
     def test_body_in_other_file_is_owned_in_its_implementation_file(self, tmp_path: Path):
         impl = tmp_path / "impl.cpp"
@@ -444,6 +525,93 @@ class TestPureSubtraction:
         ))
         fragments = _extract(source, result)
         assert [f.start_line for f in fragments] == [1, 3]
+
+
+class TestNestedNamespacePlacement:
+    """Review fix 2: fragments inside nested namespaces keep the fully
+    qualified namespace name so codegen emits them in the right scope."""
+
+    def test_traditionally_nested_namespace_gets_qualified_placement(self, tmp_path: Path):
+        source = tmp_path / "nested.hpp"
+        source.write_text(
+            "namespace outer {\n"
+            "namespace inner {\n"
+            "thing();\n"
+            "}\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        fragments = _extract(source, ParseResult())
+        assert len(fragments) == 1
+        assert fragments[0].placement == "outer::inner"
+        assert (fragments[0].start_line, fragments[0].end_line) == (3, 3)
+
+    def test_cpp17_qualified_namespace_syntax(self, tmp_path: Path):
+        source = tmp_path / "c17.hpp"
+        source.write_text(
+            "namespace outer::inner {\n"
+            "thing();\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        fragments = _extract(source, ParseResult())
+        assert len(fragments) == 1
+        assert fragments[0].placement == "outer::inner"
+
+    def test_sibling_namespaces_stay_independent(self, tmp_path: Path):
+        source = tmp_path / "siblings.hpp"
+        source.write_text(
+            "namespace a {\n"
+            "thing_a();\n"
+            "}\n"
+            "namespace b {\n"
+            "thing_b();\n"
+            "}\n",
+            encoding="utf-8",
+        )
+        fragments = _extract(source, ParseResult())
+        assert {f.placement: f.start_line for f in fragments} == {"a": 2, "b": 5}
+
+    def test_serialization_preserves_qualified_placement(self, tmp_path: Path):
+        fragment = SourceFragmentNode(
+            qualified_name="nested.hpp#3-3",
+            file_path="nested.hpp",
+            start_line=3,
+            end_line=3,
+            placement="outer::inner",
+            text="thing();\n",
+            source="demo",
+        )
+        graph = result_to_graph_json(ParseResult(source_fragments=[fragment]), source="demo")
+        entry = next(item for item in graph if item["type"] == "SourceFragmentNode")
+        assert entry["placement"] == "outer::inner"
+
+    def test_codegen_nests_fragment_under_qualified_placement(self):
+        """The fragment's qualified placement recreates the namespace nesting
+        in generated output (``outer::inner`` → two nested blocks)."""
+        from types import SimpleNamespace
+
+        from codegraph.codegen.context import _nest_by_namespace
+        from codegraph.codegen.context.source_fragment import build_context
+
+        node = SourceFragmentNode(
+            qualified_name="nested.hpp#3-3",
+            file_path="nested.hpp",
+            start_line=3,
+            end_line=3,
+            placement="outer::inner",
+            text="thing();\n",
+            source="demo",
+        )
+        ctx = build_context(SimpleNamespace(node=node), None)
+        assert ctx["qualified_name"].startswith("outer::inner::")
+        nested = _nest_by_namespace([ctx])
+        assert len(nested) == 1
+        outer = nested[0]
+        assert outer["name"] == "outer"
+        assert outer["blocks"] == []
+        assert [n["name"] for n in outer["namespaces"]] == ["inner"]
+        assert outer["namespaces"][0]["blocks"] == [ctx]
 
 
 # ---------------------------------------------------------------------------

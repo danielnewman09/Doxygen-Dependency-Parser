@@ -334,6 +334,12 @@ def _doc_comment_span(
 
     Returns the inclusive 1-based line span of the comment block, or None
     when the text cannot be found unambiguously.
+
+    The search runs *backward* from the declaration: when two declarations
+    carry identical documentation, the comment immediately above the
+    declaration is the one that belongs to it (``extract_preceding_doc_comment``
+    only returns text found directly above, modulo blank/template lines), so
+    an earlier unrelated copy of the same text is never selected.
     """
     if not doc_text:
         return None
@@ -341,7 +347,7 @@ def _doc_comment_span(
     if not target:
         return None
     prefix = "".join(lines[: decl_line - 1])
-    offset = prefix.find(target)
+    offset = prefix.rfind(target)
     if offset < 0:
         return None
     start_line = prefix[:offset].count("\n") + 1
@@ -512,20 +518,32 @@ def _namespace_close_line(lines: list[str], open_idx: int) -> int | None:
 
 
 def _namespace_ranges(spans: list[OwnedSpan]) -> list[tuple[int, int, str]]:
-    """Pair ns-open/ns-close boundary spans into ``(open, close, name)``."""
+    """Pair ns-open/ns-close boundary spans into ``(open, close, name)``.
+
+    Names are fully qualified: for traditional nested declarations
+    (``namespace outer { namespace inner { ... } }``) the stack tracks the
+    enclosing qualified names so a fragment inside ``inner`` receives
+    ``outer::inner``, not just ``inner``.  C++17 qualified syntax
+    (``namespace outer::inner { ... }``) is already qualified by the source
+    scan; stacking it under an enclosing namespace prepends that scope
+    correctly.  Sibling namespaces stay independent because closes pair with
+    opens in LIFO source order.
+    """
     markers = sorted(
         (s.start, s.kind, s.owner)
         for s in spans
         if s.owner_type == "NamespaceNode" and s.kind in ("ns-open", "ns-close")
     )
     ranges: list[tuple[int, int, str]] = []
-    stack: list[tuple[int, str]] = []
+    stack: list[tuple[int, str]] = []  # (open_line, qualified_name)
     for line, kind, name in markers:
         if kind == "ns-open":
-            stack.append((line, name))
+            parent = stack[-1][1] if stack else ""
+            qualified = f"{parent}::{name}" if parent else name
+            stack.append((line, qualified))
         elif stack:
-            open_line, open_name = stack.pop()
-            ranges.append((open_line, line, open_name))
+            open_line, qualified = stack.pop()
+            ranges.append((open_line, line, qualified))
     return ranges
 
 
@@ -604,7 +622,15 @@ def build_owned_spans(
 def _normalize_ownership(
     spans: list[OwnedSpan],
 ) -> tuple[list[OwnedSpan], list[str]]:
-    """Sort, merge identical spans, and report overlapping non-nested spans."""
+    """Sort, merge identical spans, and report overlapping non-nested spans.
+
+    Uses an interval sweep: each span is checked against every still-active
+    prior span (``end >= start``), not just its sorted neighbour, so a
+    nested span can never hide a crossing overlap between two non-adjacent
+    spans.  Identical spans merge; fully nested spans are allowed silently;
+    crossing (partially overlapping, non-nested) spans are reported with
+    both owners and ranges.
+    """
     ordered = sorted(spans, key=lambda s: (s.start, s.end))
     merged: list[OwnedSpan] = []
     for span in ordered:
@@ -612,16 +638,17 @@ def _normalize_ownership(
             continue
         merged.append(span)
     problems: list[str] = []
-    for index in range(1, len(merged)):
-        prev, cur = merged[index - 1], merged[index]
-        if cur.start > prev.end:
-            continue
-        if cur.start >= prev.start and cur.end <= prev.end:
-            continue  # nested — safe
-        problems.append(
-            f"{cur.owner_type} '{cur.owner}' [{cur.start}-{cur.end}] overlaps "
-            f"{prev.owner_type} '{prev.owner}' [{prev.start}-{prev.end}]"
-        )
+    active: list[OwnedSpan] = []  # prior spans still overlapping the sweep point
+    for span in merged:
+        active = [prev for prev in active if prev.end >= span.start]
+        for prev in active:
+            if prev.end >= span.end:
+                continue  # prev fully contains span — nested, safe
+            problems.append(
+                f"{span.owner_type} '{span.owner}' [{span.start}-{span.end}] overlaps "
+                f"{prev.owner_type} '{prev.owner}' [{prev.start}-{prev.end}]"
+            )
+        active.append(span)
     return merged, problems
 
 
