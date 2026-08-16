@@ -4,6 +4,7 @@ from doxygen_index.parser.cpp_parser import (
     extract_include_directives,
     extract_include_guard,
     extract_namespace_padding,
+    extract_preceding_doc_comment,
 )
 
 
@@ -57,3 +58,14 @@ def test_extract_namespace_padding_handles_no_inner_blank_lines(tmp_path: Path):
         encoding="utf-8",
     )
     assert extract_namespace_padding(source) == (0, 0)
+
+
+def test_extract_preceding_doc_comment_preserves_block_syntax(tmp_path: Path):
+    header = tmp_path / "Widget.hpp"
+    header.write_text(
+        "/*!\\brief Exact source documentation */\nstruct Widget {};\n",
+        encoding="utf-8",
+    )
+    assert extract_preceding_doc_comment(header, 2) == (
+        "/*!\\brief Exact source documentation */\n"
+    )

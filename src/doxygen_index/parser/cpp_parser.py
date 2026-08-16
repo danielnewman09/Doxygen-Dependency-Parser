@@ -167,6 +167,48 @@ def extract_namespace_padding(file_path: str | Path | None) -> tuple[int, int]:
     return leading, trailing
 
 
+def extract_preceding_doc_comment(
+    file_path: str | Path | None, line_number: int | None
+) -> str:
+    """Return the contiguous Doxygen block directly before a declaration."""
+    if not file_path or not line_number or line_number < 2:
+        return ""
+    try:
+        lines = Path(file_path).read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines(keepends=True)
+    except (OSError, UnicodeError):
+        return ""
+    index = line_number - 2
+    while index >= 0 and (
+        not lines[index].strip()
+        or lines[index].lstrip().startswith("template")
+    ):
+        index -= 1
+    if index < 0 or not (
+        lines[index].lstrip().startswith("*/")
+        or lines[index].lstrip().startswith("/*!")
+        or lines[index].lstrip().startswith("/**")
+        or lines[index].lstrip().startswith("///")
+        or lines[index].lstrip().startswith("//!")
+    ):
+        return ""
+    end = index
+    if lines[index].lstrip().startswith("*/") and "/*!" not in lines[index] and "/**" not in lines[index]:
+        while index >= 0 and "/*!" not in lines[index] and "/**" not in lines[index]:
+            index -= 1
+        if index < 0:
+            return ""
+    elif lines[index].lstrip().startswith(("///", "//!")):
+        while index >= 0 and (
+            lines[index].lstrip().startswith("///")
+            or lines[index].lstrip().startswith("//!")
+        ):
+            index -= 1
+        index += 1
+    return "".join(lines[index:end + 1])
+
+
 def normalize_argsstring(argsstring: str) -> str:
     """Strip parameter names from argsstring, keeping types only.
 
@@ -764,9 +806,25 @@ class CppParser(LanguageParser):
         refid = fields["refid"]
 
         # --- Template parameters (compound-level) ---
-        _add_template_param_refs(
-            compounddef.find("templateparamlist"), refid, result,
+        template_parameters = parse_template_params(
+            compounddef.find("templateparamlist")
         )
+        for idx, parameter in enumerate(template_parameters):
+            result.template_param_refs.append(TemplateParamRef(
+                from_refid=refid,
+                position=idx,
+                type_constraint=parameter.type_constraint,
+                declname=parameter.declname,
+                defname=parameter.defname,
+                defval=parameter.defval,
+            ))
+        fields["template_declarations"] = [
+            " ".join(
+                part for part in (parameter.type_constraint, parameter.declname)
+                if part
+            ) + (f" = {parameter.defval}" if parameter.defval else "")
+            for parameter in template_parameters
+        ]
 
         # --- Template specialization detection ---
         is_spec, primary_template = detect_template_specialization(fields["qualified_name"])
@@ -826,7 +884,11 @@ class CppParser(LanguageParser):
             line_number=fields["line_number"],
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
+            source_documentation=extract_preceding_doc_comment(
+                fields["file_path"], fields["line_number"]
+            ),
             definition=fields["definition"],
+            template_declarations=fields.get("template_declarations", []),
             module=fields["module"],
             base_classes=base_classes,
             is_final=is_final,
@@ -1073,6 +1135,9 @@ class CppParser(LanguageParser):
             body_file=fields.get("body_file", "") or "",
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
+            source_documentation=extract_preceding_doc_comment(
+                fields["file_path"], fields["line_number"]
+            ),
             protection=fields["prot"],
             visibility=fields["prot"],
             is_static=is_static,
@@ -1117,6 +1182,9 @@ class CppParser(LanguageParser):
             body_end=fields["body_end"] or 0,
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
+            source_documentation=extract_preceding_doc_comment(
+                fields["file_path"], fields["line_number"]
+            ),
             protection=fields["prot"],
             visibility=fields["prot"],
             is_static=is_static,
