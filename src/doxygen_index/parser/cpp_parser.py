@@ -421,7 +421,18 @@ def _source_span(
         if template_start < start:
             start = template_start
     if body_end and body_file in ("", str(file_path)) and body_start:
-        end = max(start, body_end)
+        # A body may only extend the *contiguous* owned span.  In-class
+        # bodies open immediately at/after the declaration (the closing
+        # brace is already found by ``_derive_span_end``); an out-of-line
+        # definition in the same file lives elsewhere and is owned
+        # separately by ``build_owned_spans`` (body_file routing).  Gluing
+        # a distant body onto the declaration span would swallow unrelated
+        # code (e.g. ``withTransaction`` [406-471] crossing the enclosing
+        # class end at 442).
+        if body_start <= max(start, _derive_span_end(lines, start)) + 1:
+            end = max(start, body_end)
+        else:
+            end = max(start, _derive_span_end(lines, start))
     else:
         end = max(start, _derive_span_end(lines, start))
     return start, end
@@ -493,6 +504,127 @@ def _namespace_open_lines(lines: list[str]) -> list[tuple[int, str]]:
         if match:
             result.append((idx, match.group(1)))
     return result
+
+
+def _top_level_namespace_name(file_path: str | Path | None) -> str:
+    """Name of the first top-level namespace in *file_path* ("" if none).
+
+    Used to preserve an otherwise-empty namespace shell (a ``.cpp`` whose
+    namespace contains only blank lines) in as-built generation.
+    """
+    if not file_path:
+        return ""
+    try:
+        lines = Path(file_path).read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except (OSError, UnicodeError):
+        return ""
+    opens = _namespace_open_lines(lines)
+    return opens[0][1] if opens else ""
+
+
+def extract_leading_blank_lines(file_path: str | Path | None) -> int:
+    """Blank lines before the first non-blank line of the file."""
+    if not file_path:
+        return 0
+    try:
+        lines = Path(file_path).read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except (OSError, UnicodeError):
+        return 0
+    count = 0
+    for line in lines:
+        if line.strip():
+            break
+        count += 1
+    return count
+
+
+def extract_namespace_regions(
+    file_path: str | Path | None,
+) -> list[dict]:
+    """Ordered top-level namespace regions with their blank layout.
+
+    Each region: ``{name, open_line, close_line, leading_blank_lines,
+    trailing_blank_lines}`` (1-based inclusive lines).  Blank lines directly
+    inside a region's braces belong to the region (they are excluded from
+    residuals by the ownership model, so the region must render them).
+    """
+    if not file_path:
+        return []
+    try:
+        lines = Path(file_path).read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except (OSError, UnicodeError):
+        return []
+    regions: list[dict] = []
+    for open_idx, name in _namespace_open_lines(lines):
+        close_idx = _namespace_close_line(lines, open_idx)
+        open_line = open_idx + 1
+        brace_line = open_idx + 2 if (
+            open_idx + 1 < len(lines) and lines[open_idx + 1].strip() == "{"
+        ) else open_line + 1
+        close_line = close_idx + 1 if close_idx is not None else len(lines)
+        leading = 0
+        for line in lines[brace_line: close_line - 1]:
+            if line.strip():
+                break
+            leading += 1
+        trailing = 0
+        for line in reversed(lines[brace_line: close_line - 1]):
+            if line.strip():
+                break
+            trailing += 1
+        regions.append({
+            "name": name,
+            "open_line": open_line,
+            "close_line": close_line,
+            "leading_blank_lines": leading,
+            "trailing_blank_lines": trailing,
+        })
+    return regions
+
+
+def extract_include_directive_lines(file_path: str | Path | None) -> list[int]:
+    """1-based source lines parallel to ``extract_include_directives``.
+
+    A 0 entry marks a separator (blank-line group boundary).  Only include
+    directives that appear in the directive list are recorded; a directive
+    whose spelling appears multiple times keeps each occurrence's line.
+    """
+    if not file_path:
+        return []
+    try:
+        lines = Path(file_path).read_text(
+            encoding="utf-8", errors="replace"
+        ).splitlines()
+    except (OSError, UnicodeError):
+        return []
+    spellings: list[str] = []
+    include_lines: list[int] = []
+    for idx, line in enumerate(lines):
+        match = re.match(r"^\s*#\s*include\s*([<\"].*[>\"])\s*(?://.*)?$", line)
+        if match:
+            spellings.append(match.group(1))
+            include_lines.append(idx + 1)
+    # ``extract_include_directives`` inserts ``""`` separators; mirror them.
+    out: list[int] = []
+    pending_separator = False
+    for idx, line in enumerate(lines):
+        match = re.match(r"^\s*#\s*include\s*([<\"].*[>\"])\s*(?://.*)?$", line)
+        if match:
+            if pending_separator and out:
+                out.append(0)
+            out.append(idx + 1)
+            pending_separator = False
+        elif out and not line.strip():
+            pending_separator = True
+        elif line.strip() and not line.lstrip().startswith("//"):
+            pending_separator = False
+    return out
 
 
 def _namespace_close_line(lines: list[str], open_idx: int) -> int | None:
@@ -683,9 +815,39 @@ def extract_residual_source_fragments(
         for line in range(max(1, span.start), span.end + 1):
             owned.add(line)
     ns_ranges = _namespace_ranges(spans)
+    total = len(lines)
+
+    # Namespace boundary blank lines are owned by the FileNode layout
+    # metadata (``namespace_leading/trailing_blank_lines``), never by a
+    # residual: a fragment glued across a namespace open/close would
+    # double-count the same blank lines at render time.  Blank lines
+    # directly before a closing ``#endif`` likewise belong to
+    # ``guard_leading_blank_lines``.
+    layout_boundary_blanks: set[int] = set()
+    for span in spans:
+        if getattr(span, "owner_type", "") != "NamespaceNode":
+            continue
+        if span.kind == "ns-open":
+            idx = span.start + 1  # 1-based line after the open line
+            if idx <= total and lines[idx - 1].strip() == "{":
+                idx += 1  # brace on its own line is owned boilerplate
+            while idx <= total and not lines[idx - 1].strip():
+                layout_boundary_blanks.add(idx)
+                idx += 1
+        elif span.kind == "ns-close":
+            idx = span.start - 1  # 1-based line before the close line
+            while idx >= 1 and not lines[idx - 1].strip():
+                layout_boundary_blanks.add(idx)
+                idx -= 1
+    for idx in range(total - 1, -1, -1):
+        if re.match(r"^\s*#\s*endif\b", lines[idx]):
+            probe = idx - 1
+            while probe >= 0 and not lines[probe].strip():
+                layout_boundary_blanks.add(probe + 1)
+                probe -= 1
+            break
 
     fragments: list[SourceFragmentNode] = []
-    total = len(lines)
     index = 0
     while index < total:
         line_number = index + 1
@@ -693,7 +855,8 @@ def extract_residual_source_fragments(
             index += 1
             continue
         # Start of an unowned run: extend upward over adjacent plain ``//``
-        # comments, then at most one blank line.
+        # comments, then at most one blank line (never into a namespace
+        # boundary blank owned by the FileNode layout metadata).
         start = index
         while start > 0:
             lineno = start  # 1-based line number of lines[start - 1]
@@ -704,16 +867,29 @@ def extract_residual_source_fragments(
             start -= 1
         if start > 0:
             lineno = start
-            if lineno not in owned and not lines[start - 1].strip():
+            if (
+                lineno not in owned
+                and lineno not in layout_boundary_blanks
+                and not lines[start - 1].strip()
+            ):
                 start -= 1
-        # Extend downward over every unowned line.
+        # Extend downward over every unowned line (stopping before a
+        # namespace-boundary blank owned by the FileNode metadata).
         end = start
         while end < total and (end + 1) not in owned:
+            if (end + 1) in layout_boundary_blanks:
+                break
             end += 1
         body = "".join(lines[start:end])
         if body.strip():
-            placement = _placement_for(ns_ranges, start + 1)
-            if not placement:
+            placement = ""
+            if ns_ranges:
+                # File-level runs between re-opened namespace regions must
+                # stay file-level — only ranges the parser actually paired
+                # may claim a run.  ``_legacy_placement`` is a last-resort
+                # fallback for sources where range pairing produced nothing.
+                placement = _placement_for(ns_ranges, start + 1)
+            else:
                 placement = _legacy_placement(lines, start)
             fragments.append(SourceFragmentNode(
                 qualified_name=f"{file_path}#{start + 1}-{end}",
@@ -726,13 +902,22 @@ def extract_residual_source_fragments(
                 layer=layer,
                 tags=[layer],
             ))
-        index = end
+        # Always advance past the current run — a run of nothing but
+        # namespace-boundary blanks (owned by FileNode layout metadata) must
+        # not pin ``index`` forever.
+        index = max(end, index + 1)
     return fragments
 
 def extract_preceding_doc_comment(
     file_path: str | Path | None, line_number: int | None
 ) -> str:
-    """Return the contiguous Doxygen block directly before a declaration."""
+    """Return the contiguous comment block directly before a declaration.
+
+    Accepts Doxygen blocks (``/*!``/``/**``/``///``/``//!``) and plain
+    single-line ``//`` comments.  Only a comment directly above the
+    declaration (modulo blank/template lines) is attached — a floating
+    comment separated by code stays unowned and becomes a residual.
+    """
     if not file_path or not line_number or line_number < 2:
         return ""
     try:
@@ -742,30 +927,37 @@ def extract_preceding_doc_comment(
     except (OSError, UnicodeError):
         return ""
     index = line_number - 2
-    while index >= 0 and (
-        not lines[index].strip()
-        or lines[index].lstrip().startswith("template")
-    ):
+    # Skip template prefixes only — a comment must be *directly* above the
+    # declaration (or its template prefix) to count as attached.
+    while index >= 0 and lines[index].lstrip().startswith("template"):
         index -= 1
-    if index < 0 or not (
-        lines[index].lstrip().startswith("*/")
-        or lines[index].lstrip().startswith("/*!")
-        or lines[index].lstrip().startswith("/**")
-        or lines[index].lstrip().startswith("///")
-        or lines[index].lstrip().startswith("//!")
-    ):
+    if index < 0:
+        return ""
+    stripped = lines[index].lstrip()
+    if not stripped:
+        # Blank line between the comment and the declaration: only an
+        # explicit Doxygen marker (``/*!``/``/**``/``///``/``//!``) may span
+        # it.  A plain ``//`` section header separated by a blank is an
+        # ordinary comment — it stays a residual, never a doc comment.
+        probe = index
+        while probe >= 0 and not lines[probe].strip():
+            probe -= 1
+        if probe < 0 or not lines[probe].lstrip().startswith(
+            ("/*!", "/**", "///", "//!")
+        ):
+            return ""
+        index = probe
+        stripped = lines[index].lstrip()
+    if not stripped.startswith(("*/", "/*!", "/**", "///", "//!", "//")):
         return ""
     end = index
-    if lines[index].lstrip().startswith("*/") and "/*!" not in lines[index] and "/**" not in lines[index]:
+    if stripped.startswith("*/"):
         while index >= 0 and "/*!" not in lines[index] and "/**" not in lines[index]:
             index -= 1
         if index < 0:
             return ""
-    elif lines[index].lstrip().startswith(("///", "//!")):
-        while index >= 0 and (
-            lines[index].lstrip().startswith("///")
-            or lines[index].lstrip().startswith("//!")
-        ):
+    elif stripped.startswith(("///", "//!", "//")):
+        while index >= 0 and lines[index].lstrip().startswith("//"):
             index -= 1
         index += 1
     return "".join(lines[index:end + 1])
@@ -918,6 +1110,157 @@ def _read_body(body_file: str | None, body_start: int | None, body_end: int | No
     return "\n".join(lines[body_start - 1: body_end])
 
 
+def _declaration_span(file_path: str | Path | None, line_number: int | None) -> str:
+    """Return the verbatim source declaration starting at *line_number*.
+
+    Walks from the declaration line until a ``;`` at net-zero brace depth
+    (or EOF).  Used for attributes whose specifiers doxygen drops (e.g.
+    ``inline`` on a static member) — the source spelling is the only
+    faithful record for as-built generation.
+    """
+    if not file_path or not line_number:
+        return ""
+    lines = _read_source_lines(file_path)
+    if lines is None or line_number < 1 or line_number > len(lines):
+        return ""
+    depth = 0
+    in_block = False
+    out: list[str] = []
+    for idx in range(line_number - 1, len(lines)):
+        raw = lines[idx]
+        clean, in_block = _strip_for_scan(raw, in_block)
+        out.append(raw)
+        stripped = clean.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        depth += stripped.count("{") - stripped.count("}")
+        if depth <= 0 and stripped.endswith(";"):
+            break
+    return "".join(out)
+
+
+def _source_base_specifiers(
+    file_path: str | Path | None, line_number: int | None
+) -> list[str]:
+    """Source-spelled base list of a class/struct declaration.
+
+    Doxygen's ``<basecompoundref>`` list for a template *specialization*
+    includes bases inherited from the primary template (e.g. ``IsVector<
+    std::vector<T, Allocator>>`` reports both ``std::false_type`` and
+    ``std::true_type``) with no attribute distinguishing them.  The source
+    declaration is authoritative: the bases written after the top-level
+    ``:`` and before the body ``{`` are the faithful list.
+
+    Returns the raw comma-separated base spellings (access/virtual
+    qualifiers included), or ``[]`` when the declaration has no bases or
+    the span cannot be read unambiguously.
+    """
+    if not file_path or not line_number:
+        return []
+    lines = _read_source_lines(file_path)
+    if lines is None or line_number < 1 or line_number > len(lines):
+        return []
+    parts: list[str] = []
+    angle = 0
+    paren = 0
+    seen_colon = False
+    for idx in range(line_number - 1, len(lines)):
+        clean, _in_block = _strip_for_scan(lines[idx], False)
+        stripped = clean.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        # Skip template prefixes (``template <...>`` on their own lines).
+        if not seen_colon and stripped.startswith("template"):
+            continue
+        i = 0
+        n = len(stripped)
+        while i < n:
+            ch = stripped[i]
+            if ch == "<":
+                angle += 1
+            elif ch == ">":
+                angle = max(0, angle - 1)
+            elif ch == "(":
+                paren += 1
+            elif ch == ")":
+                paren = max(0, paren - 1)
+            elif (
+                ch == ":" and angle == 0 and paren == 0
+                and i + 1 < n and stripped[i + 1] != ":"
+            ):
+                seen_colon = True
+                rest = stripped[i + 1:]
+                if "{" in rest:
+                    rest = rest.split("{", 1)[0]
+                if rest.strip():
+                    parts.append(rest.strip())
+                return _split_base_specifiers("".join(parts))
+            elif ch == "{" and angle == 0 and paren == 0:
+                # Body opened before any colon — no bases.
+                return _split_base_specifiers("".join(parts))
+            i += 1
+        if seen_colon:
+            # Continue accumulating continuation lines until the ``{``.
+            if "{" in stripped:
+                return _split_base_specifiers("".join(parts))
+            parts.append(" ")
+    return []
+
+
+def _split_base_specifiers(text: str) -> list[str]:
+    """Split a base-clause string on top-level commas (template args safe)."""
+    out: list[str] = []
+    depth = 0
+    buf: list[str] = []
+    for ch in text:
+        if ch == "<":
+            depth += 1
+        elif ch == ">":
+            depth = max(0, depth - 1)
+        if ch == "," and depth == 0:
+            out.append("".join(buf).strip())
+            buf = []
+        else:
+            buf.append(ch)
+    if buf:
+        out.append("".join(buf).strip())
+    return [b for b in out if b]
+
+
+def _source_initializer(
+    file_path: str | Path | None, line_number: int | None
+) -> str:
+    """Return the verbatim source definition of a concept/alias declaration.
+
+    Walks from *line_number* (the declaration line — e.g. ``concept X = ...``
+    or ``using Y = ...``) through the terminating ``;`` at net-zero brace
+    depth.  Doxygen collapses multiline requires-blocks and embedded
+    comments; the source spelling is the faithful record for as-built
+    generation.  Returns "" when the span cannot be read.
+    """
+    if not file_path or not line_number:
+        return ""
+    lines = _read_source_lines(file_path)
+    if lines is None or line_number < 1 or line_number > len(lines):
+        return ""
+    depth = 0
+    paren = 0
+    in_block = False
+    out: list[str] = []
+    for idx in range(line_number - 1, len(lines)):
+        raw = lines[idx]
+        clean, in_block = _strip_for_scan(raw, in_block)
+        out.append(raw)
+        stripped = clean.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        depth += stripped.count("{") - stripped.count("}")
+        paren += stripped.count("(") - stripped.count(")")
+        if depth <= 0 and paren <= 0 and stripped.endswith(";"):
+            break
+    return "".join(out)
+
+
 def _is_under_test_dir(loc_file: str | None, test_dirs: list[Path] | None) -> bool:
     """Return True if *loc_file* lives under one of the resolved test dirs.
 
@@ -964,6 +1307,17 @@ def _extract_common_member_fields(
                 type_refs.append({"refid": tr_refid, "kindref": tr_kindref})
     definition = memberdef.findtext("definition", "")
     argsstring = memberdef.findtext("argsstring", "")
+    # Ordered source declarations for member template parameters
+    # (``template <ValidTransferObject T>`` above an in-class method).
+    template_declarations = [
+        " ".join(
+            part for part in (parameter.type_constraint, parameter.declname)
+            if part
+        ) + (f" = {parameter.defval}" if parameter.defval else "")
+        for parameter in parse_template_params(
+            memberdef.find("templateparamlist")
+        )
+    ]
     # Explicit value expression for enum values (e.g. ``1 << 3``).
     # Captured raw from the ``<initializer>`` element so the value is
     # preserved for round-trip code generation; rendering (e.g. whether
@@ -989,6 +1343,7 @@ def _extract_common_member_fields(
         "definition": definition,
         "argsstring": argsstring,
         "initializer": initializer,
+        "template_declarations": template_declarations,
         "body": _read_body(body_file, body_start, body_end),
         "body_file": body_file or "",
         "file_path": file_path,
@@ -1266,13 +1621,18 @@ class CppParser(LanguageParser):
                 language = normalize_language(compounddef.get("language", ""))
                 namespace_leading, namespace_trailing = extract_namespace_padding(file_path)
                 file_lines = _read_source_lines(file_path)
+                namespace_name = _top_level_namespace_name(file_path)
                 result.files.append(FileNode(
                     refid=refid, name=compoundname,
                     path=file_path or "", language=language, source=source,
                     include_guard=extract_include_guard(file_path),
                     include_directives=extract_include_directives(file_path),
+                    include_directive_lines=extract_include_directive_lines(file_path),
+                    leading_blank_lines=extract_leading_blank_lines(file_path),
+                    namespace_regions=extract_namespace_regions(file_path),
                     namespace_leading_blank_lines=namespace_leading,
                     namespace_trailing_blank_lines=namespace_trailing,
+                    namespace_name=namespace_name,
                     guard_leading_blank_lines=extract_guard_padding(file_path),
                     start_line=1 if file_lines else 0,
                     end_line=len(file_lines) if file_lines else 0,
@@ -1459,8 +1819,12 @@ class CppParser(LanguageParser):
     ) -> None:
         """Handle class/struct compounds."""
         base_classes = []
+        base_specifiers = _source_base_specifiers(
+            fields["file_path"], fields["line_number"]
+        )
+        is_struct = fields["kind"] == "struct"
         for baseref in compounddef.findall("basecompoundref"):
-            base_name = baseref.text or ""
+            base_name = (baseref.text or "").strip()
             base_classes.append(base_name)
             # Record InheritsEntry for graph JSON edge emission.
             # to_refid: Doxygen's internal refid (primary resolution within
@@ -1475,6 +1839,21 @@ class CppParser(LanguageParser):
                     to_name=base_name,
                     to_type="ClassNode",
                 ))
+        if not base_specifiers and base_classes:
+            # Fallback: derive source spelling from the XML access/virtual
+            # qualifiers (a struct's default public access is unspelled).
+            for baseref in compounddef.findall("basecompoundref"):
+                base_name = (baseref.text or "").strip()
+                prot = baseref.get("prot", "public")
+                virt = baseref.get("virt") == "virtual"
+                parts: list[str] = []
+                if virt:
+                    parts.append("virtual")
+                if prot != "public" or not is_struct:
+                    parts.append(prot)
+                base_specifiers.append(
+                    " ".join(parts + [base_name]) if parts else base_name
+                )
 
         is_final = compounddef.get("final") == "yes"
         is_abstract = compounddef.get("abstract") == "yes"
@@ -1503,6 +1882,7 @@ class CppParser(LanguageParser):
             template_declarations=fields.get("template_declarations", []),
             module=fields["module"],
             base_classes=base_classes,
+            base_specifiers=base_specifiers,
             is_final=is_final,
             is_abstract=is_abstract,
             source=source,
@@ -1539,8 +1919,21 @@ class CppParser(LanguageParser):
                         to_refid=fields["refid"],  # concept doing the referencing
                         to_type=to_type,
                     ))
+        # The Doxygen initializer collapses multiline requires-blocks and
+        # embedded comments onto one line.  The source is authoritative:
+        # capture the verbatim definition (``concept X = ...;``) from the
+        # declaration file so as-built generation reproduces it exactly.
+        source_init = _source_initializer(fields["file_path"], fields["line_number"])
+        if source_init:
+            initializer = source_init
 
-        span = _source_span(fields["file_path"], fields["line_number"])
+        source_documentation = extract_preceding_doc_comment(
+            fields["file_path"], fields["line_number"]
+        )
+        span = _source_span(
+            fields["file_path"], fields["line_number"],
+            doc_comment=source_documentation,
+        )
         result.concepts.append(ConceptNode(
             refid=fields["refid"],
             kind=fields["kind"],
@@ -1552,6 +1945,8 @@ class CppParser(LanguageParser):
             end_line=span[1] if span else 0,
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
+            source_documentation=source_documentation,
+            template_declarations=fields.get("template_declarations", []),
             definition=fields["definition"],
             module=fields["module"],
             source=source,
@@ -1654,6 +2049,7 @@ class CppParser(LanguageParser):
         "variable": "_parse_variable_member",
         "typedef": "_parse_variable_member",
         "enumvalue": "_parse_enumvalue_member",
+        "enum": "_parse_enum_member",
         "define": "_parse_define_member",
     }
 
@@ -1741,6 +2137,7 @@ class CppParser(LanguageParser):
         is_virtual = memberdef.get("virt") in ("virtual", "pure-virtual")
         is_inline = memberdef.get("inline") == "yes"
         is_explicit = memberdef.get("explicit") == "yes"
+        is_nodiscard = memberdef.get("nodiscard") == "yes"
 
         source_documentation = extract_preceding_doc_comment(
             fields["file_path"], fields["line_number"]
@@ -1773,6 +2170,7 @@ class CppParser(LanguageParser):
             brief_description=fields["brief"],
             detailed_description=fields["detailed"],
             source_documentation=source_documentation,
+            template_declarations=fields.get("template_declarations", []),
             protection=fields["prot"],
             visibility=fields["prot"],
             is_static=is_static,
@@ -1781,6 +2179,7 @@ class CppParser(LanguageParser):
             is_virtual=is_virtual,
             is_inline=is_inline,
             is_explicit=is_explicit,
+            is_nodiscard=is_nodiscard,
             source=source,
             source_type=fields["source_type"],
             layer=layer,
@@ -1802,6 +2201,8 @@ class CppParser(LanguageParser):
         qname = f"{parent_qualified_name}::{name}" if parent_qualified_name else name
         is_static = memberdef.get("static") == "yes"
         is_const = memberdef.get("const") == "yes"
+        is_constexpr = memberdef.get("constexpr") == "yes"
+        is_nodiscard = memberdef.get("nodiscard") == "yes"
 
         source_documentation = extract_preceding_doc_comment(
             fields["file_path"], fields["line_number"]
@@ -1822,6 +2223,9 @@ class CppParser(LanguageParser):
             qualified_name=qname,
             type_signature=fields["type_str"],
             initializer=fields.get("initializer") or "",
+            declaration=_declaration_span(
+                fields["file_path"], fields["line_number"]
+            ),
             definition=fields["definition"],
             file_path=fields["file_path"] or "",
             line_number=fields["line_number"],
@@ -1836,6 +2240,8 @@ class CppParser(LanguageParser):
             visibility=fields["prot"],
             is_static=is_static,
             is_const=is_const,
+            is_constexpr=is_constexpr,
+            is_nodiscard=is_nodiscard,
             source=source,
             layer=layer,
         ))
@@ -1889,6 +2295,95 @@ class CppParser(LanguageParser):
             layer=layer,
             tags=[layer],
         ))
+
+    @staticmethod
+    def _parse_enum_member(
+        memberdef: ET.Element,
+        fields: dict,
+        compound_refid: str,
+        parent_qualified_name: str,
+        source: str,
+        result: ParseResult,
+        layer: str,
+    ) -> None:
+        """Handle a nested enum declared inside a class/struct.
+
+        Doxygen records nested enums as ``<memberdef kind="enum">`` inside
+        the owning compound's sectiondef.  The enum is composed by the
+        owning compound (not a namespace), keeps source order/visibility,
+        and carries its underlying type (``: uint8_t``) when present.
+        """
+        name = fields["name"]
+        qname = f"{parent_qualified_name}::{name}" if parent_qualified_name else name
+        refid = fields["refid"]
+
+        source_documentation = extract_preceding_doc_comment(
+            fields["file_path"], fields["line_number"]
+        )
+        span = _source_span(
+            fields["file_path"], fields["line_number"],
+            body_file=fields.get("body_file", "") or "",
+            body_start=fields["body_start"] or 0,
+            body_end=fields["body_end"] or 0,
+            doc_comment=source_documentation,
+        )
+
+        result.enums.append(EnumNode(
+            refid=refid,
+            compound_refid=compound_refid,
+            kind=fields["kind"],
+            name=name,
+            qualified_name=qname,
+            underlying_type=fields.get("type_str") or "",
+            enum_class=memberdef.get("strong") == "yes",
+            file_path=fields["file_path"] or "",
+            line_number=fields["line_number"],
+            start_line=span[0] if span else 0,
+            end_line=span[1] if span else 0,
+            brief_description=fields["brief"],
+            detailed_description=fields["detailed"],
+            source_documentation=source_documentation,
+            definition=fields["definition"],
+            protection=fields["prot"],
+            visibility=fields["prot"],
+            module=derive_module(qname),
+            source=source,
+            source_type=fields["source_type"],
+            layer=layer,
+            tags=[layer],
+        ))
+
+        # Enumerators are composed by the nested enum itself.
+        for value_el in memberdef.findall("enumvalue"):
+            value_name = value_el.findtext("name", "") or ""
+            if not value_name:
+                continue
+            value_fields = _extract_common_member_fields(value_el)
+            value_span = _source_span(
+                value_fields["file_path"], value_fields["line_number"],
+                doc_comment=extract_preceding_doc_comment(
+                    value_fields["file_path"], value_fields["line_number"]
+                ),
+            )
+            result.enum_values.append(EnumValueNode(
+                refid=value_fields["refid"],
+                compound_refid=refid,
+                kind=value_fields["kind"],
+                name=value_name,
+                qualified_name=f"{qname}::{value_name}",
+                file_path=value_fields["file_path"] or "",
+                line_number=value_fields["line_number"],
+                start_line=value_span[0] if value_span else 0,
+                end_line=value_span[1] if value_span else 0,
+                initializer=value_fields.get("initializer") or "",
+                brief_description=value_fields["brief"],
+                detailed_description=value_fields["detailed"],
+                protection=value_fields["prot"],
+                visibility=value_fields["prot"],
+                source=source,
+                layer=layer,
+                tags=[layer],
+            ))
 
     @staticmethod
     def _parse_enumvalue_member(
@@ -2308,6 +2803,11 @@ def _derive_namespace_compositions(result: ParseResult) -> None:
         child_refid = getattr(child, "refid", None)
         child_source = getattr(child, "source", "") or ""
         if not child_qname or not child_refid:
+            continue
+        # Nested compounds (compound_refid set — e.g. a class-scoped enum)
+        # are composed by their owning compound, never by a synthetic
+        # namespace derived from their ``Parent::Child`` qualified name.
+        if getattr(child, "compound_refid", "") or "":
             continue
 
         # Derive parent: everything before the last "::".

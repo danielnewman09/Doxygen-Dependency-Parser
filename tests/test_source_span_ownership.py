@@ -424,6 +424,9 @@ def _extract(file_path: Path, result: ParseResult) -> list[SourceFragmentNode]:
 
 class TestPureSubtraction:
     def test_lowercase_macro_invocation_is_captured(self, tmp_path: Path):
+        """Residuals stop at content: namespace boundary blank lines belong
+        to the FileNode layout metadata (namespace_leading/trailing_blank_\n        lines), never to a residual — a fragment glued across an open/close
+        would double-count the same blank lines at render time."""
         source = tmp_path / "macros.hpp"
         source.write_text(
             "namespace sample\n{\n\nbegin_scoped_guard(lock, mutex);\n\n}\n",
@@ -431,7 +434,7 @@ class TestPureSubtraction:
         )
         fragments = _extract(source, ParseResult())
         assert [(f.start_line, f.end_line, f.text) for f in fragments] == [
-            (3, 5, "\nbegin_scoped_guard(lock, mutex);\n\n"),
+            (4, 4, "begin_scoped_guard(lock, mutex);\n"),
         ]
         fragment = fragments[0]
         assert fragment.placement == "sample"
@@ -483,6 +486,8 @@ class TestPureSubtraction:
         ]
 
     def test_compiler_attribute_is_captured(self, tmp_path: Path):
+        """Same contract as above: the surrounding blank lines are FileNode
+        layout metadata, the residual carries only the content span."""
         source = tmp_path / "attr.hpp"
         source.write_text(
             "namespace sample\n{\n\n__attribute__((visibility(\"default\"))) int counter = 0;\n\n}\n",
@@ -491,7 +496,7 @@ class TestPureSubtraction:
         fragments = _extract(source, ParseResult())
         assert len(fragments) == 1
         assert fragments[0].text == (
-            "\n__attribute__((visibility(\"default\"))) int counter = 0;\n\n"
+            "__attribute__((visibility(\"default\"))) int counter = 0;\n"
         )
 
     def test_file_with_no_residuals_produces_no_fragments(self, tmp_path: Path):

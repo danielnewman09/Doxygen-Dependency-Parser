@@ -201,6 +201,13 @@ def result_to_graph_json(
         muid = _get_prop(member, "uid")
         if compound and muid:
             members_by_compound[compound].append((muid, type(member).__name__))
+    # Nested compounds (class-scoped enums/structs) are composed by their
+    # owning compound exactly like members — they are not namespace children.
+    for enum in result.enums:
+        compound = _get_prop(enum, "compound_refid")
+        euid = _get_prop(enum, "uid")
+        if compound and euid:
+            members_by_compound[compound].append((euid, type(enum).__name__))
 
     # parent_refid → [(child_refid, child_type)] — namespace composes
     composes_by_parent: dict[str, list[tuple[str, str]]] = defaultdict(list)
