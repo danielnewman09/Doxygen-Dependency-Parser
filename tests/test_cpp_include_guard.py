@@ -9,6 +9,8 @@ from doxygen_index.parser.cpp_parser import (
     extract_residual_source_fragments,
 )
 from doxygen_index.parser.model import ParseResult
+from doxygen_index.graph_json import result_to_graph_json
+from codegraph import SourceFragmentNode
 
 
 def test_extract_include_guard_preserves_exact_macro(tmp_path: Path):
@@ -129,3 +131,19 @@ def test_parse_source_dir_populates_residual_fragment_metadata(tmp_path: Path, m
     assert fragment.text == "#pragma clang diagnostic push\n"
     assert fragment.placement == "sample"
     assert fragment.source == "demo"
+
+
+def test_residual_fragment_survives_graph_json_serialization():
+    fragment = SourceFragmentNode(
+        qualified_name="src/Widget.hpp#4-4",
+        file_path="src/Widget.hpp",
+        start_line=4,
+        end_line=4,
+        placement="sample",
+        text="#pragma once\n",
+        source="demo",
+    )
+    graph = result_to_graph_json(ParseResult(source_fragments=[fragment]), source="demo")
+    entry = next(item for item in graph if item["type"] == "SourceFragmentNode")
+    assert entry["text"] == "#pragma once\n"
+    assert entry["placement"] == "sample"

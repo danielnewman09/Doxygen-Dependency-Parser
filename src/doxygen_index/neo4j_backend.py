@@ -42,6 +42,7 @@ from codegraph import (  # noqa: F401 — needed for apply_schema
     MethodNode, AttributeNode, EnumValueNode, FunctionNode, DefineNode,
     FileNode, NamespaceNode, ParameterNode,
     ImplementationNode,
+    SourceFragmentNode,
 )
 from codegraph.models.test import (  # noqa: F401 — needed for apply_schema
     TestNode, AssertionNode, TestStepNode, TestFixtureNode,
@@ -358,6 +359,7 @@ def _collect_live_refids(result: ParseResult) -> set[str]:
     for lst in (result.classes, result.enums, result.unions, result.interfaces,
                 result.concepts, result.methods, result.attributes,
                 result.enum_values, result.defines, result.functions,
+                result.source_fragments,
                 result.namespaces, result.tests, result.assertions,
                 result.test_steps, result.test_fixtures, result.literals,
                 result.implementations):

@@ -132,6 +132,7 @@ def result_to_graph_json(
         result.attributes,
         result.enum_values,
         result.defines,
+        result.source_fragments,
         result.functions,
         result.parameters,
         result.tests,

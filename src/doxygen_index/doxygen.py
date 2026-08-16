@@ -434,6 +434,7 @@ def tag_nodes_by_source(
         result.interfaces + result.concepts +
         result.methods + result.attributes +
         result.enum_values + result.defines +
+        result.source_fragments +
         result.functions + result.parameters +
         result.tests + result.assertions +
         result.test_steps + result.test_fixtures +
@@ -742,6 +743,7 @@ def split_result_by_source(
         ("attributes", result.attributes),
         ("enum_values", result.enum_values),
         ("defines", result.defines),
+        ("source_fragments", result.source_fragments),
         ("functions", result.functions),
         ("parameters", result.parameters),
         ("implementations", result.implementations),
@@ -784,6 +786,7 @@ def _file_path_for_refid(result: "ParseResult", refid: str) -> str:
         result.unions, result.interfaces, result.concepts,
         result.methods, result.attributes, result.enum_values,
         result.defines, result.functions, result.parameters,
+        result.source_fragments,
     ):
         for node in node_list:
             if getattr(node, "refid", "") == refid:

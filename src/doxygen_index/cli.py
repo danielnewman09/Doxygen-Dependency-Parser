@@ -848,6 +848,7 @@ def _tag_nodes_by_source(
         result.interfaces + result.concepts +
         result.methods + result.attributes +
         result.enum_values + result.defines +
+        result.source_fragments +
         result.functions + result.parameters +
         result.implementations
     )
@@ -865,6 +866,7 @@ def _count_by_source(result: "ParseResult") -> dict[str, int]:
         result.interfaces + result.concepts +
         result.methods + result.attributes +
         result.enum_values + result.defines +
+        result.source_fragments +
         result.functions + result.parameters +
         result.implementations
     )
@@ -882,6 +884,7 @@ def _count_nodes(result: "ParseResult") -> int:
         result.interfaces, result.concepts,
         result.methods, result.attributes,
         result.enum_values, result.defines,
+        result.source_fragments,
         result.functions, result.parameters,
         result.implementations,
     ])

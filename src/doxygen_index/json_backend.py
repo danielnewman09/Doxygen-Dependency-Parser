@@ -51,6 +51,7 @@ def _build_payload(result: ParseResult, source: str) -> dict:
         "attributes": [n.__properties__ for n in result.attributes],
         "enum_values": [n.__properties__ for n in result.enum_values],
         "defines": [n.__properties__ for n in result.defines],
+        "source_fragments": [n.__properties__ for n in result.source_fragments],
         "functions": [n.__properties__ for n in result.functions],
         "parameters": [n.__properties__ for n in result.parameters],
         "includes": [asdict(i) for i in result.includes],

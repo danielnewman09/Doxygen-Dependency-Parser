@@ -133,6 +133,7 @@ def _export_nodes(result: ParseResult, output_dir: Path) -> int:
         ("AttributeNode", result.attributes),
         ("EnumValueNode", result.enum_values),
         ("DefineNode", result.defines),
+        ("SourceFragmentNode", result.source_fragments),
         ("FunctionNode", result.functions),
         ("ParameterNode", result.parameters),
         ("ImplementationNode", result.implementations),
