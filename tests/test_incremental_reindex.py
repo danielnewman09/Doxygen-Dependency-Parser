@@ -137,7 +137,7 @@ def _clear_source(source: str) -> None:
     """Delete every node carrying *source* via the repository API."""
     graph = get_backend().graph
     for node in graph.find_all_by_source(source):
-        uid = node._uid_value()
+        uid = node.canonical_key
         if uid:
             graph.delete_by_uid(uid)
 
@@ -1056,7 +1056,7 @@ class TestRelationshipIntegrity:
         child_node = _find_by_qname(child_qname)
         assert child_node is not None, f"Test child not found: {child_qname}"
         get_backend().graph.update_properties(
-            child_node._uid_value(), {"description": enriched_desc}
+            child_node.canonical_key, {"description": enriched_desc}
         )
 
         # Re-index without changes
@@ -1100,7 +1100,7 @@ class TestRelationshipIntegrity:
         # Write a rich description
         enriched = "LLM: Verifies that the step produces the expected result"
         get_backend().graph.update_properties(
-            assertion_node._uid_value(), {"description": enriched}
+            assertion_node.canonical_key, {"description": enriched}
         )
 
         # Re-index

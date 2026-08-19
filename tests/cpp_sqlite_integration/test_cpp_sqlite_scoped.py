@@ -1,8 +1,7 @@
-"""Class-scoped LayerGraph and HTML visualisation tests.
+"""Class-scoped LayerGraph tests.
 
 Scopes the as-built cpp-sqlite LayerGraph to a single compound
-(``cpp_sqlite::Database``) and verifies the resulting subgraph and
-HTML rendering.
+(``cpp_sqlite::Database``) and verifies the resulting subgraph.
 
 Uses the session-scoped ``codegraph_graph`` fixture from ``conftest.py``.
 """
@@ -39,7 +38,7 @@ class TestScopedClassGraph:
         stack = list(scoped_serialized)
         while stack:
             node = stack.pop()
-            uid_map[node["uid"]] = node
+            uid_map[node["canonical_key"]] = node
             stack.extend(node.get("composes", []))
         return uid_map
 
@@ -139,7 +138,7 @@ class TestScopedClassGraph:
         uid_to_qn: dict[str, str] = {}
         for node in scoped_uid_map.values():
             qn = node.get("qualified_name", "") or node.get("name", "")
-            uid = node.get("uid", "")
+            uid = node.get("canonical_key", "")
             if uid and qn:
                 uid_to_qn[uid] = qn
 
@@ -149,7 +148,7 @@ class TestScopedClassGraph:
             if "Database::select" in qn:
                 for edge in node.get("edges", []):
                     select_edges[edge["relation_type"]] = (
-                        uid_to_qn.get(edge["target_uid"], edge["target_uid"])
+                        uid_to_qn.get(edge["target_key"], edge["target_key"])
                     )
                 break
 
@@ -169,7 +168,7 @@ class TestScopedClassGraph:
                 for edge in node.get("edges", []):
                     if edge["relation_type"] == "INVOKES":
                         invokes_targets.add(
-                            uid_to_qn.get(edge["target_uid"], edge["target_uid"])
+                            uid_to_qn.get(edge["target_key"], edge["target_key"])
                         )
                 break
 
@@ -200,114 +199,3 @@ class TestScopedClassGraph:
         print(f"\n  Full graph: {len(full_uid_map)} nodes")
         print(f"  Database subgraph: {len(scoped_uid_map)} nodes "
               f"(~{100*len(scoped_uid_map)/len(full_uid_map):.0f}%)")
-
-    # ------------------------------------------------------------------
-    # HTML rendering for scoped graph
-    # ------------------------------------------------------------------
-
-    @pytest.fixture(scope="class")
-    def scoped_html_data(self, scoped_graph):
-        """Export the Database subgraph as Cytoscape elements and HTML.
-
-        Uses ``collapse_members=False`` so that all INVOKES and
-        DEPENDS_ON edges between individual members are visible in
-        the graph — the class-scoped view is about internal
-        relationships, not external aggregation.
-
-        Saves JSON + HTML to the codegraph_output directory alongside
-        the full-graph outputs.
-        """
-        from codegraph.export.viz.transform import layer_graph_to_cytoscape
-        from codegraph.export.viz import export_html_from_json
-        import json as _json
-        from pathlib import Path as _Path
-
-        output_dir = _Path(__file__).resolve().parent.parent / "codegraph_output"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        json_path = output_dir / "database_subgraph.json"
-        json_path.write_text(_json.dumps(
-            scoped_graph.serialize(fields="all"), indent=2, default=str
-        ))
-
-        html_path = output_dir / "database_subgraph.html"
-        export_html_from_json(
-            str(json_path), str(html_path),
-            title="cpp-sqlite::Database (scoped)",
-            collapse_members=False,
-        )
-
-        cy = layer_graph_to_cytoscape(scoped_graph, collapse_members=False)
-
-        print(f"\n  Scoped JSON: {json_path} ({json_path.stat().st_size:,} bytes)")
-        print(f"  Scoped HTML: {html_path} ({html_path.stat().st_size:,} bytes)")
-
-        return {"cy": cy, "html_path": html_path}
-
-    def test_scoped_html_has_database_node(self, scoped_html_data):
-        """The HTML Cytoscape data includes the Database node."""
-        node_ids = {n["data"]["id"] for n in scoped_html_data["cy"]["nodes"]}
-        assert "cpp_sqlite::Database" in node_ids
-
-    def test_scoped_html_no_dangling_edges(self, scoped_html_data):
-        """All edges in the scoped graph resolve to existing nodes."""
-        cy = scoped_html_data["cy"]
-        node_ids = {n["data"]["id"] for n in cy["nodes"]}
-        dangling: list[dict] = []
-        for e in cy["edges"]:
-            src = e["data"]["source"]
-            tgt = e["data"]["target"]
-            if src not in node_ids:
-                dangling.append({"source": src, "issue": "source missing"})
-            if tgt not in node_ids:
-                dangling.append({"target": tgt, "issue": "target missing"})
-        assert len(dangling) == 0, (
-            f"{len(dangling)} dangling edges in scoped Cytoscape"
-        )
-
-    def test_scoped_html_has_select_invokes_edges(self, scoped_html_data):
-        """The scoped HTML Cytoscape data shows INVOKES edges from
-        Database::select() to sqlite3 C API functions — these are
-        intra-class implementation dependencies visible because
-        ``collapse_members=False``."""
-        cy = scoped_html_data["cy"]
-
-        # Build node ID → kind map for member-level nodes
-        member_nodes = {
-            n["data"]["id"]
-            for n in cy["nodes"]
-            if "::select" in n["data"]["id"]
-            or "::getDAO" in n["data"]["id"]
-            or "::insert" in n["data"]["id"]
-            or "sqlite3_" in n["data"]["id"]
-        }
-        # Members should appear as separate nodes (not collapsed)
-        assert "cpp_sqlite::Database::select(PreparedSQLStmt &stmt)" in member_nodes
-
-        invokes: set[tuple[str, str]] = set()
-        for e in cy["edges"]:
-            if e["data"]["label"] == "INVOKES":
-                invokes.add((e["data"]["source"], e["data"]["target"]))
-
-        # select() → sqlite3_step (implementation-level INVOKES)
-        select_qn = "cpp_sqlite::Database::select(PreparedSQLStmt &stmt)"
-        for expected_target in ["sqlite3_step", "sqlite3_bind_int64",
-                                 "sqlite3_column_int64", "sqlite3_prepare_v2",
-                                 "sqlite3_finalize", "sqlite3_reset"]:
-            assert (select_qn, expected_target) in invokes, (
-                f"select() should INVOKES {expected_target}"
-            )
-
-        # select() → getDAO() (self-method INVOKES)
-        assert (select_qn, "cpp_sqlite::Database::getDAO()") in invokes
-
-        print(f"\n  select() INVOKES in Cytoscape: {len([e for e in invokes if e[0] == select_qn])}")
-
-    def test_scoped_html_file_created(self, scoped_html_data):
-        """The HTML file was written and contains Cytoscape init code."""
-        html = scoped_html_data["html_path"].read_text()
-        assert len(html) > 1000, f"HTML too small: {len(html)} bytes"
-        assert "cytoscape" in html.lower(), "HTML should contain cytoscape"
-        assert "elements" in html.lower(), "HTML should contain elements"
-        print(f"\n  Scoped HTML: {scoped_html_data['html_path']} "
-              f"({len(html):,} bytes)")

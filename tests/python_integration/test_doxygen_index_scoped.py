@@ -1,21 +1,15 @@
-"""Class-scoped LayerGraph and HTML visualisation tests for the
+"""Class-scoped LayerGraph tests for the
 doxygen-index dogfood graph.
 
 Scopes the as-built dogfood LayerGraph to a single compound
 (``doxygen_index.parser.python._parser.PythonParser`` — the parser
-that extracts THIS codebase) and verifies the resulting subgraph and
-HTML rendering.
+that extracts THIS codebase) and verifies the resulting subgraph.
 
 Mirrors ``test_cpp_sqlite_scoped.py`` (which scopes to
-``cpp_sqlite::Database``) and writes the same style of inspectable
-artifacts:
+``cpp_sqlite::Database``) and writes an inspectable JSON artifact:
 
 - ``tests/codegraph_output/python_parser_subgraph.json`` — the scoped
   serialized LayerGraph
-- ``tests/codegraph_output/python_parser_subgraph.html`` — a
-  self-contained Cytoscape visualisation of the scoped graph
-  (``collapse_members=False`` so every member-level edge is visible)
-
 These are the files to open side-by-side with
 ``src/doxygen_index/parser/python/_parser.py`` to directly check how
 well the extracted data matches the existing code.
@@ -64,7 +58,7 @@ class TestScopedClassGraph:
         stack = list(scoped_serialized)
         while stack:
             node = stack.pop()
-            uid_map[node["uid"]] = node
+            uid_map[node["canonical_key"]] = node
             stack.extend(node.get("composes", []))
         return uid_map
 
@@ -166,13 +160,13 @@ class TestScopedClassGraph:
         for node in scoped_uid_map.values():
             for edge in node.get("edges", []):
                 total += 1
-                if edge["target_uid"] not in scoped_uid_map:
+                if edge["target_key"] not in scoped_uid_map:
                     unresolved.append(edge)
             for child in node.get("composes", []):
-                if child.get("uid") not in scoped_uid_map:
+                if child.get("canonical_key") not in scoped_uid_map:
                     unresolved.append({
                         "relation_type": "COMPOSES",
-                        "target_uid": child.get("uid", ""),
+                        "target_key": child.get("canonical_key", ""),
                     })
 
         non_defined_in = [
@@ -181,70 +175,6 @@ class TestScopedClassGraph:
         assert not non_defined_in, (
             f"{len(non_defined_in)} non-DEFINED_IN unresolved edges "
             f"(of {total}): "
-            + ", ".join(f"{e['relation_type']}->{e['target_uid'][:8]}"
+            + ", ".join(f"{e['relation_type']}->{e['target_key'][:8]}"
                         for e in non_defined_in[:10])
         )
-
-    # ------------------------------------------------------------------
-    # HTML rendering for scoped graph
-    # ------------------------------------------------------------------
-
-    @pytest.fixture(scope="class")
-    def scoped_html_data(self, scoped_graph):
-        """Export the PythonParser subgraph as Cytoscape elements and
-        HTML.
-
-        Uses ``collapse_members=False`` so that all INVOKES and
-        DEPENDS_ON edges between individual members are visible in
-        the graph — the class-scoped view is about internal
-        relationships, not external aggregation.
-
-        Saves JSON + HTML to the codegraph_output directory alongside
-        the full-graph outputs.
-        """
-        from codegraph.export.viz.transform import layer_graph_to_cytoscape
-        from codegraph.export.viz import export_html_from_json
-
-        _CODEGRAPH_OUTPUT.mkdir(parents=True, exist_ok=True)
-
-        json_path = _CODEGRAPH_OUTPUT / "python_parser_subgraph.json"
-        json_path.write_text(_json.dumps(
-            scoped_graph.serialize(fields="all"), indent=2, default=str
-        ))
-
-        html_path = _CODEGRAPH_OUTPUT / "python_parser_subgraph.html"
-        export_html_from_json(
-            str(json_path), str(html_path),
-            title="doxygen_index PythonParser (scoped)",
-            collapse_members=False,
-        )
-
-        cy = layer_graph_to_cytoscape(scoped_graph, collapse_members=False)
-
-        print(f"\n  Scoped JSON: {json_path} ({json_path.stat().st_size:,} bytes)")
-        print(f"  Scoped HTML: {html_path} ({html_path.stat().st_size:,} bytes)")
-
-        return {"cy": cy, "html_path": html_path}
-
-    def test_scoped_html_has_python_parser_node(self, scoped_html_data):
-        """The HTML Cytoscape data includes the PythonParser node."""
-        node_ids = {n["data"]["id"] for n in scoped_html_data["cy"]["nodes"]}
-        assert SCOPE_QN in node_ids
-
-    def test_scoped_html_has_member_nodes(self, scoped_html_data):
-        """Member-level nodes appear (collapse_members=False)."""
-        node_ids = {n["data"]["id"] for n in scoped_html_data["cy"]["nodes"]}
-        assert f"{SCOPE_QN}.parse_source_dir" in node_ids
-        assert f"{SCOPE_QN}._parse_python_file" in node_ids
-
-    def test_scoped_html_no_dangling_edges(self, scoped_html_data):
-        """All edges in the scoped Cytoscape data resolve."""
-        cy = scoped_html_data["cy"]
-        node_ids = {n["data"]["id"] for n in cy["nodes"]}
-        dangling: list[dict] = []
-        for e in cy["edges"]:
-            src = e["data"]["source"]
-            tgt = e["data"]["target"]
-            if src not in node_ids or tgt not in node_ids:
-                dangling.append(e["data"])
-        assert not dangling, f"{len(dangling)} dangling cytoscape edges"

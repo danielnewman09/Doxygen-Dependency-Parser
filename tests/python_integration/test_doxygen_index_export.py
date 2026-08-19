@@ -22,6 +22,8 @@ from pathlib import Path
 
 from collections import Counter
 
+import pytest
+
 
 def _file_identity(qn: str, name: str) -> str:
     """Return the identity used for FileNode endpoints of INCLUDES edges.
@@ -98,20 +100,20 @@ class TestFullGraphExport:
         for node in uid_map.values():
             for edge in node.get("edges", []):
                 total_edges += 1
-                if edge["target_uid"] not in uid_map:
+                if edge["target_key"] not in uid_map:
                     unresolved.append(edge)
             for child in node.get("composes", []):
-                if child.get("uid") not in uid_map:
+                if child.get("canonical_key") not in uid_map:
                     unresolved.append({
                         "relation_type": "COMPOSES",
-                        "target_uid": child.get("uid", ""),
+                    "target_key": child.get("canonical_key", ""),
                         "target_type": child.get("kind", ""),
                     })
 
         assert not unresolved, (
             f"{len(unresolved)} unresolved edges out of {total_edges}:\n"
             + "\n".join(
-                f"  {e['relation_type']}: {e['target_uid']} ({e.get('target_type')})"
+                f"  {e['relation_type']}: {e['target_key']} ({e.get('target_type')})"
                 for e in unresolved[:10]
             )
         )
@@ -166,7 +168,7 @@ class TestFullGraphExport:
             for edge in node.get("edges", []):
                 if edge["relation_type"] != "INHERITS_FROM":
                     continue
-                target = uid_map.get(edge["target_uid"], {})
+                target = uid_map.get(edge["target_key"], {})
                 to_qn = target.get("qualified_name", "") or target.get("name", "")
                 inherits.append((from_qn, to_qn))
 
@@ -218,7 +220,7 @@ class TestFullGraphExport:
             for edge in node.get("edges", []):
                 if edge["relation_type"] != "INVOKES":
                     continue
-                target = uid_map.get(edge["target_uid"], {})
+                target = uid_map.get(edge["target_key"], {})
                 to_qn = target.get("qualified_name", "") or target.get("name", "")
                 invokes.add((from_qn, to_qn))
 
@@ -236,11 +238,6 @@ class TestFullGraphExport:
             "doxygen_index.cli.cmd_codegraph",
             "doxygen_index.conan.discover_packages",
         ) in invokes
-        # HTML generation → graph JSON writer.
-        assert (
-            "doxygen_index.cli._generate_html",
-            "doxygen_index.graph_json.write_graph_json",
-        ) in invokes
 
         print(f"  INVOKES: {len(invokes)} unique edges")
 
@@ -256,14 +253,13 @@ class TestFullGraphExport:
             for edge in node.get("edges", []):
                 if edge["relation_type"] != "INCLUDES":
                     continue
-                target = uid_map.get(edge["target_uid"], {})
+                target = uid_map.get(edge["target_key"], {})
                 to_qn = target.get("qualified_name", "") or target.get("name", "")
                 includes.add((from_qn, to_qn))
 
         # cli.py imports the conan + parser + doxygen machinery.
         assert ("cli.py", "doxygen_index.conan.discover_packages") in includes
         assert ("cli.py", "doxygen_index.doxygen.run_doxygen") in includes
-        assert ("cli.py", "doxygen_index.graph_json.write_graph_json") in includes
 
         print(f"  INCLUDES: {len(includes)} unique edges")
 
@@ -282,7 +278,7 @@ class TestFullGraphExport:
             for edge in node.get("edges", []):
                 if edge["relation_type"] != "DEPENDS_ON":
                     continue
-                target = uid_map.get(edge["target_uid"], {})
+                target = uid_map.get(edge["target_key"], {})
                 to_qn = target.get("qualified_name", "") or target.get("name", "")
                 depends_on.add((from_qn, to_qn))
 
@@ -312,3 +308,73 @@ class TestFullGraphExport:
 
         src_counts = Counter(n.get("source", "?") for n in uid_map.values())
         assert src_counts == {"doxygen-index": len(uid_map)}
+
+
+class TestArchivedSqliteReference:
+    """The generated sqlite database is archived for external validation.
+
+    The session ``codegraph_graph`` fixture copies the backend database
+    to ``tests/unit_test_data/python_integration.sqlite3`` so external
+    tooling can open the exact database the suite validated.  These
+    tests pin that artifact: it must exist, be a valid sqlite database,
+    and contain every node of the retrieved as-built graph.
+    """
+
+    @pytest.fixture(scope="class")
+    def archived_db(self):
+        import sqlite3
+
+        db_path = (
+            Path(__file__).resolve().parent.parent
+            / "unit_test_data" / "python_integration.sqlite3"
+        )
+        assert db_path.exists(), (
+            f"archived sqlite artifact missing: {db_path}"
+        )
+        con = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+        yield con, db_path
+        con.close()
+
+    def test_artifact_is_valid_database(self, archived_db):
+        """The artifact is a queryable sqlite db with node rows."""
+        con, db_path = archived_db
+        tables = {
+            r[0] for r in con.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )
+        }
+        assert "nodes" in tables, f"nodes table missing in {db_path}"
+        assert "node_tags" in tables
+        n_nodes = con.execute("SELECT count(*) FROM nodes").fetchone()[0]
+        assert n_nodes > 0, "archived database has no nodes"
+        n_as_built = con.execute(
+            "SELECT count(*) FROM node_tags WHERE tag='as-built'"
+        ).fetchone()[0]
+        assert n_as_built > 0, "archived database has no as-built nodes"
+
+    def test_artifact_contains_validated_graph(self, codegraph_graph, archived_db):
+        """Every node uid the suite validated exists in the archived db.
+
+        The retrieved as-built LayerGraph (serialized to
+        ``doxygen_index_one_hop.json``) must be exactly reproducible
+        from the archived database — any uid missing from the archive
+        means external consumers cannot trust it.
+        """
+        serialized, uid_map = codegraph_graph
+        con, _ = archived_db
+
+        uids = {n["canonical_key"] for n in uid_map.values()}
+        assert uids
+
+        placeholders = ",".join("?" * len(uids))
+        archived = {
+            row[0] for row in con.execute(
+                f"SELECT canonical_key FROM nodes WHERE canonical_key IN ({placeholders})",
+                list(uids),
+            )
+        }
+        missing = uids - archived
+        assert not missing, (
+            f"{len(missing)} of {len(uids)} validated node uids missing "
+            f"from archived sqlite database: {sorted(missing)[:5]}"
+        )

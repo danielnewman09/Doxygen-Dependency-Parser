@@ -252,9 +252,9 @@ class TestCSVExportRoundTrip:
         n2, _ = export_csv(parsed_result, source="cpp_sqlite_minimal", output_dir=dir2)
 
         with open(n1, newline="", encoding="utf-8") as f:
-            uids1 = [r["uid:ID"] for r in csv.DictReader(f)]
+            uids1 = [r["canonical_key:ID"] for r in csv.DictReader(f)]
         with open(n2, newline="", encoding="utf-8") as f:
-            uids2 = [r["uid:ID"] for r in csv.DictReader(f)]
+            uids2 = [r["canonical_key:ID"] for r in csv.DictReader(f)]
 
         assert uids1 == uids2
 
@@ -345,5 +345,4 @@ def _find_class(result, qualified_name: str):
 def _methods_of(result, cls):
     refid = cls.refid if cls else ""
     return [m for m in result.methods if m.compound_refid == refid]
-
 

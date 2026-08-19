@@ -332,6 +332,6 @@ def test_uid_determinism_across_parses(tmp_path):
     xml_dir2 = _write_xml(tmp_path / "b", src2)
     r2 = parse_xml_dir(xml_dir2, source="probe", layer="codebase")
 
-    qns1 = {t.qualified_name: t._compute_uid() for t in r1.tests}
-    qns2 = {t.qualified_name: t._compute_uid() for t in r2.tests}
+    qns1 = {t.qualified_name: t.canonical_key for t in r1.tests}
+    qns2 = {t.qualified_name: t.canonical_key for t in r2.tests}
     assert qns1 == qns2

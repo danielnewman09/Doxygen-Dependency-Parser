@@ -220,7 +220,7 @@ class TestAssertionAndStepNodes:
         missing = [
             c.get("qualified_name") for n in test_nodes
             for c in n.get("composes", [])
-            if c.get("uid") not in uid_map
+            if c.get("canonical_key") not in uid_map
         ]
         assert not missing, f"composed children missing from uid_map: {missing[:5]}"
 
@@ -238,13 +238,13 @@ class TestVerificationEdges:
             f"expected >= 100 VERIFIES edges, got {len(verifies)}"
         )
 
-        unresolved = [e for e in verifies if e["target_uid"] not in uid_map]
+        unresolved = [e for e in verifies if e["target_key"] not in uid_map]
         assert not unresolved, (
             f"{len(unresolved)} VERIFIES edges do not resolve to a node: "
             f"{unresolved[:5]}"
         )
 
-        verified = {e["target_uid"] for e in verifies}
+        verified = {e["target_key"] for e in verifies}
         verified_names = {
             uid_map[u].get("name", "") for u in verified
         }
@@ -264,7 +264,7 @@ class TestVerificationEdges:
             f"expected >= 100 CALLEE edges, got {len(callees)}"
         )
 
-        unresolved = [e for e in callees if e["target_uid"] not in uid_map]
+        unresolved = [e for e in callees if e["target_key"] not in uid_map]
         assert not unresolved, (
             f"{len(unresolved)} CALLEE edges do not resolve to a node: "
             f"{unresolved[:5]}"
@@ -282,7 +282,7 @@ class TestVerificationEdges:
         by_kind = _tests_by_kind(uid_map)
 
         targets = {
-            e["target_uid"]
+            e["target_key"]
             for n in by_kind.get("test", [])
             for e in n.get("edges", [])
             if e["relation_type"] == "VERIFIES"

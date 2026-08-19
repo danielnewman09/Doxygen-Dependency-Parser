@@ -16,6 +16,11 @@ INVOKES edges, and structured parameters.
 
 Requirements: the ``doxygen-index`` CLI on PATH (no doxygen, no Conan —
 the Python parser needs only ``ast``).
+
+The generated backend database (sqlite backend only) is archived to
+``tests/unit_test_data/python_integration.sqlite3`` alongside the
+serialized JSON so external tooling can validate against the exact
+database the suite exercised.
 """
 
 from __future__ import annotations
@@ -35,9 +40,9 @@ _PARENT_TESTS = _HERE.parent
 _REPO_ROOT = _PARENT_TESTS.parent
 _CODEGRAPH_OUTPUT = _PARENT_TESTS / "codegraph_output"
 
-#: Gitignored directory for generated test data (serialized JSON, …).
-#: Kept out of git — the serialization is large and fully reproducible
-#: from the fixture sources.
+#: Gitignored directory for generated test data (serialized JSON,
+#: archived sqlite database, …).  Kept out of git — the artifacts are
+#: large and fully reproducible from the fixture sources.
 _UNIT_TEST_DATA = _PARENT_TESTS / "unit_test_data"
 
 #: Source label the ingest assigns to the project's own code.  Derived
@@ -56,6 +61,38 @@ _TEST_PASSWORD = "doxygen-index-test"
 # ---------------------------------------------------------------------------
 
 
+def _refresh_fixture_report(
+    json_path: Path,
+    db_path: Path,
+    out_path: Path,
+    title: str,
+    test_cpp: Path | None = None,
+) -> None:
+    """Regenerate the markdown fixture report from the archived artifacts.
+
+    Loads ``scripts/export_fixture_report.py`` (repo-relative) and runs
+    it against the just-archived JSON + sqlite db.  Best-effort: a
+    failure prints a warning rather than failing the suite.
+    """
+    try:
+        import importlib.util
+
+        scripts_dir = _PARENT_TESTS.parent / "scripts"
+        spec = importlib.util.spec_from_file_location(
+            "export_fixture_report", scripts_dir / "export_fixture_report.py"
+        )
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        report = mod.build_report(
+            json_path, db_path, test_cpp, title,
+        )
+        out_path.write_text(report + "\n", encoding="utf-8")
+        print(f"  [report] {out_path.name} refreshed "
+              f"({out_path.stat().st_size:,} bytes)")
+    except Exception as e:  # noqa: BLE001 — best-effort artifact refresh
+        print(f"  [report] fixture report not refreshed: {e}")
+
+
 def _cli_command() -> list[str]:
     """Return the command that runs the ``doxygen-index`` CLI.
 
@@ -67,6 +104,34 @@ def _cli_command() -> list[str]:
     if exe:
         return [exe]
     return [sys.executable, "-m", "doxygen_index.cli"]
+
+
+def _archive_sqlite(source_path: Path, dest_path: Path) -> None:
+    """Snapshot a live WAL-mode sqlite database into *dest_path*.
+
+    The backend keeps the database open in WAL journal mode, so a plain
+    ``shutil.copy2`` races the ``-wal`` sidecar and can silently drop
+    committed-but-uncheckpointed frames.  SQLite's online backup API
+    merges WAL content into the snapshot.  The destination is switched
+    to rollback-journal mode so the archived file is fully
+    self-contained (no ``-wal``/``-shm`` sidecars for external tools).
+    """
+    import sqlite3
+
+    for sidecar in (dest_path,
+                    Path(str(dest_path) + "-wal"),
+                    Path(str(dest_path) + "-shm")):
+        sidecar.unlink(missing_ok=True)
+    src = sqlite3.connect(str(source_path), timeout=30)
+    try:
+        dst = sqlite3.connect(str(dest_path))
+        try:
+            src.backup(dst)
+            dst.execute("PRAGMA journal_mode=DELETE")
+        finally:
+            dst.close()
+    finally:
+        src.close()
 
 
 def _wait_for_neo4j(
@@ -98,7 +163,7 @@ def _flat_uid_map(serialized: list[dict]) -> dict[str, dict]:
     stack = list(serialized)
     while stack:
         node = stack.pop()
-        uid_map[node["uid"]] = node
+        uid_map[node["canonical_key"]] = node
         stack.extend(node.get("composes", []))
     return uid_map
 
@@ -201,7 +266,7 @@ def codegraph_graph():
             _cli_command()
             + [
                 "project", str(_REPO_ROOT),
-                "--format", "neo4j",
+                "--format", "sqlite" if backend_name == "sqlite" else "neo4j",
                 "--clear", "--yes",
                 "--output-dir", str(_CODEGRAPH_OUTPUT / "python"),
             ],
@@ -266,16 +331,32 @@ def codegraph_graph():
     )
     _dbg("json written")
 
-    # ── Step 4: Export self-contained HTML ─────────────────
-    from codegraph.export.viz import export_html_from_json
-    _dbg("export_html_from_json...")
-    html_output = _CODEGRAPH_OUTPUT / "doxygen_index_one_hop.html"
-    export_html_from_json(
-        str(json_output), str(html_output), title="doxygen-index as-built"
-    )
-    _dbg("html export done")
+    # ── Step 3b: Save sqlite reference artifact ─────────────
+    # The generated backend database is archived into unit_test_data
+    # alongside the serialized JSON so external tooling can open the
+    # exact database the integration suite validated against.
+    # (sqlite backend only — Neo4j has no single file to archive.)
+    if backend_name == "sqlite":
+        _dbg("archiving sqlite reference artifact...")
+        sqlite_output = _UNIT_TEST_DATA / "python_integration.sqlite3"
+        _archive_sqlite(_SQLITE_PATH, sqlite_output)
+        _dbg("sqlite reference artifact archived")
 
-    # ── Step 5: Export PlantUML (full + collapsed + public-only) ───────
+        # ── Step 3c: Refresh the markdown fixture report ─────
+        # Keep the human-readable completeness report in sync with the
+        # archived artifacts.
+        _dbg("refreshing markdown fixture report...")
+        _refresh_fixture_report(
+            json_path=json_output,
+            db_path=sqlite_output,
+            out_path=_UNIT_TEST_DATA / "python_fixture_report.md",
+            title="doxygen-index (dogfood) as-built fixture report",
+        )
+
+    # HTML export was removed from codegraph.  JSON remains the interchange
+    # artifact; PlantUML is the supported visualization export.
+
+    # ── Step 4: Export PlantUML (full + collapsed + public-only) ───────
     from codegraph.export.plantuml import export_plantuml, GraphView
     _dbg("export_plantuml full...")
     puml_text = export_plantuml(graph, fields="all")
@@ -326,7 +407,8 @@ def codegraph_graph():
     uid_map = _flat_uid_map(serialized)
     print(f"\n  LayerGraph as-built: {len(uid_map)} nodes")
     print(f"  JSON: {json_output} ({json_output.stat().st_size:,} bytes)")
-    print(f"  HTML: {html_output} ({html_output.stat().st_size:,} bytes)")
+    if backend_name == "sqlite":
+        print(f"  SQLite: {sqlite_output} ({sqlite_output.stat().st_size:,} bytes)")
     print(f"  PUML: {puml_output} ({puml_output.stat().st_size:,} bytes)")
     print(f"  SVG:  {'✓' if svg_ok else '✗ (plantuml not found)'}")
     return (serialized, uid_map)

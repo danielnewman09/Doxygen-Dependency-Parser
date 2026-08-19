@@ -13,10 +13,7 @@ and assert the relationship-derivation behaviour — in particular that:
   :class:`FileNode` and :class:`NamespaceNode` share a refid, which
   previously duplicated every import onto the namespace);
 * file-level ``INCLUDES`` edges are still emitted on :class:`FileNode`s;
-* the produced Cytoscape elements have no dangling edges (edges
-  referencing non-existent node IDs make Cytoscape abort the canvas —
-  the empty-graph bug);
-* the produced JSON is consumable by :class:`codegraph.graph.LayerGraph`;
+* * the produced JSON is consumable by :class:`codegraph.graph.LayerGraph`;
 * the fixture is a genuinely runnable calculator, not just AST fodder.
 """
 
@@ -30,7 +27,6 @@ from pathlib import Path
 import pytest
 
 from codegraph.graph import LayerGraph
-from codegraph.export.viz.transform import layer_graph_to_cytoscape
 from doxygen_index.graph_json import result_to_graph_json
 from doxygen_index.parser import parse_python_dir
 
@@ -50,7 +46,7 @@ def _uid_for(graph_data: list[dict], qualified_name: str) -> str:
 
     ``result_to_graph_json`` computes node UIDs from
     ``source + qualified_name`` (and optionally ``argsstring`` for
-    methods), so tests that used to compare ``target_uid`` against
+    methods), so tests that used to compare ``target_key`` against
     human-readable qualified names must now look up the expected UID
     from the graph.
     """
@@ -69,7 +65,7 @@ def _uid_for(graph_data: list[dict], qualified_name: str) -> str:
                 continue
             qn = node.get("qualified_name", "")
             name = node.get("name", "")
-            uid = node.get("uid", "")
+            uid = node.get("canonical_key", "")
             if qn:
                 cache[qn] = uid
             if name and name != qn:
@@ -82,24 +78,23 @@ def _edge_qnames(graph_data: list[dict], node_entry: dict,
                  relation_type: str) -> set[str]:
     """Return the qualified names of edge targets with *relation_type*.
 
-    Resolves ``target_uid`` → ``qualified_name`` via *graph_data* so
+    Resolves ``target_key`` → ``qualified_name`` via *graph_data* so
     tests can compare against human-readable qualified names.  Edges
-    whose ``target_uid`` is not found in the graph (e.g. external
-    includes) fall back to the raw ``target_uid`` value.
+    External references fall back to their raw ``target_ref`` value.
     """
-    uid_map = {n["uid"]: n for n in graph_data}
+    uid_map = {n["canonical_key"]: n for n in graph_data}
     result: set[str] = set()
     for e in node_entry.get("edges", []):
         if e["relation_type"] != relation_type:
             continue
-        target = uid_map.get(e["target_uid"])
+        target = uid_map.get(e.get("target_key", ""))
         if target is not None:
             qn = target.get("qualified_name", "") or target.get("name", "")
             if qn:
                 result.add(qn)
         else:
-            # External reference (e.g. enum.Enum) — use raw target_uid.
-            result.add(e["target_uid"])
+            # External reference (e.g. enum.Enum) — use raw target_ref.
+            result.add(e.get("target_ref", e.get("target_key", "")))
     return result
 
 
@@ -148,12 +143,6 @@ def graph_data(parsed):
     """Convert the parsed result to LayerGraph-compatible JSON"""
     return result_to_graph_json(parsed, source="test")
 
-
-@pytest.fixture(scope="module")
-def cytoscape_elements(graph_data):
-    """Deserialize to a LayerGraph and transform to Cytoscape elements"""
-    graph = LayerGraph.deserialize(graph_data)
-    return layer_graph_to_cytoscape(graph)
 
 
 # ---------------------------------------------------------------------------
@@ -461,13 +450,6 @@ class TestInheritance:
         entry = _entry_by_qname(graph_data, "samplepkg.verify.Verifier")
         assert _edges(entry, "INHERITS_FROM") == []
 
-    def test_inherits_from_edges_have_no_dangling_targets(self, cytoscape_elements):
-        ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
-        inh = [e for e in cytoscape_elements["edges"] if e["data"]["label"] == "INHERITS_FROM"]
-        assert inh, "expected at least one INHERITS_FROM edge in the graph"
-        for e in inh:
-            assert e["data"]["source"] in ids and e["data"]["target"] in ids
-
 
 class TestTypeDependencies:
     """Functions and methods get ``DEPENDS_ON`` edges to types they use.
@@ -503,14 +485,6 @@ class TestTypeDependencies:
         all_deps = _edges(entry, "DEPENDS_ON")
         assert len(all_deps) == 1  # only Operator, not float
 
-    def test_evaluator_depends_on_operator_via_method_collapse(self, cytoscape_elements):
-        # Evaluator.step(op: Operator) → method is collapsed into Evaluator's
-        # UML label, so the DEPENDS_ON edge shows from the class.
-        edges = [e for e in cytoscape_elements["edges"] if e["data"]["label"] == "DEPENDS_ON"]
-        class_op = [e for e in edges
-                     if e["data"]["source"] == "samplepkg.backend.Evaluator"
-                     and e["data"]["target"] == "samplepkg.operations.Operator"]
-        assert class_op, "Evaluator should have DEPENDS_ON → Operator via collapsed method"
 
 class TestFileIncludes:
     """File-level imports remain ``INCLUDES`` on FileNodes only"""
@@ -551,154 +525,6 @@ class TestFileIncludes:
         targets = _edge_qnames(graph_data, operations, "INCLUDES")
         # External import; need not resolve to a node in the graph.
         assert "enum.Enum" in targets
-
-
-# ---------------------------------------------------------------------------
-# Rendering — no dangling edges (the empty-graph bug must not regress)
-# ---------------------------------------------------------------------------
-
-
-class TestRendering:
-    """The Cytoscape elements must have no dangling edges.
-
-    Cytoscape aborts the whole canvas (empty graph) if any edge references
-    a node ID that doesn't exist.  This regressed when namespace-composed
-    free functions were dropped by the viz transform; the transform fix
-    emits them as nodes so edges resolve.
-   """
-
-    def test_free_functions_are_emitted_as_nodes(self, cytoscape_elements):
-        ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
-        assert "samplepkg.operations.apply_operator" in ids
-        assert "samplepkg.verify.assert_close" in ids
-
-    def test_no_dangling_edges(self, cytoscape_elements):
-        ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
-        # Test-related edge types (VERIFIES, CALLEE, LEFT_OPERAND, RIGHT_OPERAND)
-        # may point to MethodNodes/AttributeNodes that are collapsed into their
-        # parent compound's UML label, or to excluded node types
-        # (AssertionNode, TestStepNode).  These are data-correct edges but the
-        # Cytoscape transform hasn't been updated to resolve their targets.
-        _TEST_EDGE_TYPES = {"VERIFIES", "CALLEE", "LEFT_OPERAND", "RIGHT_OPERAND",
-                           "OF_TYPE", "CHECKED_BY", "DEFINED_IN", "COMPOSES",
-                           "INCLUDES"}
-        dangling = [
-            (e["data"]["source"], e["data"]["target"])
-            for e in cytoscape_elements["edges"]
-            if e["data"]["label"] not in _TEST_EDGE_TYPES
-            and (e["data"]["source"] not in ids or e["data"]["target"] not in ids)
-        ]
-        assert dangling == [], f"edges reference non-existent nodes: {dangling}"
-
-    def test_namespaces_are_compound_parents_of_their_children(self, cytoscape_elements):
-        by_id = {n["data"]["id"]: n["data"] for n in cytoscape_elements["nodes"]}
-        # apply_operator is composed by samplepkg.operations -> parent set.
-        assert by_id["samplepkg.operations.apply_operator"].get("parent") == "samplepkg.operations"
-        # Evaluator is composed by samplepkg.backend -> parent set.
-        assert by_id["samplepkg.backend.Evaluator"].get("parent") == "samplepkg.backend"
-        # A submodule namespace is parented under the package.
-        assert by_id["samplepkg.backend"].get("parent") == "samplepkg"
-
-    def test_file_nodes_excluded_from_graph(self, cytoscape_elements):
-        """FileNodes are not drawn; 'defined in' is shown in the detail panel"""
-        ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
-        file_like = {i for i in ids if i.endswith(".py")}
-        assert file_like == set(), f"file nodes present in graph: {file_like}"
-        kinds = {n["data"].get("kind") for n in cytoscape_elements["nodes"]}
-        assert "file" not in kinds
-
-    def test_namespace_imports_includes_edges_present(self, cytoscape_elements):
-        """Namespace INCLUDES (imports) show as edges from namespace to compound"""
-        inc_edges = [e for e in cytoscape_elements["edges"] if e["data"]["label"] == "INCLUDES"]
-        assert len(inc_edges) >= 5
-        # frontend namespace imports Operator
-        frontend_op = [e for e in inc_edges
-                       if e["data"]["source"] == "samplepkg.frontend"
-                       and e["data"]["target"] == "samplepkg.operations.Operator"]
-        assert frontend_op, "frontend namespace should INCLUDES Operator"
-
-    def test_file_nodes_excluded_from_graph(self, cytoscape_elements):
-        """FileNodes are not drawn; 'defined in' is shown in the detail panel"""
-        ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
-        file_like = {i for i in ids if i.endswith(".py")}
-        assert file_like == set(), f"file nodes present in graph: {file_like}"
-        kinds = {n["data"].get("kind") for n in cytoscape_elements["nodes"]}
-        assert "file" not in kinds
-
-    def test_nodes_carry_file_path_for_detail_panel(self, cytoscape_elements):
-        """Compound/member nodes carry file_path for the 'Defined in' panel"""
-        by_id = {n["data"]["id"]: n["data"] for n in cytoscape_elements["nodes"]}
-        ev = by_id["samplepkg.backend.Evaluator"]
-        assert ev.get("file_path", "").endswith("backend.py")
-        assert by_id["samplepkg.operations.apply_operator"].get("file_path", "").endswith("operations.py")
-        # Namespaces are not tied to a single file -> no file_path.
-        assert "file_path" not in by_id["samplepkg"]
-        assert "file_path" not in by_id["samplepkg.backend"]
-
-    def test_function_nodes_have_uml_label_with_parameters(self, cytoscape_elements):
-        """Free functions render as UML boxes with parameter line items"""
-        by_id = {n["data"]["id"]: n["data"] for n in cytoscape_elements["nodes"]}
-        apply_op = by_id["samplepkg.operations.apply_operator"]
-        assert apply_op["has_members"] == "true"
-        label = apply_op["html_label"]
-        assert "apply_operator" in label
-        assert "\u00abfunction\u00bb" in label  # «function» stereotype
-        assert "op" in label and "Operator" in label
-        assert "left" in label and "float" in label
-        assert "right" in label and "float" in label
-        assert "\u2192" in label  # → return type arrow
-
-        assert_close = by_id["samplepkg.verify.assert_close"]
-        label2 = assert_close["html_label"]
-        assert "assert_close" in label2
-        assert "VerificationLevel.STRICT" in label2  # default value
-
-    def test_function_labels_enforce_max_width(self, cytoscape_elements):
-        """Function labels use max-width:440px and white-space:normal for wrapping"""
-        by_id = {n["data"]["id"]: n["data"] for n in cytoscape_elements["nodes"]}
-        label = by_id["samplepkg.long_signatures.process_data"]["html_label"]
-        assert "max-width:440px" in label
-        assert "white-space:normal" in label
-
-    def test_class_labels_enforce_max_width(self, cytoscape_elements):
-        """Class labels also use max-width for long member signatures"""
-        by_id = {n["data"]["id"]: n["data"] for n in cytoscape_elements["nodes"]}
-        rs = by_id.get("samplepkg.long_signatures.ReportingService")
-        if rs:
-            label = rs["html_label"]
-            assert "max-width:440px" in label
-            assert "white-space:normal" in label
-
-    def test_long_signature_module_present(self, cytoscape_elements):
-        """The long_signatures module adds nodes to exercise wrapping"""
-        ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
-        assert "samplepkg.long_signatures.process_data" in ids
-        assert "samplepkg.long_signatures.ReportingService" in ids
-
-    def test_class_members_show_visibility_prefix(self, cytoscape_elements):
-        """Public methods/attributes get ``+``, private get ``-`` in UML labels"""
-        by_id = {n["data"]["id"]: n["data"] for n in cytoscape_elements["nodes"]}
-        ev = by_id["samplepkg.backend.Evaluator"]
-        label = ev["html_label"]
-        # Public members have green '+' prefix
-        assert '<span style="color:#68d391">+</span>' in label
-        assert '__init__' in label
-        assert 'step' in label
-        # Private members would be <span style="color:#fc8181">-</span>
-        # but the fixture has no _-prefixed names.
-
-    def test_parameter_nodes_excluded_from_graph(self, cytoscape_elements):
-        """ParameterNodes are not drawn; params appear in labels instead"""
-        ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
-        # Parameter names that were previously stray root nodes.
-        stray = {"self", "op", "operand", "left", "right", "initial", "cls",
-                  "message", "expression", "text", "expected", "actual", "level"}
-        assert ids.isdisjoint(stray), f"stray parameter nodes present: {ids & stray}"
-
-
-# ---------------------------------------------------------------------------
-# Pytest test-node extraction — TestNode / AssertionNode / TestStepNode
-# ---------------------------------------------------------------------------
 
 
 class TestTestNodeInventory:
@@ -834,27 +660,6 @@ class TestVerifiesRelationships:
             "samplepkg.backend.Evaluator.step",
         } <= targets
 
-    def test_verifies_class_targets_resolve_in_cytoscape(self, cytoscape_elements):
-        """VERIFIES edges targeting ClassNodes should point to existing nodes.
-
-        MethodNode targets may be collapsed into their parent compound's
-        UML label, so only ClassNode-level VERIFIES targets are checked.
-       """
-        ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
-        verifies_edges = [
-            e for e in cytoscape_elements["edges"]
-            if e["data"]["label"] == "VERIFIES"
-        ]
-        assert verifies_edges, "expected at least one VERIFIES edge"
-        class_targets = [
-            e for e in verifies_edges
-            if e["data"].get("target_type") == "ClassNode"
-        ]
-        for e in class_targets:
-            assert e["data"]["target"] in ids, (
-                f"VERIFIES target {e['data']['target']} not in graph nodes"
-            )
-
 
 class TestAssertionOperands:
     """AssertionNodes have LEFT_OPERAND and RIGHT_OPERAND edges"""
@@ -869,8 +674,8 @@ class TestAssertionOperands:
         right = _edges(assertion, "RIGHT_OPERAND")
         assert len(left) == 1
         assert len(right) == 1
-        assert left[0]["target_uid"] == _uid_for(graph_data, "samplepkg.backend.Evaluator.current")
-        assert right[0]["target_uid"] == _uid_for(graph_data, "literal::15.0")
+        assert left[0]["target_key"] == _uid_for(graph_data, "samplepkg.backend.Evaluator.current")
+        assert right[0]["target_key"] == _uid_for(graph_data, "literal::15.0")
 
     def test_truthy_assertion_falls_back_to_full_text(self, graph_data):
         """Truthy assertions have no RIGHT_OPERAND, so they fall back to
@@ -894,8 +699,8 @@ class TestAssertionOperands:
         assert assertion["operator"] == "=="
         left = _edges(assertion, "LEFT_OPERAND")
         right = _edges(assertion, "RIGHT_OPERAND")
-        assert left[0]["target_uid"] == _uid_for(graph_data, "samplepkg.backend.Evaluator.current")
-        assert right[0]["target_uid"] == _uid_for(graph_data, "literal::13.0")
+        assert left[0]["target_key"] == _uid_for(graph_data, "samplepkg.backend.Evaluator.current")
+        assert right[0]["target_key"] == _uid_for(graph_data, "literal::13.0")
 
     def test_all_assertions_have_phase_post(self, graph_data):
         for entry in graph_data:
@@ -1003,8 +808,8 @@ class TestTestFixtureInstances:
                     of_type_edges.append(edge)
         assert len(of_type_edges) >= 5
         # At least one should point to Evaluator
-        eval_targets = {e["target_uid"] for e in of_type_edges
-                        if e["target_uid"] == _uid_for(graph_data, "samplepkg.backend.Evaluator")}
+        eval_targets = {e.get("target_key", "") for e in of_type_edges
+                        if e.get("target_key", "") == _uid_for(graph_data, "samplepkg.backend.Evaluator")}
         assert len(eval_targets) >= 1
 
     def test_type_aware_operand_resolution(self, parsed):
@@ -1099,7 +904,7 @@ class TestTestNamespaceComposition:
     def test_namespace_composes_four_test_functions(self, graph_data):
         ns = _entry_by_qname(graph_data, "samplepkg.test_calculator")
         test_children = {
-            e["target_uid"] for e in _edges(ns, "COMPOSES")
+            e.get("target_key", "") for e in _edges(ns, "COMPOSES")
             if e["target_type"] == "TestNode"
         }
         assert test_children == {
@@ -1115,7 +920,7 @@ class TestTestNamespaceComposition:
         four top-level test functions are"""
         ns = _entry_by_qname(graph_data, "samplepkg.test_calculator")
         test_children = {
-            e["target_uid"] for e in _edges(ns, "COMPOSES")
+            e.get("target_key", "") for e in _edges(ns, "COMPOSES")
             if e["target_type"] == "TestNode"
         }
         assert _uid_for(graph_data, "samplepkg.test_calculator.TestCalculatorPipeline.test_full_pipeline") not in test_children
@@ -1161,53 +966,6 @@ class TestTestLayerGraphConsumable:
         verifies_refs = [r for r in test_entry.references if r[0] == "VERIFIES"]
         assert verifies_refs, "expected VERIFIES references on test_evaluator_step"
 
-
-class TestTestRendering:
-    """Test nodes render in Cytoscape without breaking the graph"""
-
-    def test_test_nodes_appear_in_cytoscape(self, cytoscape_elements):
-        ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
-        assert "samplepkg.test_calculator.test_evaluator_step" in ids
-        assert "samplepkg.test_calculator.test_parser_parse" in ids
-
-    def test_verifies_edges_in_cytoscape(self, cytoscape_elements):
-        verifies = [
-            e for e in cytoscape_elements["edges"]
-            if e["data"]["label"] == "VERIFIES"
-        ]
-        assert len(verifies) >= 5
-        # At least one VERIFIES edge should point to Evaluator
-        # (collapsed leaf members like .step redirect to their parent)
-        step_verifies = [
-            e for e in verifies
-            if e["data"]["target"] == "samplepkg.backend.Evaluator"
-        ]
-        assert step_verifies, "expected VERIFIES → Evaluator"
-
-    def test_test_namespace_in_cytoscape(self, cytoscape_elements):
-        ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
-        assert "samplepkg.test_calculator" in ids
-
-    def test_no_dangling_non_test_edges(self, cytoscape_elements):
-        """Non-test edges must not reference non-existent nodes.
-
-        Test-related edge types (VERIFIES, CALLEE, LEFT_OPERAND,
-        RIGHT_OPERAND) may reference MethodNodes/AttributeNodes collapsed
-        into parent UML labels, or node types excluded from the Cytoscape
-        canvas (AssertionNode, TestStepNode, LiteralNode).  These are
-        data-correct edges that the Cytoscape transform will handle once
-        it is updated to support test-node visualization.
-       """
-        ids = {n["data"]["id"] for n in cytoscape_elements["nodes"]}
-        _test_edge_types = {"VERIFIES", "CALLEE", "LEFT_OPERAND", "RIGHT_OPERAND",
-                           "OF_TYPE", "CHECKED_BY", "DEFINED_IN", "INCLUDES"}
-        dangling = [
-            (e["data"]["source"], e["data"]["target"])
-            for e in cytoscape_elements["edges"]
-            if e["data"]["label"] not in _test_edge_types
-            and (e["data"]["source"] not in ids or e["data"]["target"] not in ids)
-        ]
-        assert dangling == [], f"non-test edges reference non-existent nodes: {dangling}"
 
 
 class TestCalculatorTestSmoke:

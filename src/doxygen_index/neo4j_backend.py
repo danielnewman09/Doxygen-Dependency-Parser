@@ -127,48 +127,7 @@ def clear_all() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Deterministic uid & merge helpers
-# ---------------------------------------------------------------------------
-
-def _ensure_deterministic_uid(node) -> None:
-    """Set a deterministic ``uid`` on *node* in place via the codegraph
-    canonical ``compute_uid`` function.
-
-    Computes ``compute_uid(source, *identity_values)`` where ``source``
-    is the project label and ``identity_values`` are the node's
-    ``_identity_fields`` values (with ``argsstring`` normalised via
-    :func:`codegraph.uid.normalize_argsstring`).
-
-    The uid is:
-    - deterministic: same source + same identity → same uid every time
-    - source-scoped: same qualified_name in two sources → different uid
-    - consistent with ``codegraph.uid.compute_uid(source, *fields)``
-    """
-    from codegraph.uid import compute_uid, normalize_argsstring
-
-    identity_fields = list(getattr(node, "_identity_fields", ()) or ())
-    identity_values = []
-    for field in identity_fields:
-        val = getattr(node, field, "")
-        val_str = str(val) if val is not None else ""
-        if field == "argsstring":
-            val_str = normalize_argsstring(val_str)
-        identity_values.append(val_str)
-    source = getattr(node, "source", "")
-    node.uid = compute_uid(str(source) if source else "", *identity_values)
-
-
-def _merge_by_keys(node) -> dict:
-    """Return ``merge_by`` dict for ``create_or_update``.
-
-    MERGE on ``uid`` — the deterministic hash of source + identity fields
-    computed by ``_ensure_deterministic_uid``.  Same uid as
-    ``CodeGraphNode._compute_uid`` produces.
-    """
-    return {"keys": ["uid"]}
-
-
-# ---------------------------------------------------------------------------
+# Canonical identity: keys are computed by result_to_graph_json
 # Enriched description preservation
 # ---------------------------------------------------------------------------
 
@@ -437,9 +396,9 @@ def delete_stale_nodes(
             stale = ident not in live_qualified_names
         if not stale:
             continue
-        uid = node._uid_value()
-        if uid:
-            stale_uids.append(uid)
+        key = node.canonical_key or ""
+        if key:
+            stale_uids.append(key)
             deleted_counts[ntype] = deleted_counts.get(ntype, 0) + 1
 
     if stale_uids:

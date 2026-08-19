@@ -38,7 +38,7 @@ def _params(uid_map: dict, fn: dict) -> list[dict]:
         e for e in fn.get("edges", [])
         if e["relation_type"] == "HAS_PARAMETER"
     ]
-    params = [uid_map[e["target_uid"]] for e in param_refs if e["target_uid"] in uid_map]
+    params = [uid_map[e["target_key"]] for e in param_refs if e["target_key"] in uid_map]
     return sorted(params, key=lambda p: p.get("position", 0))
 
 
@@ -79,9 +79,10 @@ class TestParseXmlDirParameters:
         assert fn is not None, "parse_xml_dir not found"
 
         params = _params(uid_map, fn)
-        assert len(params) == 5, f"expected 5 params, got {len(params)}"
+        assert len(params) == 6, f"expected 6 params, got {len(params)}"
 
-        xml_dir, source, progress_interval, layer, language_parser = params
+        (xml_dir, source, progress_interval, layer, language_parser,
+         test_source_dirs) = params
         assert xml_dir["name"] == "xml_dir"
         assert xml_dir["type"] == "Path"
         assert xml_dir["position"] == 0
@@ -105,6 +106,11 @@ class TestParseXmlDirParameters:
         assert language_parser["type"] == "LanguageParser | None"
         assert language_parser["default_value"] == "None"
         assert language_parser["position"] == 4
+
+        assert test_source_dirs["name"] == "test_source_dirs"
+        assert test_source_dirs["type"] == "list[Path] | None"
+        assert test_source_dirs["default_value"] == "None"
+        assert test_source_dirs["position"] == 5
 
     def test_parameter_types_consistent_with_argsstring(self, codegraph_graph):
         """Correct type+signature: every structured param type and name

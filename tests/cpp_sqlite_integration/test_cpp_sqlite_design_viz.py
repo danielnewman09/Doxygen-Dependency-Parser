@@ -30,6 +30,21 @@ _CODEGRAPH_OUTPUT = _HERE.parent / "codegraph_output"
 _DESIGN_JSON = _HERE.parent / "data" / "design_layergraph.json"
 
 
+def _stamp_imported_graph_keys(graph):
+    """Give PlantUML-imported nodes canonical keys for the round-trip."""
+    from urllib.parse import quote
+
+    for entry in graph._all_entries():
+        node = entry.node
+        qname = getattr(node, "qualified_name", "") or getattr(node, "name", "")
+        category = type(node).__name__.removesuffix("Node").lower()
+        node.canonical_key = (
+            "cg:v1:repository:design%2Fdesign:"
+            f"{category}:qualified_name={quote(qname, safe='')}"
+        )
+    return graph
+
+
 @pytest.fixture(scope="session")
 def _ensure_backend():
     """Ensure the ACTIVE backend is configured (session-scoped).
@@ -251,9 +266,8 @@ class TestDesignLayerVisualization:
             assert any(method in L for L in design_lines), (
                 f"Missing MigrationManager method: {method}"
             )
-        # The constructor's argsstring is the full declaration
-        # ``MigrationManager(Database &db)``, so the rendered line is
-        # the method name prepended to it.
+        # The canonical golden export preserves the constructor's original
+        # declaration text.
         assert any(
             L.lstrip().startswith("+MigrationManager")
             and "Database &db" in L
@@ -449,7 +463,9 @@ class TestDesignLayerRoundTrip:
         puml1 = export_plantuml(design_graph, fields="all")
 
         # Import → re-export
-        graph2 = import_plantuml(puml1, tags=frozenset({"design"}))
+        graph2 = _stamp_imported_graph_keys(
+            import_plantuml(puml1, tags=frozenset({"design"}))
+        )
         return export_plantuml(graph2, fields="all")
 
     def test_roundtrip_has_startuml(self, design_roundtrip_puml):

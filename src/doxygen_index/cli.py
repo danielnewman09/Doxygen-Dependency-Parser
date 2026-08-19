@@ -253,12 +253,6 @@ def cmd_project(args: argparse.Namespace) -> None:
         json_write(result, json_path, source=source)
         print(f"Output: {json_path}")
 
-    # ------------------------------------------------------------------
-    # HTML graph visualization (if [codegraph-html] is configured)
-    # ------------------------------------------------------------------
-    if config.html_config and args.format == "json":
-        _generate_html(result, config, source)
-
     # Summary
     print()
     print(f"  Classes:      {len(result.classes)}")
@@ -389,78 +383,6 @@ def _parse_cpp_project(
         test_source_dirs=test_paths,
     )
     return result, xml_dir
-
-
-def _generate_html(
-    result: ParseResult,
-    config: ProjectConfig,
-    source: str,
-) -> None:
-    """Generate an interactive HTML graph from a ParseResult.
-
-    Uses codegraph's ``export_html_from_json`` on the backend.  Writes
-    both a LayerGraph-compatible JSON and a self-contained HTML file
-    to the ``[codegraph-html]`` output directory.
-    """
-    from doxygen_index.graph_json import write_graph_json
-    from codegraph.export.viz import export_html_from_json
-
-    html_cfg = config.html_config
-    html_cfg.output_dir.mkdir(parents=True, exist_ok=True)
-
-    # 1. Write LayerGraph-compatible JSON
-    graph_json_path = html_cfg.output_dir / f"{config.name}.json"
-    print(f"\n--- Graph visualization ---")
-    write_graph_json(result, graph_json_path, source=source)
-    print(f"  Graph JSON: {graph_json_path}")
-
-    # 2. Render HTML
-    html_path = html_cfg.output_dir / f"{config.name}.html"
-    export_html_from_json(
-        graph_json_path, html_path,
-        title=config.name,
-        size=html_cfg.size,
-    )
-    print(f"  HTML:       {html_path}")
-
-
-def cmd_html(args: argparse.Namespace) -> None:
-    """Generate an interactive HTML graph from existing parse output.
-
-    Reads a LayerGraph-compatible JSON file (produced by ``doxygen-index``
-    when ``[codegraph-html]`` is configured) and renders it as a
-    self-contained HTML file using codegraph's visualization engine.
-    """
-    from doxygen_index.project import load_config
-    from codegraph.export.viz import export_html_from_json
-
-    project_dir = Path(args.project_dir).resolve()
-    config, _ = load_config(project_dir)
-
-    if not config.html_config:
-        print("Error: no [codegraph-html] section in .doxygen-index.toml",
-              file=sys.stderr)
-        sys.exit(1)
-
-    html_cfg = config.html_config
-    json_path = html_cfg.output_dir / f"{config.name}.json"
-
-    if not json_path.exists():
-        print(f"Error: graph JSON not found: {json_path}", file=sys.stderr)
-        print("  Run 'doxygen-index' first to generate the JSON.",
-              file=sys.stderr)
-        sys.exit(1)
-
-    html_path = html_cfg.output_dir / f"{config.name}.html"
-    size = args.size or html_cfg.size
-
-    print(f"Generating HTML from {json_path}...")
-    result_path = export_html_from_json(
-        json_path, html_path,
-        title=config.name,
-        size=size,
-    )
-    print(f"HTML written to {result_path}")
 
 
 def cmd_list_deps(args: argparse.Namespace) -> None:
@@ -1078,15 +1000,6 @@ def main() -> None:
                          "you can author descriptions by hand without enriching. "
                          "Fill the slot by adding '# ...' lines beneath the tag.")
     sp.set_defaults(func=cmd_project)
-
-    # html — generate HTML graph from existing parse output
-    sp = subparsers.add_parser("html",
-                               help="Generate HTML graph visualization from existing JSON")
-    sp.add_argument("project_dir", nargs="?", default=".",
-                    help="Path to project directory containing .doxygen-index.toml (default: .)")
-    sp.add_argument("--size", choices=["large", "small"], default=None,
-                    help="Layout size (default: from config or 'large')")
-    sp.set_defaults(func=cmd_html)
 
     # list-deps
     sp = subparsers.add_parser("list-deps", help="List discovered Conan dependencies")

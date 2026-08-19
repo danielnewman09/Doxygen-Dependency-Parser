@@ -145,7 +145,7 @@ def _flat_uid_map(serialized: list[dict]) -> dict[str, dict]:
     stack = list(serialized)
     while stack:
         node = stack.pop()
-        uid_map[node["uid"]] = node
+        uid_map[node["canonical_key"]] = node
         stack.extend(node.get("composes", []))
     return uid_map
 
@@ -352,16 +352,7 @@ def codegraph_graph():
             title="cpp-sqlite as-built fixture report",
         )
 
-    # ── Step 4: Export self-contained HTML ─────────────────
-    from codegraph.export.viz import export_html_from_json
-    _dbg("export_html_from_json...")
-    html_output = _CODEGRAPH_OUTPUT / "cpp_sqlite_one_hop.html"
-    export_html_from_json(
-        str(json_output), str(html_output), title="cpp-sqlite as-built"
-    )
-    _dbg("html export done")
-
-    # ── Step 5: Export PlantUML (full + collapsed + public-only) ───────
+    # ── Step 4: Export PlantUML (full + collapsed + public-only) ───────
     from codegraph.export.plantuml import export_plantuml, GraphView
     _dbg("export_plantuml full...")
     puml_text = export_plantuml(graph, fields="all")
@@ -416,7 +407,6 @@ def codegraph_graph():
     print(f"  JSON: {json_output} ({json_output.stat().st_size:,} bytes)")
     if backend_name == "sqlite":
         print(f"  SQLite: {sqlite_output} ({sqlite_output.stat().st_size:,} bytes)")
-    print(f"  HTML: {html_output} ({html_output.stat().st_size:,} bytes)")
     print(f"  PUML: {puml_output} ({puml_output.stat().st_size:,} bytes)")
     print(f"  SVG:  {'✓' if svg_ok else '✗ (plantuml not found)'}")
     return (serialized, uid_map)

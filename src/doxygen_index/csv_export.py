@@ -4,7 +4,7 @@ CSV export — serialise a ParseResult to CSV files for Neo4j import.
 Produces files compatible with ``neo4j-admin database import full``
 (Neo4j 5.x):
 
-* ``nodes.csv`` — all nodes with ``uid:ID``, ``:LABEL``, and properties.
+* ``nodes.csv`` — all nodes with ``canonical_key:ID``, ``:LABEL``, and properties.
 * ``relationships.csv`` — all edges with ``:START_ID``, ``:END_ID``,
   and ``:TYPE``.
 
@@ -34,33 +34,29 @@ from doxygen_index.parser.model import (
 
 
 def _ensure_uid(node, default_source: str = "") -> str:
-    """Compute and set the deterministic ``uid`` on *node*, return it.
+    """Compute and set the node's canonical key, return it.
 
-    If the node has no ``source`` attribute, *default_source* is used.
+    Keys are computed under the repository scope ``(source, source)``
+    (the DDP project label is both project and repository), matching
+    :func:`doxygen_index.graph_json.result_to_graph_json` so CSV and
+    JSON exports agree.  If the node has no ``source`` attribute,
+    *default_source* is used.
     """
-    from codegraph.uid import compute_uid, normalize_argsstring
-
-    # Build identity values from the canonical _identity_fields tuple.
-    identity_fields = list(getattr(node, "_identity_fields", ()) or ())
-    identity_values: list[str] = []
-    for field in identity_fields:
-        val = getattr(node, field, "")
-        val_str = str(val) if val is not None else ""
-        if field == "argsstring":
-            val_str = normalize_argsstring(val_str)
-        identity_values.append(val_str)
+    existing = getattr(node, "canonical_key", "") or ""
+    if existing:
+        return existing
+    from codegraph.identity import IdentityScope, resolve_identity_for
 
     source = str(getattr(node, "source", "") or default_source or "")
-    # source must be non-empty for compute_uid to produce a valid hash
     if not source:
-        # Fallback: derive from qualified_name or name
         source = str(getattr(node, "qualified_name", "") or getattr(node, "name", "") or "unknown")
-    uid = compute_uid(source, *identity_values)
+    scope = IdentityScope.repository(source, source)
+    key = resolve_identity_for(node, scope).key()
 
     # Set in-place so the object carries it for the rest of the pipeline.
-    if hasattr(node, "uid"):
-        node.uid = uid
-    return uid
+    if hasattr(node, "canonical_key"):
+        node.canonical_key = key
+    return key
 
 
 def _serialize_list(val) -> str:
@@ -86,11 +82,34 @@ def _node_label(node) -> str:
 # Node row builders
 # ---------------------------------------------------------------------------
 
+def _node_lists(result):
+    """All node lists in *result* (in CSV export order)."""
+    def _as_list(value):
+        if isinstance(value, (list, tuple)):
+            return list(value)
+        if value is None:
+            return []
+        return [value]
+
+    return [
+        _as_list(result.files), _as_list(result.namespaces),
+        _as_list(result.classes), _as_list(result.enums), _as_list(result.unions),
+        _as_list(result.interfaces), _as_list(result.concepts),
+        _as_list(result.methods), _as_list(result.attributes),
+        _as_list(result.enum_values), _as_list(result.defines),
+        _as_list(result.functions), _as_list(result.parameters),
+        _as_list(result.implementations), _as_list(result.tests),
+        _as_list(result.assertions), _as_list(result.test_steps),
+        _as_list(result.test_fixtures), _as_list(result.literals),
+        _as_list(result.source_fragments),
+    ]
+
+
 def _node_row(node) -> dict[str, str]:
     """Build a flat dict of CSV-safe strings for a single node."""
     uid = _ensure_uid(node)
     row: dict[str, str] = {
-        "uid:ID": uid,
+        "canonical_key:ID": uid,
         ":LABEL": _node_label(node),
     }
 
@@ -104,7 +123,7 @@ def _node_row(node) -> dict[str, str]:
         ]
 
     for name, _prop in prop_names if isinstance(prop_names[0] if prop_names else None, tuple) else [(n, None) for n in prop_names]:
-        if name in ("uid",):  # already handled
+        if name in ("uid", "canonical_key"):  # already handled
             continue
         val = getattr(node, name, None)
         if val is None or val == "":
@@ -157,9 +176,9 @@ def _export_nodes(result: ParseResult, output_dir: Path) -> int:
         print("  No nodes to export.")
         return 0
 
-    # Stable field order: uid, label, then alphabetical properties.
-    ordered_fields = ["uid:ID", ":LABEL"] + sorted(
-        f for f in all_fields if f not in ("uid:ID", ":LABEL")
+    # Stable field order: key, label, then alphabetical properties.
+    ordered_fields = ["canonical_key:ID", ":LABEL"] + sorted(
+        f for f in all_fields if f not in ("canonical_key:ID", ":LABEL")
     )
 
     nodes_path = output_dir / "nodes.csv"
@@ -422,6 +441,34 @@ def export_csv(
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
+    # Stamp canonical keys onto every node (parent-relative included) using
+    # the same computation as the JSON export, so CSV and JSON agree.
+    from doxygen_index.graph_json import result_to_graph_json
+
+    try:
+        keyed = result_to_graph_json(result, source, text_scan=False)
+    except Exception:
+        keyed = []
+    key_by_id: dict[int, str] = {}
+    for entry in keyed:
+        ntype = entry.get("type", "")
+        qn = entry.get("qualified_name") or entry.get("name") or entry.get("path") or ""
+        for lst in _node_lists(result):
+            for node in lst:
+                if type(node).__name__ != ntype:
+                    continue
+                nqn = getattr(node, "qualified_name", None) or getattr(node, "name", None) or getattr(node, "path", None) or ""
+                if nqn == qn and id(node) not in key_by_id:
+                    key_by_id[id(node)] = entry["canonical_key"]
+    for lst in _node_lists(result):
+        for node in lst:
+            k = key_by_id.get(id(node)) or getattr(node, "canonical_key", "") or ""
+            if k:
+                try:
+                    node.canonical_key = k
+                except Exception:
+                    pass
+
     print(f"\nExporting CSV to {output_dir} ...")
 
     node_count = _export_nodes(result, output_dir)
@@ -460,7 +507,7 @@ def _write_load_script(output_dir: Path) -> None:
 
 // ── 1. Create uniqueness constraint ──────────────────────────────────
 CREATE CONSTRAINT unique_node_uid IF NOT EXISTS
-FOR (n:Node) REQUIRE n.uid IS UNIQUE;
+FOR (n:Node) REQUIRE n.canonical_key IS UNIQUE;
 
 // ── 2. Load nodes ────────────────────────────────────────────────────
 LOAD CSV WITH HEADERS FROM 'file:///nodes.csv' AS row
@@ -468,7 +515,7 @@ CALL {
   WITH row
   CREATE (n)
   SET n = row
-  SET n.uid = row.`uid:ID`
+  SET n.canonical_key = row.`canonical_key:ID`
   // Convert JSON arrays to Neo4j string arrays
   FOREACH (_ IN CASE WHEN row.base_classes IS NOT NULL AND row.base_classes <> ''
     THEN [1] ELSE [] END |

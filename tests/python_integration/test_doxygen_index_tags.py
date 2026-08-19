@@ -46,7 +46,7 @@ class TestAsBuiltTagIntegrity:
         project_nodes = backend.graph.find_all_by_source(PROJECT_SOURCE)
         assert project_nodes, "expected project-source nodes after ingest"
 
-        project_uids = {n._uid_value() for n in project_nodes}
+        project_uids = {n.canonical_key for n in project_nodes}
         as_built_uids = set(backend.graph.find_uids_by_tag("as-built"))
         assert as_built_uids, "expected as-built-tagged nodes after ingest"
 

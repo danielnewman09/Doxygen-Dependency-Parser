@@ -37,7 +37,7 @@ def _ctor_params(uid_map: dict, ctor: dict) -> list[dict]:
         e for e in ctor.get("edges", [])
         if e["relation_type"] == "HAS_PARAMETER"
     ]
-    params = [uid_map[e["target_uid"]] for e in param_refs if e["target_uid"] in uid_map]
+    params = [uid_map[e["target_key"]] for e in param_refs if e["target_key"] in uid_map]
     return sorted(params, key=lambda p: p.get("position", 0))
 
 

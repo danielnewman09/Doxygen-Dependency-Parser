@@ -1,15 +1,14 @@
 """
 Convert a ParseResult to a codegraph LayerGraph-compatible JSON format.
 
-The output is a flat list of serialized node dicts that
-``codegraph.viz.export_html_from_json`` can consume to render an
-interactive HTML graph.
+The output is a flat list of serialized node dicts suitable for
+LayerGraph deserialization and backend-independent graph inspection.
 
 Each node dict contains:
 - ``type``: the codegraph node class name (e.g. ``"ClassNode"``)
 - node properties (name, qualified_name, refid, etc.)
 - ``tags``: provenance tags (set to the project name)
-- ``edges``: a list of ``{relation_type, target_uid, target_type}`` dicts
+- ``edges``: a list of ``{relation_type, target_key, target_type}`` dicts
 
 Edges are built from the ParseResult's relationship lists (includes,
 invokes, composition via ``compound_refid``, etc.).
@@ -63,7 +62,7 @@ def result_to_graph_json(
             fields (type_signature, definition, argsstring, brief
             description, description) for qualified names and emit
             synthetic DEPENDS_ON edges to matching nodes.  This
-            enriches visualization exports (HTML/JSON).  The graph
+            enriches JSON exports.  The graph
             DATABASE write path passes ``text_scan=False``: the
             pre-decoupling Neo4j writer created DEPENDS_ON edges only
             from explicit doxygen ``<ref>`` references, and the
@@ -74,8 +73,7 @@ def result_to_graph_json(
     Returns:
         A list of dicts, each a serialized node with ``type``,
         properties, ``tags``, and ``edges`` keys.  Suitable for
-        ``json.dumps`` and consumption by
-        ``codegraph.viz.export_html_from_json``.
+        ``json.dumps`` and LayerGraph deserialization.
     """
     # Collect all node lists
     from codegraph import ClassNode  # type_param synthesis below
@@ -144,43 +142,171 @@ def result_to_graph_json(
         type_param_nodes,
     ]
 
-    # Build refid → uid mapping for edge target resolution.
-    # Edges use refid_to_uid to translate Doxygen refids into the
-    # deterministic uid (source + qualified_name hash) used on nodes.
+    # ── Canonical-key computation (P2: cg:v1 canonical identity) ──
+    #
+    # Project nodes get their canonical key under the repository scope
+    # ``(source, source)`` (the DDP project label is both project and
+    # repository here).  Merged dependency parses retain their own source
+    # as the repository component.  This is important for symbols such as
+    # ``std``: the project may contain a namespace with that name while the
+    # cppreference parse contains a separate namespace that composes the
+    # dependency types.  Giving both nodes the project scope collapses them
+    # during serialization and silently drops the dependency namespace.
+    # Parent-relative types resolve their parent
+    # context from the parse result graph:
+    #   - ParameterNode / ImplementationNode: parent_callable_key (the
+    #     owning member's key, via member_refid);
+    #   - SourceFragmentNode: file_key (the declaring FileNode's key);
+    #   - TestNode / TestFixtureNode / AssertionNode / TestStepNode:
+    #     parent_key (the COMPOSES parent's key).
+    # Keys are computed in dependency order (roots first, then
+    # parent-relative), cached by node identity.
+    from codegraph.identity import IdentityScope, resolve_identity_for
+
+    def _canonical_key(node, *, parents=None) -> str | None:
+        try:
+            node_source = _get_prop(node, "source") or source
+            node_scope = IdentityScope.repository(source, node_source)
+            return resolve_identity_for(
+                node, node_scope, parents=parents or {}
+            ).key()
+        except Exception:
+            return None
+
+    # refid → node (first emission wins) and qname → key maps.
     refid_to_uid: dict[str, str] = {}
     refid_to_type: dict[str, str] = {}
-    # Secondary mapping: qualified_name → uid for resolving edges
-    # whose target refid doesn't match (e.g. cross-ParseResult merges
-    # where Doxygen generates different refids for the same symbol).
+    key_cache: dict[int, str] = {}
     qname_to_uid: dict[str, str] = {}
     qname_to_type: dict[str, str] = {}
+
+    # Pass A: keys for non-parent-relative nodes (roots of the identity
+    # graph): files, namespaces, compounds, members, functions, defines,
+    # enum values, literals, and synthesized type-param ClassNodes.
+    for nodes in node_lists:
+        for node in nodes:
+            t = type(node).__name__
+            if t in (
+                "ParameterNode", "ImplementationNode",
+                "SourceFragmentNode",
+                "TestNode", "TestFixtureNode", "AssertionNode",
+                "TestStepNode",
+            ):
+                continue
+            key = _canonical_key(node)
+            if not key:
+                continue
+            key_cache[id(node)] = key
+            qn = _get_prop(node, "qualified_name") or ""
+            if qn:
+                qname_to_uid[qn] = key
+                qname_to_type[qn] = t
+            refid = _get_prop(node, "refid")
+            if refid:
+                refid_to_uid[refid] = key
+                refid_to_type[refid] = t
+
+    # refid → node for parent lookups (params/implementations/tests).
+    refid_to_node: dict[str, object] = {}
     for nodes in node_lists:
         for node in nodes:
             refid = _get_prop(node, "refid")
-            # Compute the deterministic uid for EVERY node — refid-less
-            # types (ParameterNode, ImplementationNode, LiteralNode) need
-            # it for qname_to_uid so edges targeting them resolve.
-            try:
-                uid = node._compute_uid()
-            except ValueError:
-                uid = node._uid_value()
-            if uid:
-                # Set the deterministic uid on the node so that
-                # serialize() emits it instead of the auto-generated
-                # UUID from UniqueIdProperty.
-                uid_prop = type(node)._uid_prop()
-                if uid_prop:
-                    setattr(node, uid_prop, uid)
-                # Build qualified_name → uid mapping for cross-
-                # ParseResult resolution.
+            if refid:
+                refid_to_node.setdefault(refid, node)
+
+    # Pass B: parent-relative keys.
+    # member_refid → parent member key (params, implementations).
+    def _parent_member_key(member_refid: str) -> str:
+        member = refid_to_node.get(member_refid)
+        if member is None:
+            return ""
+        k = key_cache.get(id(member))
+        if k:
+            return k
+        k = _canonical_key(member)
+        if k:
+            key_cache[id(member)] = k
+        return k or ""
+
+    # ParameterNode / ImplementationNode (parent_callable_key).
+    for nodes in node_lists:
+        for node in nodes:
+            t = type(node).__name__
+            if t not in ("ParameterNode", "ImplementationNode"):
+                continue
+            prefid = _get_prop(node, "member_refid") or ""
+            pk = _parent_member_key(prefid)
+            key = _canonical_key(node, parents={"parent_callable_key": pk})
+            if key:
+                key_cache[id(node)] = key
                 qn = _get_prop(node, "qualified_name") or ""
                 if qn:
-                    qname_to_uid[qn] = uid
-                    qname_to_type[qn] = type(node).__name__
+                    qname_to_uid[qn] = key
+                    qname_to_type[qn] = t
+                refid = _get_prop(node, "refid")
                 if refid:
-                    refid_to_uid[refid] = uid
-            if refid:
-                refid_to_type[refid] = type(node).__name__
+                    refid_to_uid[refid] = key
+                    refid_to_type[refid] = t
+
+    # SourceFragmentNode (file_key from the declaring file).
+    # FileNode key derives from its repository path.
+    for nodes in node_lists:
+        for node in nodes:
+            if type(node).__name__ != "SourceFragmentNode":
+                continue
+            fp = _get_prop(node, "file_path") or ""
+            fk = ""
+            for f in result.files:
+                f_path = _get_prop(f, "path") or _get_prop(f, "file_path") or ""
+                if f_path == fp:
+                    fk = key_cache.get(id(f), "")
+                    break
+            key = _canonical_key(
+                node, parents={"file_key": fk or "cg:v1:root"}
+            )
+            if key:
+                key_cache[id(node)] = key
+                qn = _get_prop(node, "qualified_name") or ""
+                if qn:
+                    qname_to_uid[qn] = key
+                    qname_to_type[qn] = "SourceFragmentNode"
+                refid = _get_prop(node, "refid")
+                if refid:
+                    refid_to_uid[refid] = key
+                    refid_to_type[refid] = "SourceFragmentNode"
+
+    # TestNode / TestFixtureNode / AssertionNode / TestStepNode
+    # (parent_key from the COMPOSES parent's refid).
+    for nodes in node_lists:
+        for node in nodes:
+            t = type(node).__name__
+            if t not in ("TestNode", "TestFixtureNode",
+                         "AssertionNode", "TestStepNode"):
+                continue
+            parent_key = ""
+            node_refid = _get_prop(node, "refid") or ""
+            for tc in result.test_compositions:
+                if tc.child_refid == node_refid:
+                    parent = refid_to_node.get(tc.parent_refid)
+                    if parent is not None:
+                        parent_key = key_cache.get(id(parent), "")
+                    break
+            key = _canonical_key(
+                node, parents={"parent_key": parent_key or "cg:v1:root"}
+            )
+            if key:
+                key_cache[id(node)] = key
+                qn = _get_prop(node, "qualified_name") or ""
+                if qn:
+                    qname_to_uid[qn] = key
+                    qname_to_type[qn] = t
+                refid = _get_prop(node, "refid")
+                if refid:
+                    refid_to_uid[refid] = key
+                    refid_to_type[refid] = t
+
+    def _key_of_node(node) -> str:
+        return key_cache.get(id(node), "")
 
     # ==================================================================
     # Pre-build from_refid → [entries] index maps so _build_node_edges
@@ -188,26 +314,26 @@ def result_to_graph_json(
     # ==================================================================
     from collections import defaultdict
 
-    # compound_refid → [(member_uid, member_type)]
-    # Uses the member's OWN uid, not a refid→uid lookup: doxygen reuses
+    # compound_refid → [(member_key, member_type)]
+    # Uses the member's OWN key, not a refid→key lookup: doxygen reuses
     # one refid for a member declared in BOTH a primary template and its
-    # specialization (different qualified_names ⇒ different uids).  A
-    # refid lookup would collapse both to one uid and COMPOSES both
+    # specialization (different qualified_names ⇒ different keys).  A
+    # refid lookup would collapse both to one key and COMPOSES both
     # parents to the same node — multi-parent tree → duplicate edges in
     # every exporter.  The pre-decoupling writer targeted ``m.uid``.
     members_by_compound: dict[str, list[tuple[str, str, str]]] = defaultdict(list)
     for member in result.members:
         compound = _get_prop(member, "compound_refid")
-        muid = _get_prop(member, "uid")
-        if compound and muid:
-            members_by_compound[compound].append((muid, type(member).__name__))
+        mkey = _key_of_node(member)
+        if compound and mkey:
+            members_by_compound[compound].append((mkey, type(member).__name__))
     # Nested compounds (class-scoped enums/structs) are composed by their
     # owning compound exactly like members — they are not namespace children.
     for enum in result.enums:
         compound = _get_prop(enum, "compound_refid")
-        euid = _get_prop(enum, "uid")
-        if compound and euid:
-            members_by_compound[compound].append((euid, type(enum).__name__))
+        ekey = _key_of_node(enum)
+        if compound and ekey:
+            members_by_compound[compound].append((ekey, type(enum).__name__))
 
     # parent_refid → [(child_refid, child_type)] — namespace composes
     composes_by_parent: dict[str, list[tuple[str, str]]] = defaultdict(list)
@@ -293,14 +419,9 @@ def result_to_graph_json(
         prefid = _get_prop(p, "member_refid") or ""
         if not prefid:
             continue
-        try:
-            puid = p._compute_uid()
-        except ValueError:
-            continue
-        uid_prop = type(p)._uid_prop()
-        if uid_prop:
-            setattr(p, uid_prop, puid)
-        param_uids_by_member_refid[prefid].append(puid)
+        pkey = _key_of_node(p)
+        if pkey:
+            param_uids_by_member_refid[prefid].append(pkey)
 
     # file_path → FileNode uid — DEFINED_IN (location-based: compounds/
     # members/namespaces are "defined in" the file that declares them).
@@ -313,19 +434,28 @@ def result_to_graph_json(
     file_uid_by_path: dict[str, str] = {}
     for f in result.files:
         fp = _get_prop(f, "path") or _get_prop(f, "file_path") or ""
-        try:
-            fuid = f._compute_uid()
-        except ValueError:
-            fuid = None
-        if fp and fuid:
-            file_uid_by_path[fp] = fuid
+        fkey = _key_of_node(f)
+        if fp and fkey:
+            file_uid_by_path[fp] = fkey
 
     # Serialize each node and attach edges
     serialized: list[dict] = []
+    # key → index into ``serialized`` (WP6.1 duplicate-key elimination)
+    key_to_idx: dict[str, int] = {}
 
     for nodes in node_lists:
         for node in nodes:
+            # WP A: the canonical key is the sole identity — stamp it on
+            # the node (serialize()/deserialize() round-trip it) so
+            # LayerGraph.deserialize (canonical-only) can rebuild the graph.
+            node_key = _key_of_node(node)
+            if node_key:
+                try:
+                    node.canonical_key = node_key
+                except Exception:
+                    pass
             entry = node.serialize()
+            entry["canonical_key"] = node_key
             # Use the node's tags as set by tag_nodes_by_source.
             # FileNode lacks a ``tags`` attribute, so fall back to
             # deriving from source.
@@ -390,12 +520,35 @@ def result_to_graph_json(
                 file_uid_by_path,
                 type_param_concept_by_qn,
             )
-            # Filter out self-references (edge target_uid == this node's uid).
-            node_uid = entry.get("uid", "")
-            edges = [e for e in edges if e.get("target_uid", "") != node_uid]
+            # Filter out self-references (edge target_key == this node's key).
+            node_key = _key_of_node(node)
+            edges = [e for e in edges if e.get("target_key", "") != node_key]
             if edges:
                 entry["edges"] = edges
 
+            # Dedupe by uid (Priority 2, WP6.1): the doxygen XML and the
+            # source text-scan can emit the SAME symbol twice under one
+            # uid — e.g. a class whose malformed member span is also
+            # scanned as a ``namespace``.  The authoritative compound
+            # (any ``CompoundNode`` subclass: class/struct/interface/…)
+            # wins over a NamespaceNode; otherwise the first emission
+            # stands.  Mirrors codegraph's no-last-write-wins contract
+            # (``LayerGraph._register_entry`` raises on distinct nodes
+            # sharing one uid).
+            entry_key = _key_of_node(node)
+            existing_idx = key_to_idx.get(entry_key)
+            if existing_idx is not None:
+                existing = serialized[existing_idx]
+                existing_is_namespace = existing.get("type") == "NamespaceNode"
+                incoming_is_compound = issubclass(
+                    type(node), CompoundNode
+                )
+                if existing_is_namespace and incoming_is_compound:
+                    # Replace the text-scan namespace with the XML class.
+                    serialized[existing_idx] = entry
+                # else keep the existing entry (compound or equal kind)
+                continue
+            key_to_idx[entry_key] = len(serialized)
             serialized.append(entry)
 
     # ------------------------------------------------------------------
@@ -420,8 +573,8 @@ def result_to_graph_json(
         if node_source != source:
             continue  # Only scan project-owned nodes
 
-        # Collect known target_uids to avoid duplicates
-        existing_targets = {e["target_uid"] for e in entry.get("edges", [])}
+        # Collect known target_keys to avoid duplicates
+        existing_targets = {e.get("target_key", "") for e in entry.get("edges", [])}
 
         # Gather text from relevant fields
         texts: list[str] = []
@@ -440,7 +593,7 @@ def result_to_graph_json(
                 existing_targets.add(qname_to_uid[qn])
                 entry.setdefault("edges", []).append({
                     "relation_type": "DEPENDS_ON",
-                    "target_uid": qname_to_uid[qn],
+                    "target_key": qname_to_uid[qn],
                     "target_type": qname_to_type.get(qn, "ClassNode"),
                 })
 
@@ -571,11 +724,11 @@ def _build_node_edges(
     # The pre-decoupling writer matched ``from_label="CompoundNode"``
     # and never created file→member COMPOSES.
     if node_refid and issubclass(type(node), CompoundNode):
-        for muid, mtype in members_by_compound.get(node_refid, ()):
-            if muid:
+        for mkey, mtype in members_by_compound.get(node_refid, ()):
+            if mkey:
                 edges.append({
                     "relation_type": "COMPOSES",
-                    "target_uid": muid,
+                    "target_key": mkey,
                     "target_type": mtype,
                 })
 
@@ -585,19 +738,26 @@ def _build_node_edges(
             if child_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "COMPOSES",
-                    "target_uid": refid_to_uid[child_refid],
+                    "target_key": refid_to_uid[child_refid],
                     "target_type": child_type,
                 })
 
     # --- INCLUDES (file → included file) ---
     if node_type == "FileNode" and node_refid:
         for inc_refid, inc_spelling, inc_local in includes_by_file.get(node_refid, ()):
-            target_uid = refid_to_uid.get(inc_refid, inc_refid)
+            target_key_v = refid_to_uid.get(inc_refid)
             edge = {
                 "relation_type": "INCLUDES",
-                "target_uid": target_uid,
                 "target_type": "FileNode",
             }
+            if target_key_v:
+                edge["target_key"] = target_key_v
+            else:
+                # External include (system header not in the parse): a
+                # human-readable ref that the canonical deserializer can
+                # materialize as a scaffold when scoped; never stored as
+                # a fabricated target_key.
+                edge["target_ref"] = inc_refid or inc_spelling
             # Carry the include spelling as written in the source (the
             # ``<includes>`` element text, sans quotes/brackets) plus the
             # local/system flag — the relationship metadata codegen needs
@@ -613,34 +773,34 @@ def _build_node_edges(
             if inc_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "INCLUDES",
-                    "target_uid": refid_to_uid[inc_refid],
+                    "target_key": refid_to_uid[inc_refid],
                     "target_type": refid_to_type.get(inc_refid, "CompoundNode"),
                 })
 
     # --- INVOKES ---
     if node_refid:
         for to_refid, to_name, target_type in invokes_by_from.get(node_refid, ()):
-            target_uid = refid_to_uid.get(to_refid)
-            if target_uid is None and to_name:
-                target_uid = qname_to_uid.get(to_name)
-            if target_uid is None:
+            target_key_v = refid_to_uid.get(to_refid)
+            if target_key_v is None and to_name:
+                target_key_v = qname_to_uid.get(to_name)
+            if target_key_v is None:
                 continue
             edges.append({
                 "relation_type": "INVOKES",
-                "target_uid": target_uid,
+                "target_key": target_key_v,
                 "target_type": target_type,
             })
 
     # --- INHERITS_FROM ---
     if node_refid:
         for to_refid, to_type, to_name in inherits_by_from.get(node_refid, ()):
-            target_uid = refid_to_uid.get(to_refid)
-            if target_uid is None and to_name:
-                target_uid = qname_to_uid.get(to_name)
-            if target_uid is not None:
+            target_key_v = refid_to_uid.get(to_refid)
+            if target_key_v is None and to_name:
+                target_key_v = qname_to_uid.get(to_name)
+            if target_key_v is not None:
                 edges.append({
                     "relation_type": "INHERITS_FROM",
-                    "target_uid": target_uid,
+                    "target_key": target_key_v,
                     "target_type": to_type,
                 })
 
@@ -650,7 +810,7 @@ def _build_node_edges(
             if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "DEPENDS_ON",
-                    "target_uid": refid_to_uid[to_refid],
+                    "target_key": refid_to_uid[to_refid],
                     "target_type": to_type,
                 })
 
@@ -660,7 +820,7 @@ def _build_node_edges(
             if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "VERIFIES",
-                    "target_uid": refid_to_uid[to_refid],
+                    "target_key": refid_to_uid[to_refid],
                     "target_type": to_type,
                 })
 
@@ -671,7 +831,7 @@ def _build_node_edges(
                 relation = "LEFT_OPERAND" if side == "left" else "RIGHT_OPERAND"
                 edges.append({
                     "relation_type": relation,
-                    "target_uid": refid_to_uid[to_refid],
+                    "target_key": refid_to_uid[to_refid],
                     "target_type": "MethodNode",
                 })
 
@@ -681,7 +841,7 @@ def _build_node_edges(
             if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "CALLEE",
-                    "target_uid": refid_to_uid[to_refid],
+                    "target_key": refid_to_uid[to_refid],
                     "target_type": to_type,
                 })
 
@@ -691,7 +851,7 @@ def _build_node_edges(
             if child_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "COMPOSES",
-                    "target_uid": refid_to_uid[child_refid],
+                    "target_key": refid_to_uid[child_refid],
                     "target_type": child_type,
                 })
 
@@ -701,7 +861,7 @@ def _build_node_edges(
             if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "OF_TYPE",
-                    "target_uid": refid_to_uid[to_refid],
+                    "target_key": refid_to_uid[to_refid],
                     "target_type": to_type,
                 })
 
@@ -711,7 +871,7 @@ def _build_node_edges(
             if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "CHECKED_BY",
-                    "target_uid": refid_to_uid[to_refid],
+                    "target_key": refid_to_uid[to_refid],
                     "target_type": "AssertionNode",
                 })
 
@@ -721,7 +881,7 @@ def _build_node_edges(
             if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "DEFINED_IN",
-                    "target_uid": refid_to_uid[to_refid],
+                    "target_key": refid_to_uid[to_refid],
                     "target_type": "TestStepNode",
                 })
 
@@ -732,16 +892,16 @@ def _build_node_edges(
             if to_refid in refid_to_uid:
                 edges.append({
                     "relation_type": "CONSTRAINS",
-                    "target_uid": refid_to_uid[to_refid],
+                    "target_key": refid_to_uid[to_refid],
                     "target_type": to_type,
                 })
 
     # --- HAS_PARAMETER (member → parameter) ---
     if node_refid:
-        for puid in param_uids_by_member_refid.get(node_refid, ()):
+        for pkey in param_uids_by_member_refid.get(node_refid, ()):
             edges.append({
                 "relation_type": "HAS_PARAMETER",
-                "target_uid": puid,
+                "target_key": pkey,
                 "target_type": "ParameterNode",
             })
 
@@ -752,22 +912,22 @@ def _build_node_edges(
             if tp.from_refid != node_refid:
                 continue
             tp_qn = f"type_param:{node_qn}:{tp.position}"
-            tp_uid = qname_to_uid.get(tp_qn)
-            if tp_uid:
+            tp_key = qname_to_uid.get(tp_qn)
+            if tp_key:
                 edges.append({
                     "relation_type": "TEMPLATE_PARAM",
-                    "target_uid": tp_uid,
+                    "target_key": tp_key,
                     "target_type": "ClassNode",
                 })
 
     # --- ENFORCES_CONCEPT (type_param slot → concept) ---
     concept_qn = type_param_concept_by_qn.get(node_qn, "")
     if concept_qn:
-        concept_uid = qname_to_uid.get(concept_qn)
-        if concept_uid:
+        concept_key = qname_to_uid.get(concept_qn)
+        if concept_key:
             edges.append({
                 "relation_type": "ENFORCES_CONCEPT",
-                "target_uid": concept_uid,
+                "target_key": concept_key,
                 "target_type": "ConceptNode",
             })
 
@@ -776,11 +936,11 @@ def _build_node_edges(
         for sr in result.specializes_refs:
             if sr.from_qualified_name != node_qn:
                 continue
-            prim_uid = qname_to_uid.get(sr.primary_template_qualified_name)
-            if prim_uid:
+            prim_key = qname_to_uid.get(sr.primary_template_qualified_name)
+            if prim_key:
                 edges.append({
                     "relation_type": "SPECIALIZES",
-                    "target_uid": prim_uid,
+                    "target_key": prim_key,
                     "target_type": "CompoundNode",
                 })
 
@@ -790,22 +950,22 @@ def _build_node_edges(
             if ref.member_refid != node_refid:
                 continue
             impl_qn = getattr(ref.implementation, "qualified_name", "") or ""
-            impl_uid = qname_to_uid.get(impl_qn)
-            if impl_uid:
+            impl_key = qname_to_uid.get(impl_qn)
+            if impl_key:
                 edges.append({
                     "relation_type": "HAS_IMPLEMENTATION",
-                    "target_uid": impl_uid,
+                    "target_key": impl_key,
                     "target_type": "ImplementationNode",
                 })
 
     # --- DEFINED_IN (location-based: node → declaring file) ---
     fp = _get_prop(node, "file_path") or ""
     if fp:
-        fuid = file_uid_by_path.get(fp)
-        if fuid:
+        fkey = file_uid_by_path.get(fp)
+        if fkey:
             edges.append({
                 "relation_type": "DEFINED_IN",
-                "target_uid": fuid,
+                "target_key": fkey,
                 "target_type": "FileNode",
             })
 

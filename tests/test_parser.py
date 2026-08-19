@@ -1132,67 +1132,53 @@ class TestPythonParsing:
         assert "Excluded" not in class_names
 
 
-class TestHtmlConfig:
-    """Tests for [codegraph-html] section in .doxygen-index.toml."""
-
-    def test_html_config_loaded(self, tmp_path):
-        """[codegraph-html] section should produce an HtmlConfig."""
-        from doxygen_index.project import load_config
-
-        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
-            [project]
-            name = "myapp"
-            language = "python"
-            input_paths = ["src"]
-
-            [codegraph-html]
-            output_dir = "codegraph"
-            size = "small"
-        """))
-        (tmp_path / "src").mkdir()
-
-        config, _ = load_config(tmp_path)
-        assert config.html_config is not None
-        assert config.html_config.output_dir == (tmp_path / "codegraph").resolve()
-        assert config.html_config.size == "small"
-
-    def test_html_config_defaults(self, tmp_path):
-        """[codegraph-html] with no options should use defaults."""
-        from doxygen_index.project import load_config
-
-        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
-            [project]
-            name = "myapp"
-            language = "python"
-            input_paths = ["src"]
-
-            [codegraph-html]
-        """))
-        (tmp_path / "src").mkdir()
-
-        config, _ = load_config(tmp_path)
-        assert config.html_config is not None
-        assert config.html_config.output_dir == (tmp_path / "codegraph").resolve()
-        assert config.html_config.size == "large"
-
-    def test_no_html_config(self, tmp_path):
-        """Config without [codegraph-html] should have html_config=None."""
-        from doxygen_index.project import load_config
-
-        (tmp_path / ".doxygen-index.toml").write_text(textwrap.dedent("""\
-            [project]
-            name = "myapp"
-            language = "python"
-            input_paths = ["src"]
-        """))
-        (tmp_path / "src").mkdir()
-
-        config, _ = load_config(tmp_path)
-        assert config.html_config is None
-
-
 class TestGraphJson:
     """Tests for ParseResult → LayerGraph JSON conversion."""
+
+    def test_merged_dependency_namespace_does_not_collide_with_project_namespace(self):
+        """Dependency ``std`` must retain its namespace composition edges."""
+        from codegraph import ClassNode, NamespaceNode
+        from doxygen_index.graph_json import result_to_graph_json
+        from doxygen_index.parser.model import CompositionEntry
+
+        project_std = NamespaceNode(
+            refid="project:std", name="std", qualified_name="std",
+            source="cpp-sqlite",
+        )
+        dependency_std = NamespaceNode(
+            refid="cppreference:ns/std", name="std", qualified_name="std",
+            source="cppreference", tags=["dependency"],
+        )
+        vector = ClassNode(
+            refid="cppreference:cpp/container/vector", name="vector",
+            qualified_name="std::vector", source="cppreference",
+            tags=["dependency"],
+        )
+        result = ParseResult(
+            namespaces=[project_std, dependency_std],
+            classes=[vector],
+            compositions=[CompositionEntry(
+                parent_refid=dependency_std.refid,
+                child_refid=vector.refid,
+                child_type="ClassNode",
+            )],
+        )
+
+        graph = result_to_graph_json(result, source="cpp-sqlite", text_scan=False)
+        std_nodes = [n for n in graph if n.get("qualified_name") == "std"]
+        assert len(std_nodes) == 2
+        dependency_entry = next(n for n in std_nodes if n["source"] == "cppreference")
+        assert dependency_entry["canonical_key"] != next(
+            n["canonical_key"] for n in std_nodes if n["source"] == "cpp-sqlite"
+        )
+        assert any(
+            edge["target_key"] == next(
+                n["canonical_key"] for n in graph
+                if n.get("qualified_name") == "std::vector"
+            )
+            for edge in dependency_entry.get("edges", [])
+            if edge["relation_type"] == "COMPOSES"
+        )
 
     def test_result_to_graph_json(self, tmp_path):
         """result_to_graph_json should produce valid LayerGraph-compatible JSON."""
