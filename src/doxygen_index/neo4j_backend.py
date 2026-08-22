@@ -29,6 +29,7 @@ from __future__ import annotations
 import re
 import sys
 from pathlib import Path
+from time import perf_counter
 
 from codegraph import get_backend
 from codegraph.graph import LayerGraph
@@ -270,7 +271,12 @@ def _infer_source(result: ParseResult) -> str:
     return counts.most_common(1)[0][0] if counts else ""
 
 
-def write_result(result: ParseResult, source: str | None = None) -> None:
+def write_result(
+    result: ParseResult,
+    source: str | None = None,
+    *,
+    timings: dict[str, float] | None = None,
+) -> None:
     """Write a ParseResult to the active backend via the LayerGraph bridge.
 
     Backend-agnostic — zero raw Cypher.  Nodes + edges are built from
@@ -284,6 +290,8 @@ def write_result(result: ParseResult, source: str | None = None) -> None:
         result: The parsed output.
         source: Project source label.  When omitted, inferred from the
             nodes (most common ``source`` value).
+        timings: Optional mapping populated with serialization and persistence
+            durations for stage-level CLI diagnostics.
     """
     # The backend owns schema creation (per-label uid indexes); idempotent.
     ensure_schema()
@@ -298,9 +306,20 @@ def write_result(result: ParseResult, source: str | None = None) -> None:
     )
 
     src = source or _infer_source(result)
-    data = result_to_graph_json(result, src, text_scan=False)
-    graph = LayerGraph.deserialize(data, create_missing=False)
+    stage_started = perf_counter()
+    data = result_to_graph_json(
+        result, src, text_scan=False, portable=False
+    )
+    if timings is not None:
+        timings["serialization"] = perf_counter() - stage_started
+
+    stage_started = perf_counter()
+    graph = LayerGraph.deserialize(
+        data, create_missing=False, portable=False
+    )
     graph.to_backend(get_backend())
+    if timings is not None:
+        timings["persistence"] = perf_counter() - stage_started
     print(f"  Wrote {len(data)} nodes to {type(get_backend()).__name__}")
 
 

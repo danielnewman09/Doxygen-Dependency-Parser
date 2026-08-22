@@ -69,12 +69,12 @@ def _source_counts(test_cpp: Path) -> dict:
 
 
 def _flatten(serialized: list[dict]) -> dict[str, dict]:
-    """Flat {uid: node} map from the nested serialized LayerGraph."""
+    """Flat {canonical_key: node} map from the nested LayerGraph."""
     uid_map: dict[str, dict] = {}
     stack = list(serialized)
     while stack:
         node = stack.pop()
-        uid_map[node["uid"]] = node
+        uid_map[node["canonical_key"]] = node
         stack.extend(node.get("composes", []))
     return uid_map
 
@@ -94,7 +94,7 @@ def _load_step_sources(db_path: Path) -> dict[str, str]:
     try:
         rows = con.execute(
             """
-            SELECT n1.uid, n2.properties
+            SELECT n1.canonical_key, n2.properties
             FROM edges e
             JOIN nodes n1 ON n1.id = e.source_id
             JOIN nodes n2 ON n2.id = e.target_id
@@ -214,7 +214,8 @@ def build_report(
     for n in uid_map.values():
         for e in n.get("edges", []):
             if e["relation_type"] == "VERIFIES":
-                verifies[qname.get(e["target_uid"], e["target_uid"])] += 1
+                target = e.get("target_key") or e.get("target_ref") or ""
+                verifies[qname.get(target, target)] += 1
     if verifies:
         L.append("## Code verified by tests (VERIFIES target frequency)")
         L.append("")
@@ -301,7 +302,7 @@ def _build_single_test(L: list[str], t: dict, qname, step_sources) -> None:
         L.append(f"- description: {t['description']}")
 
     verifies = [
-        qname.get(e["target_uid"], e["target_uid"])
+        qname.get(e.get("target_key") or e.get("target_ref") or "", "")
         for e in t.get("edges", [])
         if e["relation_type"] == "VERIFIES"
     ]
@@ -336,13 +337,13 @@ def _build_single_test(L: list[str], t: dict, qname, step_sources) -> None:
             L.append(f"- `{c['name']}` ({c.get('description')}, lines "
                      f"{c.get('body_start')}–{c.get('body_end')})")
             callees = [
-                qname.get(e["target_uid"], e["target_uid"])
+                qname.get(e.get("target_key") or e.get("target_ref") or "", "")
                 for e in c.get("edges", [])
                 if e["relation_type"] == "CALLEE"
             ]
             if callees:
                 L.append(f"  - CALLEE: {', '.join(f'`{x}`' for x in sorted(callees))}")
-            src = step_sources.get(c.get("uid", ""))
+            src = step_sources.get(c.get("canonical_key", ""))
             if src:
                 L.append("")
                 L.append(_code_block(src))

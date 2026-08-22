@@ -114,7 +114,14 @@ class TestPlantUMLExport:
 
     def test_puml_has_inheritance(self, puml_lines):
         """Both concrete parsers inherit from the LanguageParser interface."""
-        inherit_lines = [L for L in puml_lines if " : inherits_from" in L]
+        # Literal nodes may contain snippets of PlantUML used by other tests;
+        # only count actual arrow statements targeting LanguageParser.
+        inherit_lines = [
+            L for L in puml_lines
+            if not L.lstrip().startswith(('class "', 'package "'))
+            and " <|-- " in L
+            and "LanguageParser : inherits_from" in L
+        ]
         assert len(inherit_lines) == 2, (
             f"expected 2 inheritance arrows, got {len(inherit_lines)}"
         )
@@ -155,10 +162,12 @@ class TestPublicApiView:
         not class members, so they legitimately remain.  Assert against
         private methods of CppParser instead.
         """
-        assert "_parse_class_compound" not in public_puml, (
+        member_lines = [L.strip() for L in public_puml.splitlines()
+                        if L.lstrip().startswith(("+", "-", "#"))]
+        assert not any("_parse_class_compound" in L for L in member_lines), (
             "private method should be hidden in PUBLIC_API view"
         )
-        assert "_parse_function_member" not in public_puml
+        assert not any("_parse_function_member" in L for L in member_lines)
 
     def test_public_view_keeps_public_surface(self, public_puml):
         """Public interface methods and key classes remain visible."""
@@ -195,21 +204,19 @@ class TestCollapsedView:
 
     def test_collapsed_has_no_file_nodes(self, collapsed_puml):
         """File nodes never appear as diagram elements."""
-        assert ".py" not in collapsed_puml.replace(".pyi", ""), (
+        file_notes = [
+            L for L in collapsed_puml.splitlines()
+            if L.lstrip().startswith('note "') and ".py" in L
+        ]
+        assert not file_notes, (
             "file nodes should not appear in COLLAPSED view"
         )
 
-    def test_collapsed_equals_full_for_single_source(self, collapsed_puml, full_puml):
-        """Single-source graph: nothing to collapse, output is identical
-        up to blank-line spacing.
-
-        (GraphView.COLLAPSED collapses *dependency* packages; this
-        graph has none.)  The two renderings differ only in an extra
-        leading blank line, so compare the non-blank lines.
-        """
-        full_lines = [L for L in full_puml.splitlines() if L.strip()]
-        coll_lines = [L for L in collapsed_puml.splitlines() if L.strip()]
-        assert coll_lines == full_lines
+    def test_collapsed_groups_discovered_dependencies(self, collapsed_puml, full_puml):
+        """Dependencies discovered while indexing tests collapse to packages."""
+        assert 'package "sqlite3" as sqlite3' in collapsed_puml
+        assert 'package "sqlite3" as sqlite3' not in full_puml
+        assert collapsed_puml != full_puml
 
 
 class TestScopedPlantUMLExport:

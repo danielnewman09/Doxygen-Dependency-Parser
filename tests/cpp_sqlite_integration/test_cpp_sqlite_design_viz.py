@@ -394,13 +394,13 @@ class TestDesignLayerVisualization:
         assert "SchemaVersion" in public_puml_text
         assert 'package "cpp_sqlite"' in public_puml_text
 
-    def test_public_view_is_larger_than_design_api(self, design_puml_text,
-                                                      public_puml_text):
-        """DESIGN_API is smaller than PUBLIC_API because it strips
-        test scaffolding that PUBLIC_API doesn't filter."""
-        assert len(design_puml_text) < len(public_puml_text), (
-            f"DESIGN_API ({len(design_puml_text)} chars) should be "
-            f"smaller than PUBLIC_API ({len(public_puml_text)} chars)"
+    def test_design_view_is_larger_than_public_api(self, design_puml_text,
+                                                    public_puml_text):
+        """PUBLIC_API is smaller because test scaffolding is no longer
+        included in the public view."""
+        assert len(public_puml_text) < len(design_puml_text), (
+            f"PUBLIC_API ({len(public_puml_text)} chars) should be "
+            f"smaller than DESIGN_API ({len(design_puml_text)} chars)"
         )
 
     # ------------------------------------------------------------------

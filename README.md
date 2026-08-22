@@ -99,37 +99,6 @@ doxygen-index project /path/to/myproject
 cat build/docs/doxygen-myproject/myproject.json | jq '.classes[] | .name'
 ```
 
-### HTML Graph Visualization
-
-Add a ``[codegraph-html]`` section to your ``.doxygen-index.toml`` to
-automatically generate an interactive HTML graph alongside the JSON:
-
-```toml
-[project]
-name = "myproject"
-language = "python"
-input_paths = ["src"]
-
-[codegraph-html]
-output_dir = "codegraph"   # where to write JSON + HTML (default: codegraph)
-size = "large"             # "large" (full-page) or "small" (compact)
-```
-
-With this section present, running ``doxygen-index`` produces:
-
-- ``codegraph/myproject.json`` — LayerGraph-compatible JSON for visualization
-- ``codegraph/myproject.html`` — self-contained interactive Cytoscape.js graph
-
-The HTML file is fully self-contained (no external dependencies) and can be
-opened directly in any browser.
-
-To regenerate just the HTML without re-parsing:
-
-```bash
-doxygen-index html
-doxygen-index html --size small
-```
-
 ### LLM Test Description Enrichment
 
 When ``test_paths`` is configured, the parser extracts test nodes (fixtures,
@@ -298,10 +267,6 @@ doxygen-index project --generate-only
 
 # Just parse existing XML — C++ only
 doxygen-index project --parse-only --xml-dir build/docs/xml
-
-# Regenerate HTML graph from existing JSON (requires [codegraph-html] in config)
-doxygen-index html
-doxygen-index html --size small
 
 # -----------------------------------------------------------------------
 # Conan dependency mode (requires conan):

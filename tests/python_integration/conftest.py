@@ -391,6 +391,15 @@ def codegraph_graph():
     if plantuml_bin:
         from codegraph.export.plantuml import render_plantuml_to_svg
         _dbg("plantuml SVG renders (3x, validated)...")
+        probe = subprocess.run(
+            [plantuml_bin, "-version"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+            check=False,
+        )
+        assert probe.returncode == 0
+
         for puml_name in ("doxygen_index_one_hop.puml",
                           "doxygen_index_one_hop_collapsed.puml",
                           "doxygen_index_one_hop_public.puml"):

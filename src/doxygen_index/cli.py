@@ -20,10 +20,12 @@ exists in the current directory, ``project`` is assumed.
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 import sys
 from pathlib import Path
+from time import perf_counter
 
 from dotenv import load_dotenv
 
@@ -31,6 +33,19 @@ from codegraph import get_backend
 
 
 CONFIG_FILENAME = ".doxygen-index.toml"
+
+
+def _allow_large_csv_fields() -> None:
+    """Allow CSV fields large enough for source bodies and documentation."""
+    limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(limit)
+            return
+        except OverflowError:
+            # ``csv`` accepts a C long, which can be narrower than Python's
+            # ``sys.maxsize`` on some platforms.
+            limit //= 2
 
 
 def _add_common_args(parser: argparse.ArgumentParser) -> None:
@@ -568,17 +583,27 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
     from doxygen_index.parser import parse_xml_dir
     from doxygen_index.csv_export import export_csv
 
+    started_at = perf_counter()
+    timings: dict[str, float] = {}
+    export_csv_flag = not getattr(args, "no_csv", False)
+    export_neo4j = args.neo4j
+    if not export_csv_flag and not export_neo4j:
+        print("Error: --no-csv requires --neo4j backend ingestion", file=sys.stderr)
+        raise SystemExit(2)
     project_dir = Path(args.project_dir).resolve()
     csv_base = Path(args.csv_dir) if args.csv_dir else Path(args.output_dir) / "csv"
-    csv_base.mkdir(parents=True, exist_ok=True)
+    if export_csv_flag:
+        csv_base.mkdir(parents=True, exist_ok=True)
     output_base = Path(args.output_dir)
 
     # ── Phase 1: Discover Conan deps ──────────────────────────
+    stage_started = perf_counter()
     dep_include_dirs = discover_packages(
         project_dir=project_dir,
         build_type=args.build_type,
         only=_parse_only(args.only),
     )
+    timings["Conan discovery"] = perf_counter() - stage_started
     if dep_include_dirs:
         print(f"Discovered {len(dep_include_dirs)} dependencies.")
     else:
@@ -637,6 +662,7 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
 
     # ── Phase 3: Unified Doxygen run ────────────────────────
     print(f"\n--- Unified Doxygen: {project_name} + {len(dep_include_dirs)} deps ---")
+    stage_started = perf_counter()
     xml_dir = run_unified_doxygen(
         project_name=project_name,
         project_source_dirs=project_sources,
@@ -647,12 +673,14 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         predefined=predefined,
         test_source_dirs=test_source_dirs or None,
     )
+    timings["Unified Doxygen"] = perf_counter() - stage_started
     if not xml_dir:
         print("Doxygen failed.", file=sys.stderr)
         sys.exit(1)
 
     # ── Phase 4: Parse unified XML ────────────────────────────
     print(f"\n--- Parsing unified XML ---")
+    stage_started = perf_counter()
     result = parse_xml_dir(
         xml_dir, source=project_name, layer="dependency",
         test_source_dirs=test_source_dirs or None,
@@ -661,6 +689,7 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
     # ── Phase 5: Tag nodes by source ──────────────────────────
     from doxygen_index.doxygen import tag_nodes_by_source
     tag_nodes_by_source(result, project_dir, dep_include_dirs, project_name)
+    timings["XML parse/post-process"] = perf_counter() - stage_started
     by_source = _count_by_source(result)
     for src, count in sorted(by_source.items()):
         print(f"  {src}: {count} nodes")
@@ -670,6 +699,7 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         from doxygen_index.cppreference import download, parse as parse_cppref
         from doxygen_index.graph_json import merge_parse_results
         print("\n=== cppreference ===")
+        stage_started = perf_counter()
         cache_dir = Path(args.cppreference_cache_dir).expanduser()
 
         archive_root = download(
@@ -684,10 +714,12 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
               f"{len(cppref_result.methods)} methods")
         result = merge_parse_results(result, cppref_result)
         print(f"  Merged: {_count_nodes(result)} nodes total")
+        timings["cppreference parse"] = perf_counter() - stage_started
 
     # ── Phase 7: Resolve namespace-scoped type deps ───────────
     from doxygen_index.doxygen import resolve_namespace_type_deps
     print("\n--- Resolving namespace type dependencies ---")
+    stage_started = perf_counter()
     resolve_namespace_type_deps(result)
 
     # ── Phase 7b: Derive namespace COMPOSES (after all nodes
@@ -696,14 +728,25 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
     result.compositions.clear()
     _derive_namespace_compositions(result)
     print(f"  Namespace compositions: {len(result.compositions)} entries")
-
-    # ── Phase 7c: Export CSV ───────────────────────────────────
-    export_neo4j = args.neo4j
-    export_csv_flag = True
+    timings["Namespace resolution"] = perf_counter() - stage_started
 
     if export_csv_flag:
+        # Normalize once, then let the CSV writer consume the keys stamped on
+        # the concrete ParseResult nodes without repeating serialization.
+        from doxygen_index.graph_json import result_to_graph_json
+        stage_started = perf_counter()
+        result_to_graph_json(result, project_name, text_scan=False)
+        timings["Graph normalization"] = perf_counter() - stage_started
+
         print(f"\n--- Exporting CSV ---")
-        export_csv(result, source=project_name, output_dir=csv_base / project_name)
+        stage_started = perf_counter()
+        export_csv(
+            result,
+            source=project_name,
+            output_dir=csv_base / project_name,
+            normalize=False,
+        )
+        timings["CSV export"] = perf_counter() - stage_started
         print(f"  CSV output: {csv_base / project_name}")
 
     if export_neo4j:
@@ -717,11 +760,23 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         if args.clear:
             _confirm_destructive(f"source '{project_name}'", args.yes)
             clear_source(project_name)
-        neo4j_write(result, source=project_name)
+        backend_timings: dict[str, float] = {}
+        stage_started = perf_counter()
+        neo4j_write(
+            result,
+            source=project_name,
+            timings=backend_timings,
+        )
+        timings["Backend serialization/write"] = perf_counter() - stage_started
+        if not export_csv_flag:
+            timings["Graph normalization"] = backend_timings.get(
+                "serialization", 0.0
+            )
         print(f"  Neo4j ingest complete")
 
     # ── Summary ────────────────────────────────────────────────
     if export_csv_flag:
+        _allow_large_csv_fields()
         print(f"\n{'='*60}")
         print(f"Codegraph CSV export complete.")
         print(f"Output directory: {csv_base}")
@@ -729,11 +784,36 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
             if subdir.is_dir():
                 nodes = subdir / "nodes.csv"
                 rels = subdir / "relationships.csv"
-                n_rows = sum(1 for _ in open(nodes)) - 1 if nodes.exists() else 0
-                r_rows = sum(1 for _ in open(rels)) - 1 if rels.exists() else 0
+                if nodes.exists():
+                    with nodes.open(newline="", encoding="utf-8") as handle:
+                        n_rows = max(0, sum(1 for _ in csv.reader(handle)) - 1)
+                else:
+                    n_rows = 0
+                if rels.exists():
+                    with rels.open(newline="", encoding="utf-8") as handle:
+                        r_rows = max(0, sum(1 for _ in csv.reader(handle)) - 1)
+                else:
+                    r_rows = 0
                 print(f"  {subdir.name}/  nodes={n_rows}  rels={r_rows}")
     if export_neo4j:
         print(f"\nNeo4j ingest complete.")
+
+    timings["Total"] = perf_counter() - started_at
+    print("\nStage timings:")
+    timing_order = (
+        "Conan discovery",
+        "Unified Doxygen",
+        "XML parse/post-process",
+        "cppreference parse",
+        "Namespace resolution",
+        "Graph normalization",
+        "CSV export",
+        "Backend serialization/write",
+        "Total",
+    )
+    for label in timing_order:
+        if label in timings:
+            print(f"  {label:<29} {timings[label]:8.2f} s")
 
 
 def _tag_nodes_by_source(
@@ -1059,6 +1139,8 @@ def main() -> None:
                     help="Override the cppreference archive URL")
     sp.add_argument("--cppreference-force", action="store_true",
                     help="Re-download cppreference even if cached")
+    sp.add_argument("--no-csv", action="store_true",
+                    help="Skip CSV generation and run backend ingestion only")
     sp.add_argument("--clear", action="store_true",
                     help="Clear existing data for this source before a full re-write. "
                          "By default, incremental update is used (adds new, updates "

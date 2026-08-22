@@ -427,6 +427,8 @@ def export_csv(
     result: ParseResult,
     source: str,
     output_dir: Path | str,
+    *,
+    normalize: bool = True,
 ) -> tuple[Path, Path]:
     """Export a ParseResult to Neo4j-import-compatible CSV files.
 
@@ -434,6 +436,8 @@ def export_csv(
         result: The parsed data from any parser.
         source: Source label (e.g. ``"cppreference"``).
         output_dir: Directory to write CSV files into.
+        normalize: Compute and stamp canonical keys before writing.  Callers
+            that already ran graph normalization may pass False.
 
     Returns:
         ``(nodes_csv_path, relationships_csv_path)``.
@@ -445,29 +449,26 @@ def export_csv(
     # the same computation as the JSON export, so CSV and JSON agree.
     from doxygen_index.graph_json import result_to_graph_json
 
-    try:
-        keyed = result_to_graph_json(result, source, text_scan=False)
-    except Exception:
-        keyed = []
-    key_by_id: dict[int, str] = {}
-    for entry in keyed:
-        ntype = entry.get("type", "")
-        qn = entry.get("qualified_name") or entry.get("name") or entry.get("path") or ""
-        for lst in _node_lists(result):
-            for node in lst:
-                if type(node).__name__ != ntype:
-                    continue
-                nqn = getattr(node, "qualified_name", None) or getattr(node, "name", None) or getattr(node, "path", None) or ""
-                if nqn == qn and id(node) not in key_by_id:
-                    key_by_id[id(node)] = entry["canonical_key"]
-    for lst in _node_lists(result):
-        for node in lst:
-            k = key_by_id.get(id(node)) or getattr(node, "canonical_key", "") or ""
-            if k:
-                try:
-                    node.canonical_key = k
-                except Exception:
-                    pass
+    if normalize:
+        result_to_graph_json(result, source, text_scan=False)
+
+    # Graph normalization stamps the canonical key directly on each concrete
+    # ParseResult node.  Object identity is the only safe association here:
+    # overloaded and parent-relative nodes may share qualified names.
+    for nodes in _node_lists(result):
+        for node in nodes:
+            if getattr(node, "canonical_key", ""):
+                continue
+            identifier = (
+                getattr(node, "qualified_name", "")
+                or getattr(node, "name", "")
+                or getattr(node, "path", "")
+                or "<unknown>"
+            )
+            raise ValueError(
+                "CSV export requires a canonical key for "
+                f"{type(node).__name__} {identifier!r}"
+            )
 
     print(f"\nExporting CSV to {output_dir} ...")
 

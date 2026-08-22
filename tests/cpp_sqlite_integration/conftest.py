@@ -246,6 +246,7 @@ def codegraph_graph():
                 "--output-dir", str(_CODEGRAPH_OUTPUT),
                 "--cppreference",
                 "--neo4j",
+                "--no-csv",
                 "--clear",
                 "--yes",
                 "--only", "sqlite3,boost,spdlog",

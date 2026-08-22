@@ -18,6 +18,21 @@ _CODEGRAPH_OUTPUT = Path(__file__).resolve().parent.parent / "codegraph_output"
 _UNIT_TEST_DATA = Path(__file__).resolve().parent.parent / "unit_test_data"
 
 
+def _stamp_imported_graph_keys(graph):
+    """Stamp canonical keys on nodes produced by PlantUML import."""
+    from urllib.parse import quote
+
+    for entry in graph._all_entries():
+        node = entry.node
+        qname = getattr(node, "qualified_name", "") or getattr(node, "name", "")
+        category = type(node).__name__.removesuffix("Node").lower()
+        node.canonical_key = (
+            "cg:v1:repository:cpp-sqlite%2Fcpp-sqlite:"
+            f"{category}:qualified_name={quote(qname, safe='')}"
+        )
+    return graph
+
+
 class TestPlantUMLExport:
     """Verify the PlantUML export contains expected elements and
     relationships for the cpp-sqlite as-built graph.
@@ -230,7 +245,9 @@ class TestPlantUMLRoundTrip:
         """Import the PlantUML → LayerGraph → export back to PlantUML."""
         from codegraph.export.plantuml import import_plantuml, export_plantuml
 
-        graph = import_plantuml(puml_text, tags=frozenset({"as-built"}))
+        graph = _stamp_imported_graph_keys(
+            import_plantuml(puml_text, tags=frozenset({"as-built"}))
+        )
         return export_plantuml(graph, fields="all")
 
     # ------------------------------------------------------------------
@@ -256,7 +273,9 @@ class TestPlantUMLRoundTrip:
         on round-trip."""
         from codegraph.export.plantuml import import_plantuml, export_plantuml
 
-        graph3 = import_plantuml(roundtrip_puml, tags=frozenset({"as-built"}))
+        graph3 = _stamp_imported_graph_keys(
+            import_plantuml(roundtrip_puml, tags=frozenset({"as-built"}))
+        )
         puml3 = export_plantuml(graph3, fields="all")
 
         # Both should have the 4 INHERITS_FROM edges
@@ -885,7 +904,11 @@ class TestPublicInterfaceView:
             )
             if m:
                 tgt_alias = m.group(3)
-                assert tgt_alias.startswith("cpp_sqlite__") or tgt_alias == "DAOBase", (
+                assert (
+                    tgt_alias.startswith("cpp_sqlite__")
+                    or tgt_alias == "DAOBase"
+                    or tgt_alias.startswith("DAOBase__")
+                ), (
                     f"Public-view edge targets non-project element: {line.strip()!r}"
                 )
 

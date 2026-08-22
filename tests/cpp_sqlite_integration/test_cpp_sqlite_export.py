@@ -92,15 +92,15 @@ class TestFullGraphExport:
                 continue
             for edge in node.get("edges", []):
                 total_edges += 1
-                if edge["target_uid"] not in uid_map:
+                if edge["target_key"] not in uid_map:
                     unresolved.append(edge)
             # COMPOSES children are structural but should also resolve
             for child in node.get("composes", []):
-                child_uid = child.get("uid", "")
+                child_uid = child.get("canonical_key", "")
                 if child_uid not in uid_map:
                     unresolved.append({
                         "relation_type": "COMPOSES",
-                        "target_uid": child_uid,
+                        "target_key": child_uid,
                         "target_type": child.get("kind", ""),
                     })
 
@@ -112,7 +112,7 @@ class TestFullGraphExport:
         assert len(non_invokes_unresolved) == 0, (
             f"{len(non_invokes_unresolved)} non-INVOKES edges unresolved:\n"
             + "\n".join(
-                f"  {e['relation_type']}: {e['target_uid']} ({e['target_type']})"
+                f"  {e['relation_type']}: {e['target_key']} ({e['target_type']})"
                 for e in non_invokes_unresolved[:10]
             )
         )
@@ -132,6 +132,8 @@ class TestFullGraphExport:
         except Exception:
             pytest.skip("conan deps not installed")
 
+        assert pkgs is not None
+
         assert "boost" in pkgs, f"boost not in {sorted(pkgs)}"
         assert "sqlite3" in pkgs, f"sqlite3 not in {sorted(pkgs)}"
         assert "spdlog" in pkgs, f"spdlog not in {sorted(pkgs)}"
@@ -148,7 +150,7 @@ class TestFullGraphExport:
             from_qn = node.get("qualified_name", "") or node.get("name", "")
             node_type = node.get("type", "")
             for edge in node.get("edges", []):
-                target = uid_map.get(edge["target_uid"], {})
+                target = uid_map.get(edge["target_key"], {})
                 to_qn = target.get("qualified_name", "") or target.get("name", "")
                 to_src = target.get("source", "?")
                 if edge["relation_type"] == "INCLUDES":
@@ -279,48 +281,6 @@ class TestFullGraphExport:
         print(f"\n  cpp_sqlite COMPOSES {len(composes_children)} children")
         print(f"    classes: {len(expected_classes)}, concepts: {len(expected_concepts)}")
 
-    # DEVNOTE: Previously used the full merged ParseResult to verify
-    # that std namespace COMPOSES all expected stdlib types.  The as-built
-    # LayerGraph only includes std types directly referenced by project
-    # nodes, so the set of COMPOSES children is scoped.
-
-    def test_std_namespace_composes_stdlib_classes(self, codegraph_graph):
-        """Verify the ``std`` namespace (cppreference) COMPOSES key
-        stdlib types referenced by the project."""
-        serialized, uid_map = codegraph_graph
-
-        std_ns = None
-        for n in uid_map.values():
-            if (n.get("kind") == "namespace"
-                    and n.get("qualified_name") == "std"
-                    and len(n.get("composes", [])) > 0):
-                std_ns = n
-                break
-        assert std_ns is not None, "std namespace node with children not found"
-
-        composes_children = std_ns.get("composes", [])
-        composes_targets: set[str] = set()
-        for child in composes_children:
-            qn = child.get("qualified_name", "") or child.get("name", "")
-            if qn:
-                composes_targets.add(qn)
-
-        # Key stdlib types pulled in via one-hop from cpp-sqlite.
-        expected_stdlib = [
-            "std::shared_ptr",
-            "std::unique_ptr",
-            "std::vector",
-            "std::unordered_map",
-            "std::optional",
-            "std::mutex",
-        ]
-        for expected in expected_stdlib:
-            assert expected in composes_targets, (
-                f"std namespace should COMPOSE {expected}"
-            )
-
-        print(f"\n  std COMPOSES {len(composes_children)} children")
-
     def test_boost_namespace_composes_boost_types(self, codegraph_graph):
         """The synthetic ``boost`` namespace COMPOSES boost::unordered_map
         (pulled in via one-hop from cpp-sqlite)."""
@@ -342,6 +302,45 @@ class TestFullGraphExport:
             "boost namespace should COMPOSE boost::unordered_map"
         )
         print(f"\n  boost COMPOSES {len(composes)} children")
+
+    # DEVNOTE: Previously used the full merged ParseResult to verify
+    # that std namespace COMPOSES all expected stdlib types.  The as-built
+    # LayerGraph only includes std types directly referenced by project
+    # nodes, so the set of COMPOSES children is scoped.
+    def test_std_namespace_composes_stdlib_classes(self, codegraph_graph):
+        """Verify that cppreference ``std`` COMPOSES referenced stdlib types."""
+        serialized, uid_map = codegraph_graph
+
+        std_ns = None
+        for n in uid_map.values():
+            if (n.get("kind") == "namespace"
+                    and n.get("qualified_name") == "std"
+                    and len(n.get("composes", [])) > 0):
+                std_ns = n
+                break
+        assert std_ns is not None, "std namespace node with children not found"
+
+        composes_children = std_ns.get("composes", [])
+        composes_targets: set[str] = set()
+        for child in composes_children:
+            qn = child.get("qualified_name", "") or child.get("name", "")
+            if qn:
+                composes_targets.add(qn)
+
+        expected_stdlib = [
+            "std::shared_ptr",
+            "std::unique_ptr",
+            "std::vector",
+            "std::unordered_map",
+            "std::optional",
+            "std::mutex",
+        ]
+        for expected in expected_stdlib:
+            assert expected in composes_targets, (
+                f"std namespace should COMPOSE {expected}"
+            )
+
+        print(f"\n  std COMPOSES {len(composes_children)} children")
 
     def test_spdlog_namespace_composes_spdlog_types(self, codegraph_graph):
         """The synthetic ``spdlog`` namespace COMPOSES spdlog::logger and
@@ -377,7 +376,7 @@ class TestFullGraphExport:
         uid_to_qn: dict[str, str] = {}
         def _index_uids(entries):
             for e in entries:
-                uid = e.get("uid", "")
+                uid = e.get("canonical_key", "")
                 qn = e.get("qualified_name", "") or e.get("name", "")
                 if uid and qn:
                     uid_to_qn[uid] = qn
@@ -391,7 +390,7 @@ class TestFullGraphExport:
                 qn = e.get("qualified_name", "")
                 for edge in e.get("edges", []):
                     if edge["relation_type"] == "CONSTRAINS":
-                        target = uid_to_qn.get(edge["target_uid"], edge["target_uid"])
+                        target = uid_to_qn.get(edge["target_key"], edge["target_key"])
                         constrains.add((qn, target))
                 _collect(e.get("composes", []))
         _collect(serialized)
@@ -422,7 +421,7 @@ class TestFullGraphExport:
                     or n.get("source") != project_source):
                 continue
             for child in n.get("composes", []):
-                tgt = child.get("uid", "")
+                tgt = child.get("canonical_key", "")
                 if tgt and tgt not in uid_map:
                     unresolved.append((
                         n.get("qualified_name", "?"),
@@ -468,7 +467,7 @@ class TestFullGraphExport:
         inherits_targets = set()
         for e in tx_error.get("edges", []):
             if e.get("relation_type") == "INHERITS_FROM":
-                tgt = uid_map.get(e["target_uid"], {})
+                tgt = uid_map.get(e["target_key"], {})
                 qn = tgt.get("qualified_name", "")
                 if qn:
                     inherits_targets.add(qn)
@@ -525,7 +524,7 @@ class TestArchivedSqliteReference:
         assert n_as_built > 0, "archived database has no as-built nodes"
 
     def test_artifact_contains_validated_graph(self, codegraph_graph, archived_db):
-        """Every node uid the suite validated exists in the archived db.
+        """Every canonical key the suite validated exists in the archived db.
 
         The retrieved as-built LayerGraph (serialized to
         ``cpp_sqlite_one_hop.json``) must be exactly reproducible from
@@ -535,20 +534,20 @@ class TestArchivedSqliteReference:
         serialized, uid_map = codegraph_graph
         con, _ = archived_db
 
-        uids = {n["uid"] for n in uid_map.values()}
+        uids = {n["canonical_key"] for n in uid_map.values()}
         assert uids
 
-        # Read archived uids in chunks (72MB db / 47k nodes — one IN
+        # Read archived keys in chunks (72MB db / 47k nodes — one IN
         # query with thousands of placeholders is fine in sqlite).
         placeholders = ",".join("?" * len(uids))
         archived = {
             row[0] for row in con.execute(
-                f"SELECT uid FROM nodes WHERE uid IN ({placeholders})",
+                f"SELECT canonical_key FROM nodes WHERE canonical_key IN ({placeholders})",
                 list(uids),
             )
         }
         missing = uids - archived
         assert not missing, (
-            f"{len(missing)} of {len(uids)} validated node uids missing "
+            f"{len(missing)} of {len(uids)} validated canonical keys missing "
             f"from archived sqlite database: {sorted(missing)[:5]}"
         )

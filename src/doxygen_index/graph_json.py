@@ -6,7 +6,7 @@ LayerGraph deserialization and backend-independent graph inspection.
 
 Each node dict contains:
 - ``type``: the codegraph node class name (e.g. ``"ClassNode"``)
-- node properties (name, qualified_name, refid, etc.)
+- portable semantic node properties (name, qualified_name, etc.)
 - ``tags``: provenance tags (set to the project name)
 - ``edges``: a list of ``{relation_type, target_key, target_type}`` dicts
 
@@ -22,6 +22,21 @@ from pathlib import Path
 from doxygen_index.parser.model import ParseResult
 
 from codegraph.models.compound import CompoundNode
+
+
+# Doxygen locators are extraction/provenance data.  They are deliberately
+# retained in ParseResult DTOs and the lookup indexes below, but never cross
+# the normal LayerGraph wire boundary.  Parent-relative identities are
+# resolved into canonical_key before this policy is applied.
+PARSER_LOCATOR_FIELDS = frozenset({
+    "refid",
+    "compound_refid",
+    "member_refid",
+    "parent_refid",
+    "child_refid",
+    "from_refid",
+    "to_refid",
+})
 
 
 def merge_parse_results(*results: ParseResult) -> ParseResult:
@@ -51,6 +66,7 @@ def result_to_graph_json(
     source: str,
     *,
     text_scan: bool = True,
+    portable: bool = True,
 ) -> list[dict]:
     """Convert a ParseResult to a list of serialized node dicts.
 
@@ -69,6 +85,10 @@ def result_to_graph_json(
             synthetic edges (e.g. a ``definition`` field naming the
             same function in a canonical namespace) are noise in the
             stored graph.
+        portable: When True (default), omit parser locator fields such as
+            ``refid`` from the normal LayerGraph wire format.  Backend
+            persistence passes False so incremental maintenance can retain
+            its internal parser indexes.
 
     Returns:
         A list of dicts, each a serialized node with ``type``,
@@ -170,8 +190,18 @@ def result_to_graph_json(
             return resolve_identity_for(
                 node, node_scope, parents=parents or {}
             ).key()
-        except Exception:
-            return None
+        except Exception as exc:
+            node_type = type(node).__name__
+            identifier = (
+                _get_prop(node, "qualified_name")
+                or _get_prop(node, "name")
+                or _get_prop(node, "path")
+                or "<unknown>"
+            )
+            raise ValueError(
+                f"canonical-key generation failed for "
+                f"{node_type} {identifier!r}"
+            ) from exc
 
     # refid → node (first emission wins) and qname → key maps.
     refid_to_uid: dict[str, str] = {}
@@ -179,6 +209,10 @@ def result_to_graph_json(
     key_cache: dict[int, str] = {}
     qname_to_uid: dict[str, str] = {}
     qname_to_type: dict[str, str] = {}
+    implementation_member_refid_by_id = {
+        id(ref.implementation): ref.member_refid
+        for ref in result.implementation_refs
+    }
 
     # Pass A: keys for non-parent-relative nodes (roots of the identity
     # graph): files, namespaces, compounds, members, functions, defines,
@@ -228,11 +262,12 @@ def result_to_graph_json(
             key_cache[id(member)] = k
         return k or ""
 
-    # ParameterNode / ImplementationNode (parent_callable_key).
+    # ParameterNode (parent_callable_key).  Implementations are resolved after
+    # test nodes below because a test step can itself own an implementation.
     for nodes in node_lists:
         for node in nodes:
             t = type(node).__name__
-            if t not in ("ParameterNode", "ImplementationNode"):
+            if t != "ParameterNode":
                 continue
             prefid = _get_prop(node, "member_refid") or ""
             pk = _parent_member_key(prefid)
@@ -304,6 +339,22 @@ def result_to_graph_json(
                 if refid:
                     refid_to_uid[refid] = key
                     refid_to_type[refid] = t
+
+    # ImplementationNode (parent_callable_key).  This pass must follow test
+    # identity resolution: test steps and fixtures can own extracted source
+    # implementations and are themselves parent-relative nodes.
+    for node in result.implementations:
+        prefid = implementation_member_refid_by_id.get(id(node), "")
+        pk = _parent_member_key(prefid)
+        key = _canonical_key(node, parents={"parent_callable_key": pk})
+        if key:
+            key_cache[id(node)] = key
+            # Implementations share their owner's qualified name and must not
+            # replace the callable in the general qualified-name lookup.
+            refid = _get_prop(node, "refid")
+            if refid:
+                refid_to_uid[refid] = key
+                refid_to_type[refid] = "ImplementationNode"
 
     def _key_of_node(node) -> str:
         return key_cache.get(id(node), "")
@@ -438,6 +489,14 @@ def result_to_graph_json(
         if fp and fkey:
             file_uid_by_path[fp] = fkey
 
+    # Implementation identities are parent-relative and already resolved
+    # above.  Build this object-identity index once, rather than rebuilding a
+    # dictionary containing every implementation for every serialized node.
+    implementation_keys_by_id = {
+        id(node): _key_of_node(node)
+        for node in result.implementations
+    }
+
     # Serialize each node and attach edges
     serialized: list[dict] = []
     # key → index into ``serialized`` (WP6.1 duplicate-key elimination)
@@ -491,6 +550,8 @@ def result_to_graph_json(
 
             declared = PropertyRegistry.properties_of(type(node))
             for pname in declared:
+                if portable and pname in PARSER_LOCATOR_FIELDS:
+                    continue
                 if pname in entry:
                     continue
                 val = _raw_prop(node, pname)
@@ -518,6 +579,7 @@ def result_to_graph_json(
                 concept_constraints_by_from,
                 param_uids_by_member_refid,
                 file_uid_by_path,
+                implementation_keys_by_id,
                 type_param_concept_by_qn,
             )
             # Filter out self-references (edge target_key == this node's key).
@@ -704,6 +766,7 @@ def _build_node_edges(
     concept_constraints_by_from: dict[str, list[tuple[str, str]]],
     param_uids_by_member_refid: dict[str, list[str]],
     file_uid_by_path: dict[str, str],
+    implementation_keys_by_id: dict[int, str],
     type_param_concept_by_qn: dict[str, str],
 ) -> list[dict]:
     """Build the edge list for a single node using pre-built index maps.
@@ -949,8 +1012,7 @@ def _build_node_edges(
         for ref in result.implementation_refs:
             if ref.member_refid != node_refid:
                 continue
-            impl_qn = getattr(ref.implementation, "qualified_name", "") or ""
-            impl_key = qname_to_uid.get(impl_qn)
+            impl_key = implementation_keys_by_id.get(id(ref.implementation), "")
             if impl_key:
                 edges.append({
                     "relation_type": "HAS_IMPLEMENTATION",

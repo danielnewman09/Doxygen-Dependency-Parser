@@ -35,6 +35,7 @@ name = "cpp_sqlite"
 input_paths = ["cpp_sqlite/src"]
 file_patterns = "*.h *.hpp *.cpp"
 exclude_patterns = "*/test/* */build/* */.git/*"
+test_paths = ["cpp_sqlite/test"]
 predefined = "BOOST_DESCRIBE_CPP14=1 SQLITE_USECPP20=1 FMT_CONSTEVAL="
 TOML
     echo "Created."

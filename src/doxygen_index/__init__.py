@@ -17,7 +17,7 @@ Basic usage::
 
 __version__ = "0.1.0"
 
-from doxygen_index.conan import discover_packages
+from doxygen_index.conan import ConanDiscoveryError, discover_packages
 from doxygen_index.doxygen import generate_xml, generate_doxyfile
 from doxygen_index.parser import parse_xml_dir
 from doxygen_index.project import ProjectConfig, load_config
@@ -36,6 +36,7 @@ from doxygen_index.enrich import (
 
 __all__ = [
     "discover_packages",
+    "ConanDiscoveryError",
     "generate_xml",
     "generate_doxyfile",
     "parse_xml_dir",

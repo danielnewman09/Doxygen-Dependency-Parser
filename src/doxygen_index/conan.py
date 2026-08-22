@@ -11,6 +11,10 @@ from pathlib import Path
 from typing import Optional
 
 
+class ConanDiscoveryError(RuntimeError):
+    """The Conan tool or its metadata could not be used."""
+
+
 def discover_packages(
     project_dir: Path | str = ".",
     build_type: str = "Debug",
@@ -27,9 +31,19 @@ def discover_packages(
         only: If provided, only discover these dependency names.
 
     Returns:
-        Dict mapping dependency name to its include directory Path.
+        Dict mapping dependency name to its include directory Path.  An empty
+        mapping is a successful discovery with no dependencies; tool or
+        environment failures raise :class:`ConanDiscoveryError`.
     """
     project_dir = Path(project_dir).resolve()
+
+    # Conan is optional for project-only parses.  In particular, generated
+    # codegen trees may have Doxygen metadata without a Conan manifest.
+    if not any(
+        (project_dir / filename).is_file()
+        for filename in ("conanfile.py", "conanfile.txt")
+    ):
+        return {}
 
     print(f"Discovering Conan dependency paths (build_type={build_type})...")
 
@@ -38,8 +52,7 @@ def discover_packages(
     import shutil
     conan_exe = shutil.which("conan")
     if not conan_exe:
-        print("Error: 'conan' not found on PATH.", file=sys.stderr)
-        return {}
+        raise ConanDiscoveryError("'conan' is not available on PATH")
 
     try:
         result = subprocess.run(
@@ -48,10 +61,14 @@ def discover_packages(
             capture_output=True, text=True, cwd=project_dir, check=True,
         )
     except subprocess.CalledProcessError as e:
-        print(f"Error running 'conan graph info': {e.stderr}", file=sys.stderr)
-        return {}
+        raise ConanDiscoveryError(
+            f"conan graph info failed: {(e.stderr or '').strip()}"
+        ) from e
 
-    raw = json.loads(result.stdout)
+    try:
+        raw = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ConanDiscoveryError("conan graph info returned invalid JSON") from exc
     graph_nodes = raw.get("graph", raw).get("nodes", {})
     paths: dict[str, Path] = {}
 
@@ -79,8 +96,11 @@ def discover_packages(
                         capture_output=True, text=True, check=True,
                     )
                     pkg_folder = cache_result.stdout.strip()
-                except subprocess.CalledProcessError:
-                    pass
+                except subprocess.CalledProcessError as exc:
+                    raise ConanDiscoveryError(
+                        f"conan cache path failed for {ref}:{package_id}: "
+                        f"{(exc.stderr or '').strip()}"
+                    ) from exc
 
         if pkg_folder:
             include_dir = Path(pkg_folder) / "include"
