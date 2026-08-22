@@ -177,18 +177,16 @@ class TestCanonicalKeys:
             ],
         )
 
-        portable = result_to_graph_json(result, "demo", text_scan=False)
+        first_export = result_to_graph_json(result, "demo", text_scan=False)
         first_keys = [node.canonical_key for node in implementations]
-        persisted = result_to_graph_json(
-            result, "demo", text_scan=False, portable=False,
-        )
+        repeated_export = result_to_graph_json(result, "demo", text_scan=False)
         repeated_keys = [node.canonical_key for node in implementations]
 
         assert len(set(first_keys)) == 2
         assert repeated_keys == first_keys
-        method_entries = [n for n in portable if n["type"] == "MethodNode"]
+        method_entries = [n for n in first_export if n["type"] == "MethodNode"]
         implementation_entries = {
-            n["canonical_key"] for n in portable
+            n["canonical_key"] for n in first_export
             if n["type"] == "ImplementationNode"
         }
         targets = {
@@ -198,8 +196,8 @@ class TestCanonicalKeys:
             if edge["relation_type"] == "HAS_IMPLEMENTATION"
         }
         assert targets == implementation_entries == set(first_keys)
-        assert all("refid" not in node for node in portable)
-        assert any("refid" in node for node in persisted if node["type"] == "MethodNode")
+        assert all("refid" not in node for node in first_export)
+        assert all("refid" not in node for node in repeated_export)
 
     def test_test_step_implementation_uses_resolved_step_key(self):
         test = TestNode(
