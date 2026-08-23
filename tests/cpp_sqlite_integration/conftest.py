@@ -18,6 +18,8 @@ import shutil
 import subprocess
 import os as _os
 import json as _json
+import sys
+import tempfile
 
 import pytest
 
@@ -25,6 +27,22 @@ _HERE = Path(__file__).resolve().parent
 _PARENT_TESTS = _HERE.parent
 _FIXTURE_DIR = _PARENT_TESTS / "fixtures" / "cpp-sqlite"
 _CODEGRAPH_OUTPUT = _PARENT_TESTS / "codegraph_output"
+# The codegraph repository owns the synchronization command.  Allow the
+# sibling checkout to be overridden for CI or a non-standard workspace.
+_CODEGRAPH_ROOT = Path(
+    _os.environ.get(
+        "CODEGRAPH_ROOT",
+        str(_PARENT_TESTS.parent.parent / "codegraph"),
+    )
+)
+_SYNC_FIXTURES = _CODEGRAPH_ROOT / "scripts" / "sync_codegen_fixtures.py"
+# Override with the executable used by the test environment when it is not on
+# PATH (for example, ``DOXYGEN_INDEX=/path/to/doxygen-index`` in VS Code).
+_DOXYGEN_INDEX = (
+    _os.environ.get("DOXYGEN_INDEX")
+    or shutil.which("doxygen-index")
+    or "doxygen-index"
+)
 
 #: Gitignored directory for generated test data (serialized JSON,
 #: archived sqlite database, …).  Kept out of git — the artifacts are
@@ -76,6 +94,40 @@ def _refresh_fixture_report(
 
 def _doxygen_available() -> bool:
     return shutil.which("doxygen") is not None
+
+
+def _sync_codegen_fixtures() -> None:
+    """Refresh and validate codegraph's checked-in fixture copies.
+
+    This runs after the owner fixture has regenerated the cpp-sqlite exports,
+    so the sister repository is the source for the ``pull`` action.  The
+    follow-up ``check`` keeps the synchronization contract strict and leaves
+    any resulting canonical-artifact changes visible in the worktree.
+    """
+    if not _SYNC_FIXTURES.is_file():
+        pytest.fail(
+            "fixture sync script not found; set CODEGRAPH_ROOT to the "
+            f"codegraph checkout: {_SYNC_FIXTURES}"
+        )
+
+    for action in ("pull", "check"):
+        result = subprocess.run(
+            [sys.executable, str(_SYNC_FIXTURES), action],
+            cwd=str(_CODEGRAPH_ROOT),
+            env=_os.environ.copy(),
+            timeout=120,
+            capture_output=True,
+            text=True,
+        )
+        if result.stdout:
+            print(f"\n[fixture sync {action}]\n{result.stdout.rstrip()}")
+        if result.stderr:
+            print(f"\n[fixture sync {action} stderr]\n{result.stderr.rstrip()}")
+        if result.returncode != 0:
+            pytest.fail(
+                f"fixture sync action {action!r} failed "
+                f"(rc={result.returncode})"
+            )
 
 
 def _archive_sqlite(source_path: Path, dest_path: Path) -> None:
@@ -233,28 +285,45 @@ def codegraph_graph():
         env = {**_os.environ,
                "CODEGRAPH_BACKEND": "sqlite",
                "SQLITE_PATH": str(_SQLITE_PATH)}
+    # The parser and ingest subprocess must not inherit a random hash seed:
+    # unordered reference collections otherwise change which equivalent
+    # dependency endpoint is selected for a one-hop export.
+    env["PYTHONHASHSEED"] = "0"
+    deterministic_python = _HERE / "deterministic_python"
+    env["PYTHONPATH"] = _os.pathsep.join(
+        part for part in (str(deterministic_python), env.get("PYTHONPATH", ""))
+        if part
+    )
 
     _dbg("launching ingest subprocess...")
     # Stream subprocess output to a log file (not captured) so a hung
     # ingest is diagnosable live: tail tests/codegraph_output/ingest.log
     ingest_log = _CODEGRAPH_OUTPUT / "ingest.log"
-    with ingest_log.open("w", encoding="utf-8") as _logf:
-        result = subprocess.run(
-            [
-                "doxygen-index", "codegraph",
-                "--project-dir", str(_FIXTURE_DIR),
-                "--output-dir", str(_CODEGRAPH_OUTPUT),
-                "--cppreference",
-                "--neo4j",
-                "--no-csv",
-                "--clear",
-                "--yes",
-                "--only", "sqlite3,boost,spdlog",
-            ],
-            env=env, timeout=600,
-            stdout=_logf, stderr=subprocess.STDOUT,
-            text=True,
-        )
+    # Doxygen leaves old XML files in place when an output directory is
+    # reused.  A fresh directory per owner run is part of fixture
+    # reproducibility: stale parser input must not change which one-hop
+    # endpoint is selected.
+    with tempfile.TemporaryDirectory(
+        prefix="cpp_sqlite_owner_", dir=str(_CODEGRAPH_OUTPUT)
+    ) as ingest_output:
+        with ingest_log.open("w", encoding="utf-8") as _logf:
+            result = subprocess.run(
+                [
+                    _DOXYGEN_INDEX,
+                    "codegraph",
+                    "--project-dir", str(_FIXTURE_DIR),
+                    "--output-dir", ingest_output,
+                    "--cppreference",
+                    "--neo4j",
+                    "--no-csv",
+                    "--clear",
+                    "--yes",
+                    "--only", "sqlite3,boost,spdlog",
+                ],
+                env=env, timeout=600,
+                stdout=_logf, stderr=subprocess.STDOUT,
+                text=True,
+            )
     _dbg(f"ingest subprocess done rc={result.returncode} (log: {ingest_log})")
     _sub_out = ingest_log.read_text(encoding="utf-8")
     print(f"\n  [subprocess] rc={result.returncode}")
@@ -327,6 +396,12 @@ def codegraph_graph():
         encoding="utf-8",
     )
     _dbg("implementation export written")
+
+    # The generated exports are the sister repository's canonical inputs for
+    # codegraph's consumer tests.  Synchronize them before those consumers
+    # run, and fail if the resulting checked-in artifact set is inconsistent.
+    _dbg("synchronizing codegraph fixtures...")
+    _sync_codegen_fixtures()
 
     # ── Step 3b: Save sqlite reference artifact ─────────────
     # The generated backend database is archived into unit_test_data

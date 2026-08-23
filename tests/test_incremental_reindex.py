@@ -19,20 +19,23 @@ objects from the backend and inspect their relationship managers
 * **Preservation**: nodes from *other* sources are untouched.
 
 Backend-agnostic since Phase 2 — all helpers go through the codegraph
-repository API (``find_all_by_source`` / ``delete_by_uid`` /
+repository API (``find_all_by_source`` / canonical-key deletion /
 ``get_all_edges``), never raw Cypher.
 """
 
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import textwrap
+from collections import Counter
 from pathlib import Path
 
 import pytest
 
 from codegraph import get_backend
+from codegraph.identity import CanonicalIdentity
 
 from doxygen_index.parser import parse_python_dir
 from doxygen_index.graph_json import result_to_graph_json
@@ -60,9 +63,25 @@ def _nodes_by_source(source: str = TEST_SOURCE) -> list:
     return get_backend().graph.find_all_by_source(source)
 
 
-def _file_exists(refid: str, source: str = TEST_SOURCE) -> bool:
+def _file_exists(module_name: str, source: str = TEST_SOURCE) -> bool:
+    """Return whether a canonical FileNode represents *module_name*.
+
+    Parser ``refid`` is intentionally absent from portable persistence.  The
+    test still accepts the parser-facing module spelling by matching it to the
+    persisted repository path, while the node's canonical key remains the
+    actual identity under test.
+    """
+    suffixes = (
+        f"/{module_name.replace('.', '/')}.py",
+        f"/{module_name.replace('.', '/')}.pyi",
+    )
     return any(
-        type(n).__name__ == "FileNode" and getattr(n, "refid", "") == refid
+        type(n).__name__ == "FileNode"
+        and getattr(n, "canonical_key", "")
+        and any(
+            str(getattr(n, "path", "") or "").replace("\\", "/").endswith(suffix)
+            for suffix in suffixes
+        )
         for n in _nodes_by_source(source)
     )
 
@@ -137,9 +156,9 @@ def _clear_source(source: str) -> None:
     """Delete every node carrying *source* via the repository API."""
     graph = get_backend().graph
     for node in graph.find_all_by_source(source):
-        uid = node.canonical_key
-        if uid:
-            graph.delete_by_uid(uid)
+        key = node.canonical_key
+        if key:
+            graph.delete_by_uid(key)
 
 
 def _clear_test_sources():
@@ -166,12 +185,10 @@ def _node_identity(node) -> str:
     """Return a string identity for *node*, preferring ``refid``, then
     ``qualified_name``, then ``path``.
 
-    ``refid`` is the primary key for every source-derived node (for
-    Python nodes it equals the qualified name; for FileNode it is the
-    module name).  FileNode's ``qualified_name`` is computed from its
-    path on save, so checking ``refid`` first keeps FileNode targets
-    identified by module name (``samplepkg.backend``) instead of the
-    absolute file path.
+    Parser locators are present on in-memory parser nodes but are absent from
+    portable persistence.  For persisted FileNodes the path is therefore the
+    fallback display identity; canonical-key assertions use
+    :func:`_rel_canonical_keys` instead.
     """
     for attr in ("refid", "qualified_name", "path"):
         val = getattr(node, attr, None)
@@ -184,18 +201,72 @@ def _rel_qnames(node, rel_manager_name: str) -> set[str]:
     """Return the set of identity strings of nodes reachable via a
     relationship manager on *node*.
 
-    Uses :func:`_node_identity` so that FileNode targets (which lack
-    ``qualified_name``) are identified by ``refid`` or ``path``.
+    Uses :func:`_node_identity` for legacy display assertions.  Canonical
+    relationship assertions use :func:`_rel_canonical_keys`.
 
     Example::
 
         _rel_qnames(ns, "classes")  → {"samplepkg.backend.Evaluator"}
-        _rel_qnames(cls, "defined_in") → {"samplepkg.backend"}  # FileNode refid
+        _rel_qnames(cls, "defined_in") → {".../samplepkg/backend.py"}
     """
     rm = getattr(node, rel_manager_name, None)
     if rm is None:
         return set()
     return {_node_identity(n) for n in rm.all()}
+
+
+def _rel_canonical_keys(node, rel_manager_name: str) -> set[str]:
+    """Return canonical keys of nodes reachable via a relationship manager."""
+    rm = getattr(node, rel_manager_name, None)
+    if rm is None:
+        return set()
+    return {
+        getattr(target, "canonical_key", "")
+        for target in rm.all()
+        if getattr(target, "canonical_key", "")
+    }
+
+
+def _node_fingerprint(node) -> tuple[str, str, str]:
+    """Portable node fingerprint keyed by canonical identity."""
+    payload = dict(node.serialize(fields="all"))
+    payload.pop("canonical_key", None)
+    payload.pop("edges", None)
+    for field_name in {
+        "refid", "compound_refid", "member_refid", "parent_refid",
+        "child_refid", "from_refid", "to_refid",
+    }:
+        payload.pop(field_name, None)
+    return (
+        getattr(node, "canonical_key", ""),
+        type(node).__name__,
+        json.dumps(payload, sort_keys=True, default=str),
+    )
+
+
+def _graph_fingerprint(source: str = TEST_SOURCE):
+    """Fingerprint all nodes and outgoing edges using canonical endpoints."""
+    nodes = _nodes_by_source(source)
+    node_fingerprints = {_node_fingerprint(node) for node in nodes}
+    edge_fingerprints = set()
+    for node in nodes:
+        for edge in get_backend().get_all_edges(node):
+            if not edge.is_outgoing or not edge.target_key:
+                continue
+            properties = json.dumps(
+                dict(getattr(edge, "attributes", None) or {}),
+                sort_keys=True,
+                default=str,
+            )
+            edge_fingerprints.add(
+                (
+                    node.canonical_key,
+                    edge.relation_type,
+                    edge.target_key,
+                    properties,
+                )
+            )
+    return node_fingerprints, edge_fingerprints
 
 
 def _rel_count(node, rel_manager_name: str) -> int:
@@ -1156,12 +1227,15 @@ class TestRelationshipIntegrity:
         qname = "samplepkg.backend.Evaluator"
         cls_before = _get_node(ClassNode, qname)
 
-        # Record the DEFINED_IN edge (points to a FileNode, identified by refid)
-        defined_in_before = _rel_qnames(cls_before, "defined_in")
+        # Record the DEFINED_IN edge by canonical FileNode key.  Parser
+        # locators are intentionally absent from portable persistence.
+        defined_in_before = _rel_canonical_keys(cls_before, "defined_in")
         assert len(defined_in_before) > 0, "Expected DEFINED_IN edge before update"
-        assert "samplepkg.backend" in defined_in_before, (
-            f"Expected DEFINED_IN → samplepkg.backend, got {defined_in_before}"
-        )
+        file_identities = {
+            CanonicalIdentity.from_key(key)
+            for key in defined_in_before
+        }
+        assert any(identity.category == "file" for identity in file_identities)
 
         # Update the docstring
         backend_file = initial_index / SAMPLEPKG / "backend.py"
@@ -1177,7 +1251,7 @@ class TestRelationshipIntegrity:
 
         # DEFINED_IN edge is preserved
         cls_after = _get_node(ClassNode, qname)
-        defined_in_after = _rel_qnames(cls_after, "defined_in")
+        defined_in_after = _rel_canonical_keys(cls_after, "defined_in")
         assert defined_in_after == defined_in_before, (
             f"DEFINED_IN edges changed: {defined_in_before} → {defined_in_after}"
         )
@@ -1217,6 +1291,120 @@ class TestRelationshipIntegrity:
             f"  before: {snapshot_before}\n"
             f"  after:  {snapshot_after}"
         )
+
+    def test_canonical_node_and_relationship_fingerprints_unchanged_on_noop(
+        self, initial_index,
+    ):
+        """An unchanged index is a semantic no-op across the whole source."""
+        from doxygen_index.neo4j_backend import update_result
+
+        before = _graph_fingerprint()
+        result = parse_python_dir(initial_index, source=TEST_SOURCE, progress_interval=0)
+        assert update_result(result, source=TEST_SOURCE) == {}
+        after = _graph_fingerprint()
+
+        assert after == before
+
+
+# ---------------------------------------------------------------------------
+# Tests — Canonical reconciliation diagnostics
+# ---------------------------------------------------------------------------
+
+class TestCanonicalReconciliation:
+    """The liveness pass is canonical, strict, and fail-safe."""
+
+    def test_inventory_matches_persisted_keys_and_exposes_locator_defect(
+        self, initial_index,
+    ):
+        from doxygen_index.neo4j_backend import (
+            _build_incoming_inventory,
+            _build_persisted_inventory,
+        )
+
+        result = parse_python_dir(initial_index, source=TEST_SOURCE, progress_interval=0)
+        incoming, normalized = _build_incoming_inventory(result, TEST_SOURCE)
+        persisted = _build_persisted_inventory(TEST_SOURCE)
+
+        # The semantic inventory is unchanged before any write/delete pass.
+        assert incoming.keys_for_source(TEST_SOURCE) == persisted.keys_for_source(
+            TEST_SOURCE
+        )
+        assert sum(len(keys) for keys in incoming.by_type.values()) == len(
+            incoming.entries
+        )
+        for entry in normalized:
+            assert entry["canonical_key"]
+            CanonicalIdentity.from_key(entry["canonical_key"])
+
+        # Structured observation of the old defect: portable persisted nodes
+        # have no parser locators, so locator-based stale selection marks the
+        # FileNode and ParameterNode populations even though canonical keys
+        # match exactly.
+        live_files = {
+            getattr(node, "refid", "")
+            for node in result.files
+            if getattr(node, "refid", "")
+        }
+        live_members = {
+            getattr(node, "refid", "")
+            for node_list in (
+                result.methods, result.attributes,
+                result.functions, result.defines,
+            )
+            for node in node_list
+            if getattr(node, "refid", "")
+        }
+        locator_selected = Counter()
+        for node in _nodes_by_source():
+            node_type = type(node).__name__
+            if node_type == "FileNode":
+                stale = (getattr(node, "refid", "") or "") not in live_files
+            elif node_type == "ParameterNode":
+                stale = (getattr(node, "member_refid", "") or "") not in live_members
+            else:
+                stale = False
+            if stale:
+                locator_selected[node_type] += 1
+
+        assert locator_selected["FileNode"] > 0
+        assert locator_selected["ParameterNode"] > 0
+
+    def test_distinct_payloads_cannot_share_a_canonical_key(self):
+        from codegraph import ClassNode
+        from doxygen_index.neo4j_backend import (
+            CanonicalReconciliationError,
+            _build_incoming_inventory,
+        )
+        from doxygen_index.parser.model import ParseResult
+
+        result = ParseResult(classes=[
+            ClassNode(
+                refid="parser-a", name="First",
+                qualified_name="demo::Shared", source="demo",
+            ),
+            ClassNode(
+                refid="parser-b", name="Second",
+                qualified_name="demo::Shared", source="demo",
+            ),
+        ])
+
+        with pytest.raises(CanonicalReconciliationError):
+            _build_incoming_inventory(result, "demo")
+
+    def test_incomplete_identity_blocks_write_and_deletion(self, initial_index):
+        from doxygen_index.neo4j_backend import (
+            CanonicalReconciliationError,
+            update_result,
+        )
+
+        before = _graph_fingerprint()
+        result = parse_python_dir(initial_index, source=TEST_SOURCE, progress_interval=0)
+        result.parameters[0].member_refid = ""
+
+        with pytest.raises(CanonicalReconciliationError):
+            update_result(result, source=TEST_SOURCE)
+
+        assert _graph_fingerprint() == before
 
 
 # ---------------------------------------------------------------------------

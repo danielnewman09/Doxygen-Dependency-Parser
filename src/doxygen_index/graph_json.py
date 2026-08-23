@@ -66,7 +66,6 @@ def result_to_graph_json(
     source: str,
     *,
     text_scan: bool = True,
-    portable: bool = True,
 ) -> list[dict]:
     """Convert a ParseResult to a list of serialized node dicts.
 
@@ -85,11 +84,6 @@ def result_to_graph_json(
             synthetic edges (e.g. a ``definition`` field naming the
             same function in a canonical namespace) are noise in the
             stored graph.
-        portable: When True (default), omit parser locator fields such as
-            ``refid`` from the normal LayerGraph wire format.  Backend
-            persistence passes False so incremental maintenance can retain
-            its internal parser indexes.
-
     Returns:
         A list of dicts, each a serialized node with ``type``,
         properties, ``tags``, and ``edges`` keys.  Suitable for
@@ -550,7 +544,7 @@ def result_to_graph_json(
 
             declared = PropertyRegistry.properties_of(type(node))
             for pname in declared:
-                if portable and pname in PARSER_LOCATOR_FIELDS:
+                if pname in PARSER_LOCATOR_FIELDS:
                     continue
                 if pname in entry:
                     continue

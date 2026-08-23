@@ -5,11 +5,13 @@ These tests use the session-scoped ``codegraph_graph`` fixture from
 ``conftest.py``, which indexes cpp-sqlite into Neo4j once per session
 and returns ``(serialized, uid_map)``.
 
-Requirements: ``doxygen`` on PATH and Conan deps installed.
+Requirements: ``doxygen`` on PATH and Conan deps installed.  The
+``doxygen-index`` executable may be overridden with ``DOXYGEN_INDEX``.
 """
 
 from __future__ import annotations
 
+import json
 import pytest
 from pathlib import Path
 
@@ -67,6 +69,24 @@ class TestFullGraphExport:
         print(f"  Edge types: {sorted(edge_types)}")
         print(f"  Sources present: {sorted(dep_sources)}")
 
+    def test_serialization_is_reproducible(self, codegraph_graph, tmp_path):
+        """The owner emits identical normalized documents twice."""
+        from codegraph.graph import LayerGraph
+
+        serialized, _uid_map = codegraph_graph
+        graph = LayerGraph.deserialize(serialized)
+        first = graph.serialize(fields="all")
+        second = graph.serialize(fields="all")
+        first_path = tmp_path / "first.json"
+        second_path = tmp_path / "second.json"
+        first_path.write_text(
+            json.dumps(first, indent=2, sort_keys=True), encoding="utf-8",
+        )
+        second_path.write_text(
+            json.dumps(second, indent=2, sort_keys=True), encoding="utf-8",
+        )
+        assert first_path.read_bytes() == second_path.read_bytes()
+
     # DEVNOTE: ``test_all_edges_resolve_to_nodes`` previously used the
     # full merged ParseResult.  The as-built LayerGraph only includes
     # project nodes + one-hop neighbours, so edge coverage is scoped.
@@ -92,7 +112,15 @@ class TestFullGraphExport:
                 continue
             for edge in node.get("edges", []):
                 total_edges += 1
-                if edge["target_key"] not in uid_map:
+                target_key = edge.get("target_key")
+                if target_key not in uid_map and not (
+                    edge.get("external") is True
+                    or (
+                        edge.get("unresolved") is True
+                        and edge.get("target_ref")
+                        and edge.get("diagnostic")
+                    )
+                ):
                     unresolved.append(edge)
             # COMPOSES children are structural but should also resolve
             for child in node.get("composes", []):
@@ -104,23 +132,20 @@ class TestFullGraphExport:
                         "target_type": child.get("kind", ""),
                     })
 
-        non_invokes_unresolved = [
-            e for e in unresolved
-            if e["relation_type"] not in ("INVOKES", "INCLUDES")
-        ]
-
-        assert len(non_invokes_unresolved) == 0, (
-            f"{len(non_invokes_unresolved)} non-INVOKES edges unresolved:\n"
+        assert len(unresolved) == 0, (
+            f"{len(unresolved)} edges lack an explicit portable endpoint state:\n"
             + "\n".join(
-                f"  {e['relation_type']}: {e['target_key']} ({e['target_type']})"
-                for e in non_invokes_unresolved[:10]
+                f"  {e['relation_type']}: "
+                f"{e.get('target_key') or e.get('target_ref')} "
+                f"({e['target_type']})"
+                for e in unresolved[:10]
             )
         )
 
-        resolution_pct = 100 * (total_edges - len(unresolved)) / max(total_edges, 1)
-        print(f"\n  Edge resolution: {total_edges - len(unresolved)}/{total_edges} "
+        classified = total_edges - len(unresolved)
+        resolution_pct = 100 * classified / max(total_edges, 1)
+        print(f"\n  Edge endpoint state: {classified}/{total_edges} "
               f"({resolution_pct:.1f}%)")
-        print(f"  Unresolved INVOKES: {len(unresolved)} (expected)")
 
     def test_discovered_dependencies(self):
         """Verify conan discovers expected dependencies for cpp-sqlite."""

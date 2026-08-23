@@ -11,7 +11,7 @@ Provides two modes for writing parsed source code into the graph:
 * **Incremental update** (:func:`update_result`, the default):
   Re-indexes a source without destroying the existing graph.  New nodes
   are created, changed nodes are updated in place (via MERGE on
-  deterministic uid + source), and stale nodes (removed or renamed in
+  deterministic canonical key + source), and stale nodes (removed or renamed in
   the source) are deleted.  Other sources are left untouched.
 
 * **Full rewrite** (:func:`write_result` + :func:`clear_source`):
@@ -26,15 +26,19 @@ The CLI uses incremental by default; ``--clear`` opts into full re-write.
 
 from __future__ import annotations
 
+import json
 import re
 import sys
+from collections import Counter, defaultdict
+from dataclasses import dataclass, field
 from pathlib import Path
 from time import perf_counter
+from typing import Any
 
 from codegraph import get_backend
 from codegraph.graph import LayerGraph
 
-from doxygen_index.graph_json import result_to_graph_json
+from doxygen_index.graph_json import PARSER_LOCATOR_FIELDS, result_to_graph_json
 
 # Import all node models so CodeGraphNode._registry is populated before
 # backend.apply_schema() enumerates labels for uid indexes.
@@ -280,7 +284,7 @@ def write_result(
     """Write a ParseResult to the active backend via the LayerGraph bridge.
 
     Backend-agnostic — zero raw Cypher.  Nodes + edges are built from
-    *result* by :func:`result_to_graph_json` (deterministic uids, full
+    *result* by :func:`result_to_graph_json` (deterministic canonical keys, full
     edge inventory), deserialized into a :class:`LayerGraph`
     (unresolvable edge targets are dropped, mirroring the old Cypher
     ``MATCH``-both-endpoints semantics), and persisted via
@@ -308,15 +312,13 @@ def write_result(
     src = source or _infer_source(result)
     stage_started = perf_counter()
     data = result_to_graph_json(
-        result, src, text_scan=False, portable=False
+        result, src, text_scan=False
     )
     if timings is not None:
         timings["serialization"] = perf_counter() - stage_started
 
     stage_started = perf_counter()
-    graph = LayerGraph.deserialize(
-        data, create_missing=False, portable=False
-    )
+    graph = LayerGraph.deserialize(data, create_missing=False)
     graph.to_backend(get_backend())
     if timings is not None:
         timings["persistence"] = perf_counter() - stage_started
@@ -327,106 +329,348 @@ def write_result(
 # Incremental update — write + delete stale nodes
 # ---------------------------------------------------------------------------
 
-def _collect_live_refids(result: ParseResult) -> set[str]:
-    """Collect all qualified_name values from a ParseResult.
+class CanonicalReconciliationError(ValueError):
+    """Raised when an incremental update cannot be reconciled safely."""
 
-    Used to identify stale compound/member nodes that should be deleted
-    during an incremental update.
+
+@dataclass(frozen=True)
+class _InventoryEntry:
+    """One canonical node observed by the reconciliation pass."""
+
+    key: str
+    node_type: str
+    source: str
+    fingerprint: str = ""
+
+
+@dataclass
+class CanonicalInventory:
+    """Canonical node inventory grouped for reconciliation diagnostics."""
+
+    entries: dict[str, _InventoryEntry] = field(default_factory=dict)
+    by_source: dict[str, set[str]] = field(
+        default_factory=lambda: defaultdict(set)
+    )
+    by_type: dict[str, set[str]] = field(
+        default_factory=lambda: defaultdict(set)
+    )
+
+    def add(
+        self,
+        key: str,
+        node_type: str,
+        source: str,
+        *,
+        fingerprint: str = "",
+        allow_identical_duplicate: bool = False,
+    ) -> None:
+        """Register one key, rejecting conflicts instead of last-write-wins."""
+        existing = self.entries.get(key)
+        if existing is not None:
+            if (
+                not allow_identical_duplicate
+                or existing.node_type != node_type
+                or existing.source != source
+                or existing.fingerprint != fingerprint
+            ):
+                raise CanonicalReconciliationError(
+                    "ambiguous canonical identity: "
+                    f"{key!r} is claimed by "
+                    f"{existing.node_type}/{existing.source} and "
+                    f"{node_type}/{source}"
+                )
+            return
+
+        entry = _InventoryEntry(key, node_type, source, fingerprint)
+        self.entries[key] = entry
+        self.by_source[source].add(key)
+        self.by_type[node_type].add(key)
+
+    def keys_for_source(self, source: str) -> set[str]:
+        """Return a copy of the canonical keys owned by *source*."""
+        return set(self.by_source.get(source, set()))
+
+    def counts_for_keys(self, keys: set[str]) -> dict[str, int]:
+        """Return deletion/reporting counts grouped by persisted node type."""
+        counts = Counter(self.entries[key].node_type for key in keys)
+        return dict(counts)
+
+
+def _parse_result_node_lists(result: ParseResult) -> tuple[list, ...]:
+    """Return every parser-owned node list that can be persisted.
+
+    Keep this inventory in the same order as the LayerGraph bridge.  The
+    bridge additionally synthesizes template-parameter ClassNodes; those are
+    accounted for from its normalized output below.
     """
-    live: set[str] = set()
-    for lst in (result.classes, result.enums, result.unions, result.interfaces,
-                result.concepts, result.methods, result.attributes,
-                result.enum_values, result.defines, result.functions,
-                result.source_fragments,
-                result.namespaces, result.tests, result.assertions,
-                result.test_steps, result.test_fixtures, result.literals,
-                result.implementations):
-        for node in lst:
-            qn = getattr(node, "qualified_name", None)
-            if qn:
-                live.add(qn)
-    return live
+    return (
+        result.files,
+        result.namespaces,
+        result.classes,
+        result.enums,
+        result.unions,
+        result.interfaces,
+        result.concepts,
+        result.methods,
+        result.attributes,
+        result.enum_values,
+        result.defines,
+        result.source_fragments,
+        result.functions,
+        result.parameters,
+        result.tests,
+        result.assertions,
+        result.test_steps,
+        result.test_fixtures,
+        result.literals,
+        result.implementations,
+    )
 
 
-def _collect_live_file_refids(result: ParseResult) -> set[str]:
-    """Collect all FileNode refids from a ParseResult.
+def _registry_type(node_type: str):
+    """Resolve a serialized node type through Codegraph's model registry."""
+    from codegraph.models.tags import CodeGraphNode
 
-    Uses refid (module name) instead of path, which is stable across
-    absolute/relative path changes.
+    model_type = CodeGraphNode._registry.get(node_type)
+    if model_type is None:
+        raise CanonicalReconciliationError(
+            f"canonical inventory contains unregistered node type {node_type!r}"
+        )
+    return model_type
+
+
+def _validate_canonical_key(
+    key: Any,
+    *,
+    node_type: str,
+    source: str,
+    node: object | None = None,
+) -> dict[str, str]:
+    """Strictly validate a canonical key and its registry/type contract."""
+    if not isinstance(key, str) or not key.strip():
+        raise CanonicalReconciliationError(
+            f"{node_type} in source {source!r} has an empty canonical key"
+        )
+
+    from codegraph.identity import CanonicalIdentity
+    from codegraph.identity.registry import spec_for
+
+    try:
+        identity = CanonicalIdentity.from_key(key)
+    except Exception as exc:
+        raise CanonicalReconciliationError(
+            f"{node_type} in source {source!r} has invalid canonical key "
+            f"{key!r}"
+        ) from exc
+
+    model_type = _registry_type(node_type)
+    spec = spec_for(model_type)
+    if spec is None or identity.category != spec.category:
+        expected = spec.category if spec is not None else "<missing spec>"
+        raise CanonicalReconciliationError(
+            f"canonical key {key!r} has category {identity.category!r}, "
+            f"expected {expected!r} for {node_type}"
+        )
+
+    if identity.scope.repository_id != source:
+        raise CanonicalReconciliationError(
+            f"canonical key {key!r} is scoped to repository "
+            f"{identity.scope.repository_id!r}, not source {source!r}"
+        )
+
+    values = dict(identity.values)
+    for field_name, value in values.items():
+        if value:
+            continue
+        # The current registry serializes integer position 0 through an
+        # ``or \"\"`` conversion.  The parser still supplied a complete,
+        # unambiguous position, so retain compatibility with that v1 wire
+        # representation while rejecting every other missing identity input.
+        if (
+            field_name == "position"
+            and node is not None
+            and type(node).__name__ == "ParameterNode"
+            and getattr(node, "position", None) == 0
+        ):
+            continue
+        raise CanonicalReconciliationError(
+            f"{node_type} {key!r} has incomplete identity field "
+            f"{field_name!r}"
+        )
+    return values
+
+
+def _portable_node_fingerprint(node: object) -> str:
+    """Fingerprint normalized node data while excluding parser locators."""
+    try:
+        payload = node.serialize(fields="all")
+    except Exception as exc:
+        raise CanonicalReconciliationError(
+            f"could not fingerprint {type(node).__name__} for canonical "
+            "duplicate detection"
+        ) from exc
+
+    payload = dict(payload)
+    payload.pop("canonical_key", None)
+    payload.pop("edges", None)
+    for field_name in PARSER_LOCATOR_FIELDS:
+        payload.pop(field_name, None)
+    return json.dumps(payload, sort_keys=True, default=str)
+
+
+def _validate_parent_key_references(
+    entries: list[dict],
+    keys: set[str],
+) -> None:
+    """Reject missing/ambiguous parent-relative identity inputs.
+
+    ``TestNode`` is the one intentional root-relative type: its parent key is
+    the stable ``cg:v1:root`` sentinel used by the identity matrix.  All
+    other parent-relative keys must point at another incoming canonical key.
     """
-    return {f.refid for f in result.files if getattr(f, 'refid', '')}
+    parent_fields = {
+        "parent_callable_key",
+        "file_key",
+        "parent_key",
+    }
+    for entry in entries:
+        node_type = entry.get("node_type") or entry.get("type") or ""
+        key = entry.get("canonical_key")
+        if not key:
+            continue
+        from codegraph.identity import CanonicalIdentity
 
-def _collect_live_member_refids(result: ParseResult) -> set[str]:
-    """Collect all member refids from a ParseResult.
+        values = dict(CanonicalIdentity.from_key(key).values)
+        for field_name in parent_fields & values.keys():
+            parent_key = values[field_name]
+            if field_name == "parent_key" and (
+                node_type == "TestNode" and parent_key == "cg:v1:root"
+            ):
+                continue
+            if parent_key not in keys:
+                raise CanonicalReconciliationError(
+                    f"{node_type} {key!r} has unresolved "
+                    f"{field_name} {parent_key!r}"
+                )
 
-    Used to identify stale ParameterNodes (whose ``member_refid`` references
-    a member that may have been deleted).
-    """
-    live: set[str] = set()
-    for member_list in (result.methods, result.attributes, result.functions,
-                        result.defines):
-        for node in member_list:
-            refid = getattr(node, "refid", None)
-            if refid:
-                live.add(refid)
-    return live
+
+def _build_incoming_inventory(
+    result: ParseResult,
+    source: str,
+) -> tuple[CanonicalInventory, list[dict]]:
+    """Normalize *result* once and build its canonical live inventory."""
+    data = result_to_graph_json(result, source, text_scan=False)
+    actual_nodes_by_key: dict[str, object] = {}
+    actual_fingerprints: dict[str, str] = {}
+
+    # Validate every real ParseResult node before accepting the bridge's
+    # deduplicated output.  This catches two distinct payloads that happen to
+    # produce one canonical key instead of allowing graph_json's first-entry
+    # dedupe to hide the ambiguity.
+    for node_list in _parse_result_node_lists(result):
+        for node in node_list:
+            node_type = type(node).__name__
+            node_source = getattr(node, "source", "") or source
+            key = getattr(node, "canonical_key", "") or ""
+            _validate_canonical_key(
+                key, node_type=node_type, source=node_source, node=node
+            )
+            fingerprint = _portable_node_fingerprint(node)
+            previous = actual_fingerprints.get(key)
+            if previous is not None and previous != fingerprint:
+                raise CanonicalReconciliationError(
+                    f"distinct {node_type} payloads share canonical key {key!r}"
+                )
+            actual_fingerprints[key] = fingerprint
+            actual_nodes_by_key[key] = node
+
+    inventory = CanonicalInventory()
+    normalized_entries: list[dict] = []
+    for entry in data:
+        node_type = entry.get("node_type") or entry.get("type") or ""
+        node_source = entry.get("source") or source
+        key = entry.get("canonical_key")
+        node = actual_nodes_by_key.get(key)
+        _validate_canonical_key(
+            key, node_type=node_type, source=node_source, node=node
+        )
+        inventory.add(
+            key,
+            node_type,
+            node_source,
+            fingerprint=actual_fingerprints.get(key, ""),
+            allow_identical_duplicate=True,
+        )
+        normalized_entries.append(entry)
+
+    normalized_keys = set(inventory.entries)
+    missing = set(actual_nodes_by_key) - normalized_keys
+    if missing:
+        raise CanonicalReconciliationError(
+            "normalized graph omitted parser-owned canonical keys: "
+            + ", ".join(sorted(missing))
+        )
+    _validate_parent_key_references(normalized_entries, normalized_keys)
+    return inventory, data
+
+
+def _build_persisted_inventory(source: str) -> CanonicalInventory:
+    """Read and strictly validate all persisted keys for one source."""
+    inventory = CanonicalInventory()
+    graph = get_backend().graph
+    for node in graph.find_all_by_source(source):
+        node_type = type(node).__name__
+        key = getattr(node, "canonical_key", "") or ""
+        _validate_canonical_key(key, node_type=node_type, source=source, node=node)
+        if key in inventory.entries:
+            raise CanonicalReconciliationError(
+                f"persisted source {source!r} contains duplicate canonical key "
+                f"{key!r}"
+            )
+        inventory.add(
+            key,
+            node_type,
+            source,
+            fingerprint=_portable_node_fingerprint(node),
+        )
+    return inventory
 
 
 def delete_stale_nodes(
     source: str,
-    live_qualified_names: set[str],
-    live_file_refids: set[str],
-    live_member_refids: set[str],
+    stale_keys: set[str],
+    persisted: CanonicalInventory,
 ) -> dict[str, int]:
-    """Delete nodes for *source* whose identity is NOT in the live set.
-
-    Backend-agnostic: fetches every node for *source* via
-    ``find_all_by_source`` and deletes those whose identity (qualified_name,
-    refid, or member_refid depending on type) is missing from the latest
-    parse.  Mirrors the old label-scoped Cypher: compounds/members/
-    namespaces/test nodes by qualified_name, files by refid, parameters by
-    member_refid.
+    """Batch-delete a precomputed source-scoped canonical stale set.
 
     Args:
         source: Source label to scope deletion.
-        live_qualified_names: Qualified_name values present in the latest
-            parse.
-        live_file_refids: File refids present in the latest parse.
-        live_member_refids: Member refids present in the latest parse
-            (used to identify stale ParameterNodes).
+        stale_keys: Canonical keys selected before graph mutation.
+        persisted: Validated persisted inventory for *source*.
 
     Returns:
         Dict mapping node type → count of deleted nodes.
     """
-    deleted_counts: dict[str, int] = {}
-    graph = get_backend().graph
+    source_keys = persisted.keys_for_source(source)
+    stale_keys = set(stale_keys)
+    if not stale_keys <= source_keys:
+        raise CanonicalReconciliationError(
+            "stale canonical deletion escaped its source scope: "
+            + ", ".join(sorted(stale_keys - source_keys))
+        )
 
-    stale_uids: list[str] = []
-    for node in graph.find_all_by_source(source):
-        ntype = type(node).__name__
-        if ntype == "FileNode":
-            ident = getattr(node, "refid", "") or ""
-            stale = ident not in live_file_refids
-        elif ntype == "ParameterNode":
-            ident = getattr(node, "member_refid", "") or ""
-            stale = ident not in live_member_refids
-        else:
-            ident = getattr(node, "qualified_name", "") or ""
-            stale = ident not in live_qualified_names
-        if not stale:
-            continue
-        key = node.canonical_key or ""
-        if key:
-            stale_uids.append(key)
-            deleted_counts[ntype] = deleted_counts.get(ntype, 0) + 1
-
-    if stale_uids:
-        # One aggregate delete (``delete_by_uids``) — per-node deletes
-        # were ~26ms/node at cpp-sqlite scale.
-        graph.delete_by_uids(stale_uids)
+    deleted_counts = persisted.counts_for_keys(stale_keys)
+    if stale_keys:
+        # The compatibility method is named ``delete_by_uids`` in the
+        # repository API, but canonical_key is the storage key it receives.
+        # Keep the whole candidate set batched and deterministic.
+        get_backend().graph.delete_by_uids(sorted(stale_keys))
 
     if deleted_counts:
-        parts = [f"{label}: {cnt}" for label, cnt in deleted_counts.items()]
+        parts = [
+            f"{label}: {cnt}"
+            for label, cnt in sorted(deleted_counts.items())
+        ]
         print(f"  Deleted stale nodes ({', '.join(parts)})")
 
     return deleted_counts
@@ -435,11 +679,10 @@ def delete_stale_nodes(
 def update_result(result: ParseResult, source: str) -> dict[str, int]:
     """Incrementally update the graph for *source*.
 
-    1. Collects live node identities from *result*.
-    2. Calls :func:`write_result` to create/update nodes (MERGE on
-       deterministic uid + source).
-    3. Calls :func:`delete_stale_nodes` to remove nodes that are no longer
-       present in the source.
+    1. Normalizes and validates all incoming canonical identities.
+    2. Validates persisted identities and computes the complete stale set.
+    3. Writes/updates nodes (MERGE on canonical key + source).
+    4. Batch-deletes the precomputed stale set.
 
     Other sources are left untouched.
 
@@ -450,16 +693,24 @@ def update_result(result: ParseResult, source: str) -> dict[str, int]:
     Returns:
         Dict mapping node label → count of deleted stale nodes.
     """
-    live_qnames = _collect_live_refids(result)
-    live_file_refids = _collect_live_file_refids(result)
-    live_member_refids = _collect_live_member_refids(result)
+    # Match write_result's enriched-description behavior before the single
+    # normalization pass captures the incoming payload.
+    _preserve_descriptions(
+        result.tests, result.assertions,
+        result.test_steps, result.test_fixtures,
+    )
+    incoming, data = _build_incoming_inventory(result, source)
+    persisted = _build_persisted_inventory(source)
+    stale_keys = persisted.keys_for_source(source) - incoming.keys_for_source(source)
 
-    # Pass source explicitly so nodes are tagged against the correct
-    # project label (``_infer_source`` would pick the dominant source
-    # in mixed parses, mis-tagging project type_params as dependency).
-    write_result(result, source=source)
+    # Using the already validated data makes the liveness proof and the graph
+    # write observe exactly one canonical view.
+    ensure_schema()
+    graph = LayerGraph.deserialize(data, create_missing=False)
+    graph.to_backend(get_backend())
+    print(f"  Wrote {len(data)} nodes to {type(get_backend()).__name__}")
 
-    return delete_stale_nodes(source, live_qnames, live_file_refids, live_member_refids)
+    return delete_stale_nodes(source, stale_keys, persisted)
 
 
 # ---------------------------------------------------------------------------

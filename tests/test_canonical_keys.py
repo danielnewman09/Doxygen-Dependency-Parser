@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import csv
 
-from codegraph import ClassNode, ImplementationNode, MethodNode, NamespaceNode
+from codegraph import (
+    ClassNode,
+    FileNode,
+    ImplementationNode,
+    MethodNode,
+    NamespaceNode,
+    ParameterNode,
+)
 from codegraph.identity import CanonicalIdentity
 from codegraph.models.test import TestNode, TestStepNode
 
@@ -118,6 +125,65 @@ class TestCanonicalKeys:
         keys = [n["canonical_key"] for n in graph]
         assert len(keys) == 2
         assert len(set(keys)) == 2
+
+    def test_parser_locator_changes_do_not_change_canonical_identity(self):
+        def make_result(method_refids, file_refid):
+            methods = [
+                MethodNode(
+                    refid=method_refids[0], name="run",
+                    qualified_name="demo::Widget::run",
+                    argsstring="(int value)", source="demo",
+                ),
+                MethodNode(
+                    refid=method_refids[1], name="run",
+                    qualified_name="demo::Widget::run",
+                    argsstring="(const char* value)", source="demo",
+                ),
+            ]
+            return ParseResult(
+                files=[FileNode(
+                    refid=file_refid, name="widget.hpp",
+                    path="include/widget.hpp", source="demo",
+                )],
+                methods=methods,
+                parameters=[
+                    ParameterNode(
+                        member_refid=method_refids[0], position=0,
+                        type="int", source="demo",
+                    ),
+                    ParameterNode(
+                        member_refid=method_refids[1], position=0,
+                        type="const char*", source="demo",
+                    ),
+                ],
+            )
+
+        first = result_to_graph_json(
+            make_result(("old-int", "old-str"), "old-file"),
+            "demo", text_scan=False,
+        )
+        second = result_to_graph_json(
+            make_result(("new-int", "new-str"), "new-file"),
+            "demo", text_scan=False,
+        )
+
+        def keys(graph, node_type):
+            return {
+                node["canonical_key"]
+                for node in graph
+                if (node.get("node_type") or node.get("type")) == node_type
+            }
+
+        assert keys(first, "FileNode") == keys(second, "FileNode")
+        assert keys(first, "MethodNode") == keys(second, "MethodNode")
+        first_params = keys(first, "ParameterNode")
+        second_params = keys(second, "ParameterNode")
+        assert len(first_params) == len(second_params) == 2
+        assert first_params == second_params
+        assert len({
+            dict(CanonicalIdentity.from_key(key).values)["parent_callable_key"]
+            for key in first_params
+        }) == 2
 
     def test_edges_reference_canonical_keys(self):
         namespace = NamespaceNode(
