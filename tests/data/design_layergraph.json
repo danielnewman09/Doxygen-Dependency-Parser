@@ -18,8 +18,9 @@
             "target_type": "ConceptNode"
           },
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "bd6c2168a06e7c3f0eafc7836d986187a253e2c7",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBBaseTransferObject.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -49,8 +50,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "724e735d34d45a5db70f7ddc471843b8ba11696a",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBDatabase.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -82,13 +84,15 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "13a404e834738f690ae95e476ef44876273c7d46",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBDataAccessObject.hpp",
             "target_type": "FileNode"
           },
           {
+            "external": true,
             "relation_type": "INHERITS_FROM",
-            "target_ref": "3f145d4b77e4781be700ec72e4e8f3827e63cf4e",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:class:qualified_name=DAOBase",
             "target_type": "ClassNode"
           }
         ],
@@ -118,8 +122,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           },
           {
@@ -154,8 +159,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -185,8 +191,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           },
           {
@@ -221,8 +228,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "33f848535dce3b656ead16764758229503ecba4d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBForeignKey.hpp",
             "target_type": "FileNode"
           },
           {
@@ -257,8 +265,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -291,8 +300,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           },
           {
@@ -334,8 +344,9 @@
             "target_type": "ConceptNode"
           },
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -368,8 +379,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           },
           {
@@ -406,8 +418,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -437,8 +450,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "6014ed13660285b33bb01b67efc798c0d399da37",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Futils%2FLogger.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -468,8 +482,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "a0eaf5b7d2e2fccc6787b7c2b5c461eaeeb95492",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBRepeatedFieldTransferObject.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -499,8 +514,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "38f1b281eef5b404e1895649426bbdccdab4f232",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTransaction.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -532,13 +548,15 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "38f1b281eef5b404e1895649426bbdccdab4f232",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTransaction.hpp",
             "target_type": "FileNode"
           },
           {
+            "external": true,
             "relation_type": "INHERITS_FROM",
-            "target_ref": "dfae14eea327cf4d090e33c1b54f3c8d8ec37f3e",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:class:qualified_name=std%3A%3Aruntime_error",
             "target_type": "ClassNode"
           }
         ],
@@ -2221,8 +2239,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -2255,8 +2274,9 @@
             "target_type": "ConceptNode"
           },
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -2284,18 +2304,21 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "CONSTRAINS",
-            "target_ref": "9ff25682410dccdc24ff5c65932ad5a99792e0fa",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:method:qualified_name=cpp_sqlite%3A%3ADatabase%3A%3AgetDAO%28%29:canonical_signature=lang%3Acpp%7Ctemplate%3A%5BValidTransferObject%20T%5D%7C%28%29",
             "target_type": "MethodNode"
           },
           {
+            "external": true,
             "relation_type": "CONSTRAINS",
-            "target_ref": "a03914cbdf72148a7255e3044ff5be624012792e",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:method:qualified_name=cpp_sqlite%3A%3ADatabase%3A%3Aselect%28PreparedSQLStmt%20%26stmt%29:canonical_signature=lang%3Acpp%7Ctemplate%3A%5BValidTransferObject%20T%5D%7C%28PreparedSQLStmt%26%29",
             "target_type": "MethodNode"
           },
           {
+            "external": true,
             "relation_type": "CONSTRAINS",
-            "target_ref": "992c32d515c2cd7a702f5ef2d9d75150849540a1",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:method:qualified_name=cpp_sqlite%3A%3ADatabase%3A%3Ainsert%28PreparedSQLStmt%20%26stmt%2C%20T%20%26data%29:canonical_signature=lang%3Acpp%7Ctemplate%3A%5BValidTransferObject%20T%5D%7C%28PreparedSQLStmt%26%2CT%26%29",
             "target_type": "MethodNode"
           },
           {
@@ -2334,8 +2357,9 @@
             "target_type": "ConceptNode"
           },
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -2368,8 +2392,9 @@
             "target_type": "ConceptNode"
           },
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -2402,8 +2427,9 @@
             "target_type": "ConceptNode"
           },
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -2451,8 +2477,9 @@
             "target_type": "ConceptNode"
           },
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -2485,8 +2512,9 @@
             "target_type": "ConceptNode"
           },
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -2514,8 +2542,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -2543,8 +2572,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -2572,13 +2602,15 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "CONSTRAINS",
-            "target_ref": "d16abe366c9a50a1421d954c5540c25c7b5857aa",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:method:qualified_name=cpp_sqlite%3A%3ADataAccessObject%3A%3AgetSQLType%28%29:canonical_signature=lang%3Acpp%7Ctemplate%3A%5BisSupportedDBType%20FieldType%5D%7C%28%29",
             "target_type": "MethodNode"
           },
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           },
           {
@@ -2611,8 +2643,9 @@
         "doc_embedding": [],
         "edges": [
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -2645,8 +2678,9 @@
             "target_type": "ConceptNode"
           },
           {
+            "external": true,
             "relation_type": "DEFINED_IN",
-            "target_ref": "394f0994f891c7b2bdd7ec784140d8f9e0282a0d",
+            "target_key": "cg:v1:repository:codegraph-suite%2Fcodegraph:file:normalized_repository_path=tests%2Ffixtures%2Fcpp-sqlite%2Fcpp_sqlite%2Fsrc%2Fcpp_sqlite%2FDBTraits.hpp",
             "target_type": "FileNode"
           }
         ],
@@ -3982,7 +4016,7 @@
             "type": "TestNode"
           }
         ],
-        "description": "The `MigrationManager` shall provide an `apply` method that returns a `MigrationResult`. On first invocation, `apply` shall create the `schema_versions` table if it does not exist. It shall execute all unapplied migrations in version order against a cpp_sqlite::`Database` instance. Each migration's `up` method shall be invoked with a cpp_sqlite::`Transaction` reference. The manager shall record each successfully applied migration as a `SchemaVersion` in the `schema_versions` table (version: INTEGER, applied_at: TEXT ISO-8601, checksum: TEXT SHA-256). The `SchemaVersion` INSERT and the migration's `up()` shall execute within a single cpp_sqlite::`Transaction` \u2014 both succeed or both roll back atomically. If any migration's `up` method throws, the manager shall roll back the current migration's changes via the active `Transaction` (without affecting previously applied migrations) and return `MigrationResult{success=false, error=MigrationErrorCode::MigrationFailed}`. The manager shall not re-apply migrations already recorded in `schema_versions`. Concurrent apply calls are not supported; behavior is undefined if apply is called concurrently.",
+        "description": "The `MigrationManager` shall provide an `apply` method that returns a `MigrationResult`. On first invocation, `apply` shall create the `schema_versions` table if it does not exist. It shall execute all unapplied migrations in version order against a cpp_sqlite::`Database` instance. Each migration's `up` method shall be invoked with a cpp_sqlite::`Transaction` reference. The manager shall record each successfully applied migration as a `SchemaVersion` in the `schema_versions` table (version: INTEGER, applied_at: TEXT ISO-8601, checksum: TEXT SHA-256). The `SchemaVersion` INSERT and the migration's `up()` shall execute within a single cpp_sqlite::`Transaction` — both succeed or both roll back atomically. If any migration's `up` method throws, the manager shall roll back the current migration's changes via the active `Transaction` (without affecting previously applied migrations) and return `MigrationResult{success=false, error=MigrationErrorCode::MigrationFailed}`. The manager shall not re-apply migrations already recorded in `schema_versions`. Concurrent apply calls are not supported; behavior is undefined if apply is called concurrently.",
         "edges": [],
         "kind": "llr",
         "name": "llr_migration_apply",
@@ -4618,7 +4652,7 @@
             "type": "TestNode"
           }
         ],
-        "description": "The `MigrationManager` shall provide a `rollback` method that accepts a target `int` version and returns a `MigrationResult`. It shall roll back all migrations above the target version in descending version order. Each migration's `down` method shall be invoked with a cpp_sqlite::`Transaction` reference. Rollback shall remove rows for rolled-back migrations from `schema_versions`. If any `down` method throws, the manager shall abort the rollback and leave the database in its partially-rolled-back state, returning `MigrationResult{success=false, error=MigrationErrorCode::RollbackFailed}`. If the target version does not exist in `schema_versions`, the manager shall return `MigrationResult{success=false, error=MigrationErrorCode::VersionNotFound}`. If `schema_versions` is empty, `rollback` shall return `MigrationResult{success=false, error=MigrationErrorCode::NotInitialized}`. Calling `rollback` to a version at or below the lowest applied version (equivalent to full rollback) is valid and shall remove all applied migrations, returning `MigrationResult{success=true}`. Rollback is idempotent \u2014 calling `rollback(N)` a second time when no migrations are above N shall return `MigrationResult{success=true}` (no-op).",
+        "description": "The `MigrationManager` shall provide a `rollback` method that accepts a target `int` version and returns a `MigrationResult`. It shall roll back all migrations above the target version in descending version order. Each migration's `down` method shall be invoked with a cpp_sqlite::`Transaction` reference. Rollback shall remove rows for rolled-back migrations from `schema_versions`. If any `down` method throws, the manager shall abort the rollback and leave the database in its partially-rolled-back state, returning `MigrationResult{success=false, error=MigrationErrorCode::RollbackFailed}`. If the target version does not exist in `schema_versions`, the manager shall return `MigrationResult{success=false, error=MigrationErrorCode::VersionNotFound}`. If `schema_versions` is empty, `rollback` shall return `MigrationResult{success=false, error=MigrationErrorCode::NotInitialized}`. Calling `rollback` to a version at or below the lowest applied version (equivalent to full rollback) is valid and shall remove all applied migrations, returning `MigrationResult{success=true}`. Rollback is idempotent — calling `rollback(N)` a second time when no migrations are above N shall return `MigrationResult{success=true}` (no-op).",
         "edges": [],
         "kind": "llr",
         "name": "llr_migration_rollback",

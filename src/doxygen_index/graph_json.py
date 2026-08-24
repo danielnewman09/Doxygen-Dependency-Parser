@@ -39,6 +39,57 @@ PARSER_LOCATOR_FIELDS = frozenset({
 })
 
 
+def _stable_node_key(node) -> tuple[str, ...]:
+    """Return a total semantic ordering for parser-owned node records.
+
+    XML and cppreference parsing use worker pools, so completion order is not
+    a valid tie-breaker.  These fields cover identity, overload shape,
+    declaration location, and parent-relative records before the graph JSON
+    builder constructs canonical keys and relationship lookups.
+    """
+    def value(name: str) -> str:
+        raw = getattr(node, name, "")
+        if raw is None:
+            return ""
+        return str(raw)
+
+    return tuple(value(name) for name in (
+        "source", "qualified_name", "name", "argsstring", "type_signature",
+        "definition", "file_path", "path", "line_number", "start_line",
+        "end_line", "member_refid", "compound_refid", "parent_refid",
+        "position", "refid",
+    ))
+
+
+def sort_parse_result(result: ParseResult) -> ParseResult:
+    """Stabilize node collections without changing declaration order."""
+    node_fields = (
+        "files", "namespaces", "classes", "enums", "unions", "interfaces",
+        "concepts", "methods", "attributes", "enum_values", "defines",
+        "source_fragments", "functions", "parameters", "implementations",
+        "tests", "assertions", "test_steps", "test_fixtures", "literals",
+    )
+    for field_name in node_fields:
+        values = getattr(result, field_name, None)
+        if values:
+            if field_name == "enum_values":
+                # Enumerators are ordered declarations: reordering them can
+                # change implicit values and generated source. XML parsing
+                # appends one enum's values in declaration order, so sort only
+                # the parent groups and rely on Python's stable sort within a
+                # group. Do not include qualified_name/name/refid here.
+                values.sort(key=lambda node: (
+                    str(getattr(node, "source", "") or ""),
+                    str(getattr(node, "file_path", "") or ""),
+                    str(getattr(node, "compound_refid", "") or ""),
+                ))
+            else:
+                values.sort(
+                    key=lambda node: (type(node).__name__, _stable_node_key(node))
+                )
+    return result
+
+
 def merge_parse_results(*results: ParseResult) -> ParseResult:
     """Merge multiple ParseResults into one.
 
@@ -58,7 +109,7 @@ def merge_parse_results(*results: ParseResult) -> ParseResult:
             source_list = getattr(r, fld.name)
             if source_list:
                 target.extend(source_list)
-    return merged
+    return sort_parse_result(merged)
 
 
 def result_to_graph_json(
@@ -89,6 +140,10 @@ def result_to_graph_json(
         properties, ``tags``, and ``edges`` keys.  Suitable for
         ``json.dumps`` and LayerGraph deserialization.
     """
+    # Worker-pool completion order is not semantic and must not influence
+    # duplicate qname resolution or parent-relative endpoint assignment.
+    sort_parse_result(result)
+
     # Collect all node lists
     from codegraph import ClassNode  # type_param synthesis below
 

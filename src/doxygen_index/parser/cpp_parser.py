@@ -2550,11 +2550,14 @@ def _resolve_concept_constraints(result: ParseResult) -> None:
     concept_names = {c.qualified_name for c in result.concepts}
     # Also include short names (after ::) for prefix-less matches
     concept_short_names: dict[str, str] = {}
-    for c in result.concepts:
+    for c in sorted(result.concepts, key=lambda item: (item.qualified_name, item.refid)):
         short = c.qualified_name.rsplit("::", 1)[-1] if "::" in c.qualified_name else c.qualified_name
         if short not in concept_short_names:
             concept_short_names[short] = c.qualified_name
 
+    existing_pairs: set[tuple[str, str]] = {
+        (cc.from_refid, cc.to_refid) for cc in result.concept_constraints
+    }
     for tp in result.template_param_refs:
         if not tp.type_constraint:
             continue
@@ -2586,13 +2589,15 @@ def _resolve_concept_constraints(result: ParseResult) -> None:
         if not concept_refid:
             continue
         pair = (concept_refid, tp.from_refid)
-        result.concept_constraints.append(
-            ConceptConstraintEntry(
-                from_refid=concept_refid,
-                to_refid=tp.from_refid,
-                to_type="CompoundNode",
+        if pair not in existing_pairs:
+            existing_pairs.add(pair)
+            result.concept_constraints.append(
+                ConceptConstraintEntry(
+                    from_refid=concept_refid,
+                    to_refid=tp.from_refid,
+                    to_type="CompoundNode",
+                )
             )
-        )
 
     # --- Concept-to-concept references from initializer text ---
     # Doxygen emits ``<ref>`` for compounds referenced in template
@@ -2618,7 +2623,7 @@ def _resolve_concept_constraints(result: ParseResult) -> None:
         short = qn.rsplit("::", 1)[-1] if "::" in qn else qn
         short_to_qns.setdefault(short, set()).add(qn)
 
-    for concept in result.concepts:
+    for concept in sorted(result.concepts, key=lambda item: (item.qualified_name, item.refid)):
         initializer = getattr(concept, 'initializer', '') or ''
         if not initializer:
             continue
@@ -2627,7 +2632,7 @@ def _resolve_concept_constraints(result: ParseResult) -> None:
             continue
         from_qn = getattr(concept, 'qualified_name', '')
 
-        for target_qn in concept_names:
+        for target_qn in sorted(concept_names):
             if target_qn == from_qn:
                 continue  # skip self
 
@@ -2653,12 +2658,14 @@ def _resolve_concept_constraints(result: ParseResult) -> None:
                 candidates = short_to_qns.get(short, {target_qn})
                 if len(candidates) > 1:
                     from_ns = from_qn.rsplit("::", 1)[0] if "::" in from_qn else ""
-                    same_ns = [qn for qn in candidates
-                               if qn.rsplit("::", 1)[0] == from_ns]
+                    same_ns = sorted(
+                        qn for qn in candidates
+                        if qn.rsplit("::", 1)[0] == from_ns
+                    )
                     if same_ns:
                         target_qn = same_ns[0]
-                    # else keep the original (first in set — non-deterministic
-                    # but rare in practice).
+                    # Otherwise the sorted outer iteration remains the stable
+                    # choice for an ambiguous short name.
             else:
                 continue
 

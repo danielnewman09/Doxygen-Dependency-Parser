@@ -131,13 +131,13 @@ class TestPlantUMLExport:
         assert any("PythonParser" in L for L in inherit_lines)
 
     def test_puml_svg_generated(self, codegraph_graph):
-        """The session fixture rendered the full diagram to SVG.
+        """The session fixture rendered the bounded diagram to SVG.
 
         PlantUML exits 0 even on syntax errors (it emits an error-page
         SVG), so additionally require the SVG to contain real diagram
         markup.
         """
-        svg_path = _CODEGRAPH_OUTPUT / "doxygen_index_one_hop.svg"
+        svg_path = _CODEGRAPH_OUTPUT / "doxygen_index_one_hop_collapsed.svg"
         if not svg_path.exists():
             pytest.skip("plantuml binary not found — SVG render skipped")
         text = svg_path.read_text(encoding="utf-8", errors="replace")

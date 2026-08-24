@@ -38,11 +38,22 @@ _CODEGRAPH_ROOT = Path(
 _SYNC_FIXTURES = _CODEGRAPH_ROOT / "scripts" / "sync_codegen_fixtures.py"
 # Override with the executable used by the test environment when it is not on
 # PATH (for example, ``DOXYGEN_INDEX=/path/to/doxygen-index`` in VS Code).
-_DOXYGEN_INDEX = (
-    _os.environ.get("DOXYGEN_INDEX")
-    or shutil.which("doxygen-index")
-    or "doxygen-index"
-)
+
+
+def _doxygen_index_command() -> list[str]:
+    """Return the command that runs the ``doxygen-index`` CLI.
+
+    Prefer an explicit override or console script on PATH.  Falling back to
+    the current test interpreter keeps the suite independent of any specific
+    virtual-environment location.
+    """
+    configured = _os.environ.get("DOXYGEN_INDEX")
+    if configured:
+        return [configured]
+    executable = shutil.which("doxygen-index")
+    if executable:
+        return [executable]
+    return [sys.executable, "-m", "doxygen_index.cli"]
 
 #: Gitignored directory for generated test data (serialized JSON,
 #: archived sqlite database, …).  Kept out of git — the artifacts are
@@ -309,7 +320,7 @@ def codegraph_graph():
         with ingest_log.open("w", encoding="utf-8") as _logf:
             result = subprocess.run(
                 [
-                    _DOXYGEN_INDEX,
+                    *_doxygen_index_command(),
                     "codegraph",
                     "--project-dir", str(_FIXTURE_DIR),
                     "--output-dir", ingest_output,

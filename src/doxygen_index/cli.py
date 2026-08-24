@@ -716,8 +716,15 @@ def cmd_codegraph(args: argparse.Namespace) -> None:
         print(f"  Merged: {_count_nodes(result)} nodes total")
         timings["cppreference parse"] = perf_counter() - stage_started
 
-    # ── Phase 7: Resolve namespace-scoped type deps ───────────
+    # ── Phase 7: Resolve merged cross-source relationships ───
     from doxygen_index.doxygen import resolve_namespace_type_deps
+    from doxygen_index.graph_json import sort_parse_result
+    from doxygen_index.parser.cpp_parser import _resolve_concept_constraints
+    sort_parse_result(result)
+    # C++ XML workers can resolve a concept before the concept it references
+    # has been merged into the global result. Re-run this idempotent resolver
+    # after all sources (including cppreference) are present.
+    _resolve_concept_constraints(result)
     print("\n--- Resolving namespace type dependencies ---")
     stage_started = perf_counter()
     resolve_namespace_type_deps(result)

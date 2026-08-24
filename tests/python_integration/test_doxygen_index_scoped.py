@@ -145,36 +145,47 @@ class TestScopedClassGraph:
         print(f"  PythonParser subgraph: {len(scoped_uid_map)} nodes "
               f"(~{100*len(scoped_uid_map)/len(full_uid_map):.0f}%)")
 
-    def test_scoped_no_dangling_edges(self, scoped_uid_map):
-        """Every non-DEFINED_IN edge in the scoped graph resolves within
-        it.
+    def test_scoped_endpoint_states(self, scoped_uid_map, codegraph_graph):
+        """Classify every scoped endpoint instead of treating exclusion as loss.
 
-        The scoped window includes the compound + its neighbours, but
-        NOT the FileNodes its members are defined in (same as the
-        cpp-sqlite Database scoping) — so DEFINED_IN → FileNode edges
-        legitimately point outside the window.  Everything else must
-        resolve.
+        A scoped graph may deliberately omit a known node.  Such an edge is
+        retained with a strict canonical key and ``external: true``.  Only a
+        genuinely unresolved endpoint uses ``target_ref`` plus diagnostics.
         """
-        unresolved: list[dict] = []
-        total = 0
+        _full_serialized, full_uid_map = codegraph_graph
+        external_count = 0
+        unresolved_count = 0
         for node in scoped_uid_map.values():
             for edge in node.get("edges", []):
-                total += 1
-                if edge["target_key"] not in scoped_uid_map:
-                    unresolved.append(edge)
-            for child in node.get("composes", []):
-                if child.get("canonical_key") not in scoped_uid_map:
-                    unresolved.append({
-                        "relation_type": "COMPOSES",
-                        "target_key": child.get("canonical_key", ""),
-                    })
+                target_key = edge.get("target_key")
+                target_ref = edge.get("target_ref")
+                assert not (target_key and target_ref), edge
 
-        non_defined_in = [
-            e for e in unresolved if e["relation_type"] != "DEFINED_IN"
-        ]
-        assert not non_defined_in, (
-            f"{len(non_defined_in)} non-DEFINED_IN unresolved edges "
-            f"(of {total}): "
-            + ", ".join(f"{e['relation_type']}->{e['target_key'][:8]}"
-                        for e in non_defined_in[:10])
-        )
+                if target_key in scoped_uid_map:
+                    assert edge.get("external") is not True, edge
+                    assert edge.get("unresolved") is not True, edge
+                    continue
+
+                if target_key:
+                    assert edge.get("external") is True, edge
+                    assert target_key in full_uid_map, (
+                        "external endpoint is not present in the complete graph: "
+                        f"{target_key}"
+                    )
+                    assert edge.get("unresolved") is not True, edge
+                    external_count += 1
+                    continue
+
+                assert isinstance(target_ref, str) and target_ref, edge
+                assert edge.get("unresolved") is True, edge
+                assert isinstance(edge.get("diagnostic"), str), edge
+                unresolved_count += 1
+
+            for child in node.get("composes", []):
+                assert child.get("canonical_key") in scoped_uid_map, child
+
+        # The complete graph is intentionally a moving target as parser
+        # coverage grows; the contract is the endpoint shape and membership,
+        # not a fixed count of external relationships.
+        assert external_count > 0
+        assert external_count + unresolved_count > 0

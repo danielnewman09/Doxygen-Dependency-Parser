@@ -383,7 +383,10 @@ def codegraph_graph():
     puml_public_output = _CODEGRAPH_OUTPUT / "doxygen_index_one_hop_public.puml"
     puml_public_output.write_text(puml_public, encoding="utf-8")
 
-    # Render all to SVG — each render is validated.  PlantUML exits 0
+    # Render the bounded views to SVG — each render is validated. The full
+    # textual PUML remains an inspection artifact, but rendering thousands of
+    # entities through Graphviz is neither a useful view nor a stable test.
+    # PlantUML exits 0
     # even on syntax errors (it emits an error-page SVG instead of
     # failing), so a broken diagram would otherwise ship silently as
     # a ``<svg>`` file that renders nothing.
@@ -400,8 +403,7 @@ def codegraph_graph():
         )
         assert probe.returncode == 0
 
-        for puml_name in ("doxygen_index_one_hop.puml",
-                          "doxygen_index_one_hop_collapsed.puml",
+        for puml_name in ("doxygen_index_one_hop_collapsed.puml",
                           "doxygen_index_one_hop_public.puml"):
             render_plantuml_to_svg(
                 _CODEGRAPH_OUTPUT / puml_name,
@@ -409,7 +411,9 @@ def codegraph_graph():
                 env=env, timeout=120,
             )
         _dbg("plantuml SVG renders done")
-        svg_ok = (_CODEGRAPH_OUTPUT / "doxygen_index_one_hop.svg").exists()
+        svg_ok = (
+            _CODEGRAPH_OUTPUT / "doxygen_index_one_hop_collapsed.svg"
+        ).exists()
     else:
         svg_ok = False
 

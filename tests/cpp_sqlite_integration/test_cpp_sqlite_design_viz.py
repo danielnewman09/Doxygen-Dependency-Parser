@@ -75,6 +75,43 @@ def _ensure_backend():
         set_backend(SqliteBackend(SqliteConfig(path=":memory:")))
 
 
+class TestDesignFixturePortableIdentity:
+    """The downstream fixture consumer receives canonical endpoints."""
+
+    def test_design_edges_have_canonical_external_endpoints(self):
+        from codegraph.identity import CanonicalIdentity
+
+        data = _json.loads(_DESIGN_JSON.read_text(encoding="utf-8"))
+
+        def walk(items):
+            for item in items:
+                yield item
+                yield from walk(item.get("composes", []))
+
+        nodes = list(walk(data))
+        node_keys = {node["canonical_key"] for node in nodes}
+        external_edges = []
+
+        for node in nodes:
+            for edge in node.get("edges", []) or []:
+                assert "target_uid" not in edge
+                assert "target_ref" not in edge
+                assert edge.get("unresolved") is not True
+                assert "diagnostic" not in edge
+                target_key = edge.get("target_key")
+                assert isinstance(target_key, str) and target_key
+                CanonicalIdentity.from_key(target_key)
+
+                if target_key in node_keys:
+                    assert edge.get("external") is not True
+                else:
+                    assert edge.get("external") is True
+                    external_edges.append(target_key)
+
+        assert len(external_edges) == 34
+        assert len(set(external_edges)) == 14
+
+
 class TestDesignLayerVisualization:
     """Ingest the design layergraph JSON into the active backend,
     retrieve the "design" LayerGraph, and export PlantUML.

@@ -475,6 +475,9 @@ def resolve_namespace_type_deps(result: "ParseResult") -> None:
     """
     import re
     from doxygen_index.parser.model import DependsOnEntry
+    from doxygen_index.graph_json import sort_parse_result
+
+    sort_parse_result(result)
 
     # Build known qualified-name → refid mapping and a set of known
     # qnames for fast O(1) lookup.  Exclude namespace nodes — we only
